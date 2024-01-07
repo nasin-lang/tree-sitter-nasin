@@ -13,4 +13,7 @@ module.exports = {
         sourceType: "module",
         project: true,
     },
+    rules: {
+        "@typescript-eslint/require-await": "off",
+    },
 }
