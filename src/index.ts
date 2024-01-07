@@ -1,6 +1,7 @@
 import { type BunFile } from "bun"
 import { command, run, positional, subcommands, type Type, flag } from "cmd-ts"
 
+import { astToIr } from "./ir"
 import { parseAst } from "./parser"
 
 const filename: Type<string, BunFile> = {
@@ -34,10 +35,36 @@ const showAst = command({
     },
 })
 
+const showIr = command({
+    name: "ir",
+    description: "Show the IR of a file",
+    args: {
+        file: positional({
+            displayName: "file",
+            description: "Path to the file to show IR of",
+            type: filename,
+        }),
+        json: flag({
+            long: "json",
+            description: "Print the IR as JSON",
+        }),
+    },
+    handler: async ({ file, json }) => {
+        const ast = await parseAst(file)
+        const ir = astToIr(ast)
+
+        if (json) {
+            console.log(JSON.stringify(ir))
+        } else {
+            console.log(ir.map((stmt) => stmt.toString()).join("\n"))
+        }
+    },
+})
+
 const show = subcommands({
     name: "show",
     description: "Show artifacts of compilation",
-    cmds: { ast: showAst },
+    cmds: { ast: showAst, ir: showIr },
 })
 
 const app = subcommands({
