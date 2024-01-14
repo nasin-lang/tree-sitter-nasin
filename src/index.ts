@@ -25,12 +25,17 @@ const showAst = command({
         }),
     },
     handler: async ({ file, json }) => {
-        const ast = await parseAst(file)
+        try {
+            const ast = await parseAst(file)
 
-        if (json) {
-            console.log(JSON.stringify(ast))
-        } else {
-            console.log(ast.toString())
+            if (json) {
+                console.log(JSON.stringify(ast))
+            } else {
+                console.log(ast.toString())
+            }
+        } catch (e) {
+            console.error(e instanceof Error ? e.message : e)
+            process.exit(1)
         }
     },
 })
@@ -56,7 +61,7 @@ const showIr = command({
         if (json) {
             console.log(JSON.stringify(ir))
         } else {
-            console.log(ir.map((stmt) => stmt.toString()).join("\n"))
+            console.log(ir.toString())
         }
     },
 })
