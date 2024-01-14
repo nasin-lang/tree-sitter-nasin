@@ -4,7 +4,7 @@ import {
     many1,
     oneOf,
     seq,
-    tokens,
+    TokenParser,
     many0,
     not,
     map,
@@ -13,6 +13,7 @@ import {
     named,
     parse,
     ParseInput,
+    noLog,
 } from "chunky-parser"
 import { basename, resolve } from "node:path"
 
@@ -222,62 +223,64 @@ export class FnCall {
     }
 }
 
-const tk = tokens({
-    nl: { name: "new line", pattern: /[\r\n]+/ },
-    ws: { name: "whitespace", pattern: /\s+/ },
-    comment: { name: "comment", pattern: /#[^\r\n]*/ },
-    eof: { name: "end of file", pattern: /$/ },
-    num: { name: "number", pattern: /(0x|0b)?(\d(_?\d)*)?\.?\d(_?\d)*/ },
-    name: { name: "name", pattern: /[\p{L}_][\p{L}\p{Nd}_]*/u },
-    plus: { name: "plus", pattern: "+" },
-    minus: { name: "minus", pattern: "-" },
-    mul: { name: "multiply", pattern: "*" },
-    div: { name: "divide", pattern: "/" },
-    mod: { name: "modulo", pattern: "%" },
-    pow: { name: "power", pattern: "^" },
-    assign: { name: "assign", pattern: ":=" },
-    arrow: { name: "arrow", pattern: "=>" },
-    lparen: { name: "left parenthesis", pattern: "(" },
-    rparen: { name: "right parenthesis", pattern: ")" },
-    comma: { name: "comma", pattern: "," },
-    semicolon: { name: "semicolon", pattern: ";" },
-})
+const nl = new TokenParser("new line", /[\s\r\n]*[\r\n]/)
+const ws = new TokenParser("whitespace", /\s+/)
+const comment = new TokenParser("comment", /#[^\r\n]*/)
+const eof = new TokenParser("end of file", /$/)
+const num = new TokenParser("number", /(0x|0b)?(\d(_?\d)*)?\.?\d(_?\d)*/)
+const name = new TokenParser("name", /[\p{L}_][\p{L}\p{Nd}_]*/u)
+const plus = new TokenParser("plus", "+")
+const minus = new TokenParser("minus", "-")
+const asterisk = new TokenParser("asterisk", "*")
+const slash = new TokenParser("slash", "/")
+const percent = new TokenParser("percent", "%")
+const carret = new TokenParser("carret", "^")
+const assign = new TokenParser("assign", ":=")
+const arrow = new TokenParser("arrow", "=>")
+const lparen = new TokenParser("left parenthesis", "(")
+const rparen = new TokenParser("right parenthesis", ")")
+const comma = new TokenParser("comma", ",")
+const semicolon = new TokenParser("semicolon", ";")
 
 // FIXME: whitespaces and comments should be collect so the linter and the formatter can use them
-const _ = map(many0(oneOf(tk.ws, tk.comment)), () => null)
+const _ = noLog(map(many0(oneOf(nl, ws, comment)), () => null))
 
 function sepBy<T>(
     parser: Parser<T>,
     sep: Parser<unknown>,
-    last: "required" | "optional" | "none"
+    last: "required" | "optional" | "none" = "none"
 ): Parser<T[]> {
-    sep = seq(_, sep, _)
+    sep = seq(_, sep)
 
     return map(
         seq(
             parser,
-            many0(map(seq(sep, parser), (res) => res.value[1])),
-            last === "required" ? sep : last === "optional" ? optional(sep) : not(sep)
+            many0(map(seq(sep, _, parser), (res) => res.value[2])),
+            {
+                required: sep,
+                optional: optional(sep),
+                none: not(sep),
+            }[last]
         ),
         (res) => [res.value[0], ...res.value[1]]
     )
 }
 
 const numLiteral = map(
-    tk.num,
+    num,
     (res): NumLiteral => new NumLiteral(res.loc, res.value.text.replace(/_/g, ""))
 )
 
 const varName = named(
     "Variable Name",
-    map(tk.name, (res): VarName => new VarName(res.loc, res.value.text))
+    map(name, (res): VarName => new VarName(res.loc, res.value.text))
 )
 
 const pow = map(
     seq(
         () => expr,
         _,
-        tk.pow,
+        carret,
         _,
         () => expr
     ),
@@ -288,26 +291,25 @@ const mulDivMod = map(
     seq(
         () => expr,
         _,
-        oneOf(tk.mul, tk.div, tk.mod),
+        oneOf(asterisk, slash, percent),
         _,
         () => expr
     ),
-    (res): BinOp =>
-        new BinOp(res.value[2].text as "*" | "/" | "%", res.loc, res.value[0], res.value[4])
+    (res): BinOp => new BinOp(res.value[2].text, res.loc, res.value[0], res.value[4])
 )
 
 const addSub = map(
     seq(
         () => expr,
         _,
-        oneOf(tk.plus, tk.minus),
+        oneOf(plus, minus),
         _,
         () => expr
     ),
     (res): BinOp => new BinOp(res.value[2].text as "+" | "-", res.loc, res.value[0], res.value[4])
 )
 
-const namePat = map(tk.name, (res): NamePat => new NamePat(res.loc, res.value.text))
+const namePat = map(name, (res): NamePat => new NamePat(res.loc, res.value.text))
 
 const pat = named("Pattern", oneOf(namePat))
 
@@ -315,8 +317,8 @@ const fnArg = map(pat, (res): FnArg => new FnArg(res.loc, res.value))
 
 const fnExpr = map(
     seq(
-        optional(seq(tk.lparen, _, optional(sepBy(fnArg, tk.comma, "optional")), _, tk.rparen, _)),
-        tk.arrow,
+        optional(seq(lparen, _, optional(sepBy(fnArg, comma, "optional")), _, rparen, _)),
+        arrow,
         _,
         () => expr
     ),
@@ -339,14 +341,20 @@ const fnCall = named(
     )
 )
 
-const fnDecl = map(
-    seq(namePat, _, fnExpr, _, tk.semicolon),
-    (res): FnDecl => new FnDecl(res.loc, res.value[0], res.value[2])
+const fnDecl = named(
+    "Function Declaration",
+    map(
+        seq(namePat, _, fnExpr, _, semicolon),
+        (res): FnDecl => new FnDecl(res.loc, res.value[0], res.value[2])
+    )
 )
 
-const varDecl = map(
-    seq(pat, _, tk.assign, _, () => expr, _, tk.semicolon),
-    (res): VarDecl => new VarDecl(res.loc, res.value[0], res.value[4])
+const varDecl = named(
+    "Variable Declaration",
+    map(
+        seq(pat, _, assign, _, () => expr, _, semicolon),
+        (res): VarDecl => new VarDecl(res.loc, res.value[0], res.value[4])
+    )
 )
 
 const blockStmt = oneOf(fnDecl, varDecl)
@@ -354,30 +362,30 @@ const blockStmt = oneOf(fnDecl, varDecl)
 const moduleStmt = oneOf(fnDecl, varDecl)
 
 const block = map(
-    seq(sepBy(blockStmt, _, "required"), optional(tk.semicolon), _, () => expr),
-    (res): Block => new Block(res.loc, res.value[0], res.value[3])
+    seq(many1(map(seq(blockStmt, _), (res) => res.value[0])), () => expr),
+    (res): Block => new Block(res.loc, res.value[0], res.value[1])
 )
 
 const muduleBody = map(
-    seq(optional(sepBy(moduleStmt, _, "required")), tk.eof),
-    (res) => res.value[0] || []
+    many0(map(seq(_, moduleStmt), (res) => res.value[1])),
+    (res) => res.value || []
 )
 
 export const expr: Parser<Expr> = named(
     "Expression",
     oneOf(
-        fnExpr,
-        block,
-        addSub,
-        mulDivMod,
-        pow,
-        fnCall,
-        varName,
-        numLiteral,
         map(
-            seq(tk.lparen, _, () => expr, _, tk.rparen),
+            seq(lparen, _, () => expr, _, rparen),
             (res) => res.value[2]
-        )
+        ),
+        numLiteral,
+        varName,
+        fnCall,
+        pow,
+        mulDivMod,
+        addSub,
+        block,
+        fnExpr
     )
 )
 
@@ -386,7 +394,10 @@ export async function parseAst(file: BunFile): Promise<Module> {
     const name = file.name ? basename(file.name) : "main"
 
     const input = new ParseInput(path, await file.text(), {})
-    const moduleBodyAst = parse(muduleBody, input)
+    const moduleBodyAst = parse(
+        map(seq(muduleBody, _, eof), (res) => res.value[0]),
+        input
+    )
 
     return new Module(
         [moduleBodyAst[0].loc[0], moduleBodyAst[moduleBodyAst.length - 1].loc[1]],
