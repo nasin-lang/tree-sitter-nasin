@@ -247,7 +247,7 @@ export class FnCall {
     ) {}
 
     toString() {
-        return `${this.name} ${this.args.join(" ")}`
+        return `${this.name}(${this.args.join(", ")})`
     }
 
     toJSON() {

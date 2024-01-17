@@ -224,7 +224,7 @@ export class FnCall {
 }
 
 const nl = new TokenParser("new line", /[\s\r\n]*[\r\n]/)
-const ws = new TokenParser("whitespace", /\s+/)
+const ws = new TokenParser("whitespace", /[ \t]+/)
 const comment = new TokenParser("comment", /#[^\r\n]*/)
 const eof = new TokenParser("end of file", /$/)
 const num = new TokenParser("number", /(0x|0b)?(\d(_?\d)*)?\.?\d(_?\d)*/)
@@ -329,30 +329,33 @@ const fnCall = named(
     "Function Call",
     map(
         seq(
-            () => expr,
-            many1(
+            oneOf(
                 map(
-                    seq(_, () => expr),
-                    (res) => res.value[1]
-                )
-            )
+                    seq(lparen, _, () => expr, _, rparen),
+                    (res) => res.value[2]
+                ),
+                varName
+            ),
+            optional(ws),
+            lparen,
+            _,
+            sepBy(() => expr, comma, "optional"),
+            _,
+            rparen
         ),
-        (res): FnCall => new FnCall(res.loc, res.value[0], res.value[1])
+        (res): FnCall => new FnCall(res.loc, res.value[0], res.value[4])
     )
 )
 
 const fnDecl = named(
     "Function Declaration",
-    map(
-        seq(namePat, _, fnExpr, _, semicolon),
-        (res): FnDecl => new FnDecl(res.loc, res.value[0], res.value[2])
-    )
+    map(seq(namePat, _, fnExpr), (res): FnDecl => new FnDecl(res.loc, res.value[0], res.value[2]))
 )
 
 const varDecl = named(
     "Variable Declaration",
     map(
-        seq(pat, _, assign, _, () => expr, _, semicolon),
+        seq(pat, _, assign, _, () => expr),
         (res): VarDecl => new VarDecl(res.loc, res.value[0], res.value[4])
     )
 )
@@ -362,12 +365,12 @@ const blockStmt = oneOf(fnDecl, varDecl)
 const moduleStmt = oneOf(fnDecl, varDecl)
 
 const block = map(
-    seq(many1(map(seq(blockStmt, _), (res) => res.value[0])), () => expr),
-    (res): Block => new Block(res.loc, res.value[0], res.value[1])
+    seq(sepBy(blockStmt, optional(semicolon), "required"), _, () => expr),
+    (res): Block => new Block(res.loc, res.value[0], res.value[2])
 )
 
 const muduleBody = map(
-    many0(map(seq(_, moduleStmt), (res) => res.value[1])),
+    optional(sepBy(moduleStmt, optional(semicolon), "required")),
     (res) => res.value || []
 )
 
@@ -395,7 +398,7 @@ export async function parseAst(file: BunFile): Promise<Module> {
 
     const input = new ParseInput(path, await file.text(), {})
     const moduleBodyAst = parse(
-        map(seq(muduleBody, _, eof), (res) => res.value[0]),
+        map(seq(_, muduleBody, _, eof), (res) => res.value[1]),
         input
     )
 
