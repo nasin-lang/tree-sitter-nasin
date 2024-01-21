@@ -23,7 +23,7 @@
     "typescipt": "^1.0.0"
   },
   "dependencies": {
-    "chunky-parser": "^1.1.2",
-    "cmd-ts": "^0.13.0"
+    "chunky-parser": "^2.0.0",
+    "cmd-ts": "^0.13.0",
   }
 }

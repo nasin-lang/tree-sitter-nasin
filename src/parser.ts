@@ -1,7 +1,6 @@
 import { type BunFile } from "bun"
 import {
     type LocationRange,
-    many1,
     oneOf,
     seq,
     TokenParser,
@@ -14,6 +13,8 @@ import {
     parse,
     ParseInput,
     noLog,
+    withPrecedence,
+    ParserWithPrecedence,
 } from "chunky-parser"
 import { basename, resolve } from "node:path"
 
@@ -265,6 +266,20 @@ function sepBy<T>(
         (res) => [res.value[0], ...res.value[1]]
     )
 }
+export const expr: ParserWithPrecedence<Expr> = withPrecedence(
+    map(
+        seq(lparen, _, () => expr, _, rparen),
+        (res) => res.value[2]
+    ),
+    () => numLiteral,
+    () => varName,
+    () => fnCall,
+    () => pow,
+    () => mulDivMod,
+    () => addSub,
+    () => block,
+    () => fnExpr
+)
 
 const numLiteral = map(
     num,
@@ -277,35 +292,17 @@ const varName = named(
 )
 
 const pow = map(
-    seq(
-        () => expr,
-        _,
-        carret,
-        _,
-        () => expr
-    ),
+    seq(expr.left, _, carret, _, expr.right),
     (res): BinOp => new BinOp("^", res.loc, res.value[0], res.value[4])
 )
 
 const mulDivMod = map(
-    seq(
-        () => expr,
-        _,
-        oneOf(asterisk, slash, percent),
-        _,
-        () => expr
-    ),
+    seq(expr.left, _, oneOf(asterisk, slash, percent), _, expr.right),
     (res): BinOp => new BinOp(res.value[2].text, res.loc, res.value[0], res.value[4])
 )
 
 const addSub = map(
-    seq(
-        () => expr,
-        _,
-        oneOf(plus, minus),
-        _,
-        () => expr
-    ),
+    seq(expr.left, _, oneOf(plus, minus), _, expr.right),
     (res): BinOp => new BinOp(res.value[2].text as "+" | "-", res.loc, res.value[0], res.value[4])
 )
 
@@ -317,10 +314,10 @@ const fnArg = map(pat, (res): FnArg => new FnArg(res.loc, res.value))
 
 const fnExpr = map(
     seq(
-        optional(seq(lparen, _, optional(sepBy(fnArg, comma, "optional")), _, rparen, _)),
+        optional(seq(lparen, _, optional(sepBy(fnArg, optional(comma), "required")), _, rparen, _)),
         arrow,
         _,
-        () => expr
+        expr
     ),
     (res): FnExpr => new FnExpr(res.loc, res.value[0]?.[2] || [], res.value[3])
 )
@@ -330,16 +327,13 @@ const fnCall = named(
     map(
         seq(
             oneOf(
-                map(
-                    seq(lparen, _, () => expr, _, rparen),
-                    (res) => res.value[2]
-                ),
+                map(seq(lparen, _, expr, _, rparen), (res) => res.value[2]),
                 varName
             ),
             optional(ws),
             lparen,
             _,
-            sepBy(() => expr, comma, "optional"),
+            sepBy(expr, optional(comma), "required"),
             _,
             rparen
         ),
@@ -355,7 +349,7 @@ const fnDecl = named(
 const varDecl = named(
     "Variable Declaration",
     map(
-        seq(pat, _, assign, _, () => expr),
+        seq(pat, _, assign, _, expr),
         (res): VarDecl => new VarDecl(res.loc, res.value[0], res.value[4])
     )
 )
@@ -365,31 +359,13 @@ const blockStmt = oneOf(fnDecl, varDecl)
 const moduleStmt = oneOf(fnDecl, varDecl)
 
 const block = map(
-    seq(sepBy(blockStmt, optional(semicolon), "required"), _, () => expr),
+    seq(sepBy(blockStmt, optional(semicolon), "required"), _, expr),
     (res): Block => new Block(res.loc, res.value[0], res.value[2])
 )
 
 const muduleBody = map(
     optional(sepBy(moduleStmt, optional(semicolon), "required")),
     (res) => res.value || []
-)
-
-export const expr: Parser<Expr> = named(
-    "Expression",
-    oneOf(
-        map(
-            seq(lparen, _, () => expr, _, rparen),
-            (res) => res.value[2]
-        ),
-        numLiteral,
-        varName,
-        fnCall,
-        pow,
-        mulDivMod,
-        addSub,
-        block,
-        fnExpr
-    )
 )
 
 export async function parseAst(file: BunFile): Promise<Module> {
