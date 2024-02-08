@@ -1,6 +1,5 @@
 import { type BunFile } from "bun"
 import {
-    type LocationRange,
     oneOf,
     seq,
     TokenParser,
@@ -15,213 +14,14 @@ import {
     noLog,
     withPrecedence,
     ParserWithPrecedence,
+    type LocationRange,
 } from "chunky-parser"
 import { basename, resolve } from "node:path"
 
-export type AstNode = Module | ModuleStmt | BlockStmt | Expr
+import { BinOpType, Expr, Loc, Pat, FnArg, Stmt, Module } from "./proto/ast"
 
-export type ModuleStmt = VarDecl | FnDecl
-
-export type BlockStmt = VarDecl | FnDecl
-
-export type Expr = NumLiteral | VarName | FnCall | BinOp | Block | FnExpr
-
-export class Module {
-    constructor(
-        public loc: LocationRange,
-        public name: string,
-        public body: ModuleStmt[]
-    ) {}
-
-    toString(indent = ""): string {
-        return (
-            `(Module ${this.name}\n` +
-            this.body.map((stmt) => `${indent}  ${stmt.toString(indent + "  ")}`).join("\n") +
-            `)`
-        )
-    }
-
-    toJSON() {
-        return { Module: { loc: this.loc, name: this.name, body: this.body } }
-    }
-}
-
-export class VarDecl {
-    constructor(
-        public loc: LocationRange,
-        public pat: Pat,
-        public value: Expr
-    ) {}
-
-    toString(indent = ""): string {
-        return (
-            `(VarDecl ${this.pat.toString()}\n` +
-            `${indent}  ${this.value.toString(indent + "  ")})`
-        )
-    }
-
-    toJSON() {
-        return { VarDecl: { loc: this.loc, pat: this.pat, value: this.value } }
-    }
-}
-
-export type Pat = NamePat
-
-export class NamePat {
-    constructor(
-        public loc: LocationRange,
-        public name: string
-    ) {}
-
-    toString(): string {
-        return `(NamePat ${this.name})`
-    }
-
-    toJSON() {
-        return { NamePat: { loc: this.loc, name: this.name } }
-    }
-}
-
-export class NumLiteral {
-    constructor(
-        public loc: LocationRange,
-        public value: string
-    ) {}
-
-    toString(): string {
-        return `(NumLiteral ${this.value})`
-    }
-
-    toJSON() {
-        return { NumLiteral: { loc: this.loc, value: this.value } }
-    }
-}
-
-export class VarName {
-    constructor(
-        public loc: LocationRange,
-        public name: string
-    ) {}
-
-    toString(): string {
-        return `(VarName ${this.name})`
-    }
-
-    toJSON() {
-        return { VarName: { loc: this.loc, name: this.name } }
-    }
-}
-
-export class BinOp {
-    constructor(
-        public op: "+" | "-" | "*" | "/" | "%" | "^",
-        public loc: LocationRange,
-        public left: Expr,
-        public right: Expr
-    ) {}
-
-    toString(indent = ""): string {
-        return (
-            `(BinOp ${this.op}\n` +
-            `${indent}  ${this.left.toString(indent + "  ")}\n` +
-            `${indent}  ${this.right.toString(indent + "  ")})`
-        )
-    }
-
-    toJSON() {
-        return { BinOp: { loc: this.loc, op: this.op, left: this.left, right: this.right } }
-    }
-}
-
-export class Block {
-    constructor(
-        public loc: LocationRange,
-        public body: BlockStmt[],
-        public ret: Expr
-    ) {}
-
-    toString(indent = ""): string {
-        return (
-            `(Block\n` +
-            this.body.map((stmt) => `${indent}  ${stmt.toString(indent + "  ")}\n`).join("") +
-            `${indent}  ${this.ret.toString(indent + "  ")})`
-        )
-    }
-
-    toJSON() {
-        return { Block: { loc: this.loc, body: this.body, ret: this.ret } }
-    }
-}
-
-export class FnDecl {
-    constructor(
-        public loc: LocationRange,
-        public pat: NamePat,
-        public def: FnExpr
-    ) {}
-
-    toString(indent = ""): string {
-        return (
-            `(FnDecl (${this.pat.toString()})\n` + `${indent}  ${this.def.toString(indent + "  ")})`
-        )
-    }
-
-    toJSON() {
-        return { FnDecl: { loc: this.loc, pat: this.pat, def: this.def } }
-    }
-}
-
-export class FnExpr {
-    constructor(
-        public loc: LocationRange,
-        public args: FnArg[],
-        public ret: Expr
-    ) {}
-
-    toString(indent = ""): string {
-        return (
-            `(FnExpr [${this.args.join(" ")}]\n` + `${indent}  ${this.ret.toString(indent + "  ")})`
-        )
-    }
-
-    toJSON() {
-        return { FnExpr: { loc: this.loc, args: this.args, ret: this.ret } }
-    }
-}
-
-export class FnArg {
-    constructor(
-        public loc: LocationRange,
-        public pat: Pat
-    ) {}
-
-    toString(): string {
-        return `(FnArg ${this.pat.toString()})`
-    }
-
-    toJSON() {
-        return { FnArg: { loc: this.loc, pat: this.pat } }
-    }
-}
-
-export class FnCall {
-    constructor(
-        public loc: LocationRange,
-        public fn: Expr,
-        public args: Expr[]
-    ) {}
-
-    toString(indent = ""): string {
-        return (
-            `(FnCall ${this.fn.toString(indent)}\n` +
-            this.args.map((arg) => `${indent}  ${arg.toString(indent + "  ")}`).join("\n") +
-            `)`
-        )
-    }
-
-    toJSON() {
-        return { FnCall: { loc: this.loc, fn: this.fn, args: this.args } }
-    }
+function fromParsedLoc(parsedLoc: LocationRange): Loc {
+    return { start: parsedLoc[0], end: parsedLoc[1] }
 }
 
 const nl = new TokenParser("new line", /[\s\r\n]*[\r\n]/)
@@ -256,23 +56,24 @@ function sepBy<T>(
     return map(
         seq(
             parser,
-            many0(map(seq(sep, _, parser), (res) => res.value[2])),
+            many0(map(seq(sep, _, parser), ({ value }) => value[2])),
             {
                 required: sep,
                 optional: optional(sep),
                 none: not(sep),
             }[last]
         ),
-        (res) => [res.value[0], ...res.value[1]]
+        ({ value }) => [value[0], ...value[1]]
     )
 }
+
 export const expr: ParserWithPrecedence<Expr> = withPrecedence(
     map(
         seq(lparen, _, () => expr, _, rparen),
-        (res) => res.value[2]
+        ({ value }) => value[2]
     ),
     () => numLiteral,
-    () => varName,
+    () => ident,
     () => fnCall,
     () => pow,
     () => mulDivMod,
@@ -283,34 +84,60 @@ export const expr: ParserWithPrecedence<Expr> = withPrecedence(
 
 const numLiteral = map(
     num,
-    (res): NumLiteral => new NumLiteral(res.loc, res.value.text.replace(/_/g, ""))
+    ({ value, loc }): Expr => ({ loc: fromParsedLoc(loc), num: { value: value.text } })
 )
 
-const varName = named(
-    "Variable Name",
-    map(name, (res): VarName => new VarName(res.loc, res.value.text))
+const ident = named(
+    "Identifier",
+    map(name, ({ value, loc }): Expr => ({ loc: fromParsedLoc(loc), ident: { name: value.text } }))
 )
 
 const pow = map(
     seq(expr.left, _, carret, _, expr.right),
-    (res): BinOp => new BinOp("^", res.loc, res.value[0], res.value[4])
+    ({ value, loc }): Expr => ({
+        loc: fromParsedLoc(loc),
+        binOp: {
+            op: BinOpType.POW,
+            left: value[0],
+            right: value[4],
+        },
+    })
 )
 
 const mulDivMod = map(
     seq(expr.left, _, oneOf(asterisk, slash, percent), _, expr.right),
-    (res): BinOp => new BinOp(res.value[2].text, res.loc, res.value[0], res.value[4])
+    ({ value, loc }): Expr => ({
+        loc: fromParsedLoc(loc),
+        binOp: {
+            op: ({ "*": BinOpType.MUL, "/": BinOpType.DIV, "%": BinOpType.MOD } as const)[
+                value[2].text
+            ],
+            left: value[0],
+            right: value[4],
+        },
+    })
 )
 
 const addSub = map(
     seq(expr.left, _, oneOf(plus, minus), _, expr.right),
-    (res): BinOp => new BinOp(res.value[2].text as "+" | "-", res.loc, res.value[0], res.value[4])
+    ({ value, loc }): Expr => ({
+        loc: fromParsedLoc(loc),
+        binOp: {
+            op: ({ "+": BinOpType.ADD, "-": BinOpType.SUB } as const)[value[2].text],
+            left: value[0],
+            right: value[4],
+        },
+    })
 )
 
-const namePat = map(name, (res): NamePat => new NamePat(res.loc, res.value.text))
+const namePat = map(
+    name,
+    ({ value, loc }): Pat => ({ loc: fromParsedLoc(loc), name: { name: value.text } })
+)
 
 const pat = named("Pattern", oneOf(namePat))
 
-const fnArg = map(pat, (res): FnArg => new FnArg(res.loc, res.value))
+const fnArg = map(pat, ({ value, loc }): FnArg => ({ loc: fromParsedLoc(loc), pat: value }))
 
 const fnExpr = map(
     seq(
@@ -319,7 +146,10 @@ const fnExpr = map(
         _,
         expr
     ),
-    (res): FnExpr => new FnExpr(res.loc, res.value[0]?.[2] || [], res.value[3])
+    ({ value, loc }): Expr => ({
+        loc: fromParsedLoc(loc),
+        fnExpr: { args: value[0]?.[2] || [], ret: value[3] },
+    })
 )
 
 const fnCall = named(
@@ -327,8 +157,8 @@ const fnCall = named(
     map(
         seq(
             oneOf(
-                map(seq(lparen, _, expr, _, rparen), (res) => res.value[2]),
-                varName
+                map(seq(lparen, _, expr, _, rparen), ({ value }) => value[2]),
+                ident
             ),
             optional(ws),
             lparen,
@@ -337,20 +167,45 @@ const fnCall = named(
             _,
             rparen
         ),
-        (res): FnCall => new FnCall(res.loc, res.value[0], res.value[4])
+        ({ value, loc }): Expr => ({
+            loc: fromParsedLoc(loc),
+            fnCall: { callee: value[0], args: value[4] },
+        })
     )
 )
 
 const fnDecl = named(
     "Function Declaration",
-    map(seq(namePat, _, fnExpr), (res): FnDecl => new FnDecl(res.loc, res.value[0], res.value[2]))
+    map(
+        seq(
+            name,
+            _,
+            optional(
+                seq(lparen, _, optional(sepBy(fnArg, optional(comma), "required")), _, rparen, _)
+            ),
+            arrow,
+            _,
+            expr
+        ),
+        ({ value, loc }): Stmt => ({
+            loc: fromParsedLoc(loc),
+            fn: {
+                name: value[0].text,
+                args: value[2]?.[2] || [],
+                ret: value[5],
+            },
+        })
+    )
 )
 
 const varDecl = named(
     "Variable Declaration",
     map(
         seq(pat, _, assign, _, expr),
-        (res): VarDecl => new VarDecl(res.loc, res.value[0], res.value[4])
+        ({ value, loc }): Stmt => ({
+            loc: fromParsedLoc(loc),
+            var: { pat: value[0], value: value[4] },
+        })
     )
 )
 
@@ -360,12 +215,15 @@ const moduleStmt = oneOf(fnDecl, varDecl)
 
 const block = map(
     seq(sepBy(blockStmt, optional(semicolon), "required"), _, expr),
-    (res): Block => new Block(res.loc, res.value[0], res.value[2])
+    ({ loc, value }): Expr => ({
+        loc: fromParsedLoc(loc),
+        block: { body: value[0], ret: value[2] },
+    })
 )
 
 const muduleBody = map(
     optional(sepBy(moduleStmt, optional(semicolon), "required")),
-    (res) => res.value || []
+    ({ value }) => value || []
 )
 
 export async function parseAst(file: BunFile): Promise<Module> {
@@ -374,13 +232,17 @@ export async function parseAst(file: BunFile): Promise<Module> {
 
     const input = new ParseInput(path, await file.text(), {})
     const moduleBodyAst = parse(
-        map(seq(_, muduleBody, _, eof), (res) => res.value[1]),
+        map(seq(_, muduleBody, _, eof), ({ value }) => value[1]),
         input
     )
 
-    return new Module(
-        [moduleBodyAst[0].loc[0], moduleBodyAst[moduleBodyAst.length - 1].loc[1]],
+    return {
+        loc: {
+            start: moduleBodyAst[0].loc!.start,
+            end: moduleBodyAst[moduleBodyAst.length - 1].loc!.end,
+        },
         name,
-        moduleBodyAst
-    )
+        path,
+        body: moduleBodyAst,
+    }
 }

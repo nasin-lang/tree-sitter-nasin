@@ -1,0 +1,100 @@
+syntax = "proto3";
+
+message Loc {
+    uint32 start = 1;
+    uint32 end = 2;
+}
+
+message Module {
+    Loc loc = 1;
+    string name = 2;
+    string path = 3;
+    repeated Stmt body = 10;
+}
+
+// Statements
+message Stmt {
+    Loc loc = 1;
+    oneof stmt {
+        VarDecl var = 10;
+        FnDecl fn = 11;
+    }
+}
+
+message VarDecl {
+    Pat pat = 1;
+    Expr value = 10;
+}
+
+message Pat {
+    Loc loc = 1;
+    oneof pat {
+        NamePat name = 2;
+    }
+}
+
+message NamePat {
+    string name = 1;
+}
+
+message FnDecl {
+    string name = 1;
+    repeated FnArg args = 10;
+    Expr ret = 15;
+}
+
+message FnArg {
+    Loc loc = 1;
+    Pat pat = 2;
+}
+
+// Expressions
+message Expr {
+    Loc loc = 1;
+    oneof expr {
+        NumLit num = 2;
+        Ident ident = 3;
+        FnCall fn_call = 4;
+        BinOp bin_op = 5;
+        Block block = 6;
+        FnExpr fn_expr = 7;
+    }
+}
+
+message NumLit {
+    string value = 1;
+}
+
+message Ident {
+    string name = 1;
+}
+
+message FnCall {
+    Expr callee = 1;
+    repeated Expr args = 10;
+}
+
+message BinOp {
+    BinOpType op = 1;
+    Expr left = 10;
+    Expr right = 11;
+}
+
+enum BinOpType {
+    ADD = 0;
+    SUB = 1;
+    MUL = 2;
+    DIV = 3;
+    MOD = 4;
+    POW = 5;
+}
+
+message Block {
+    repeated Stmt body = 1;
+    Expr ret = 2;
+}
+
+message FnExpr {
+    repeated FnArg args = 10;
+    Expr ret = 15;
+}

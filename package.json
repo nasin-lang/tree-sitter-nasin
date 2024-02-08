@@ -25,5 +25,6 @@
   "dependencies": {
     "chunky-parser": "^2.0.0",
     "cmd-ts": "^0.13.0",
+    "ts-proto": "^1.167.0"
   }
 }

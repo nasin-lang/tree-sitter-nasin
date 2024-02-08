@@ -1,8 +1,11 @@
-import { type BunFile } from "bun"
+import { type BunFile, stdout } from "bun"
 import { command, run, positional, subcommands, type Type, flag } from "cmd-ts"
+import { inspect } from "node:util"
 
 import { astToIr } from "./ir"
 import { parseAst } from "./parser"
+import * as ast from "./proto/ast"
+import * as ir from "./proto/m_ir"
 
 const filename: Type<string, BunFile> = {
     async from(value) {
@@ -23,15 +26,22 @@ const showAst = command({
             long: "json",
             description: "Print the AST as JSON",
         }),
+        pretty: flag({
+            long: "pretty",
+            description: "Print the AST in a pretty format",
+        }),
     },
-    handler: async ({ file, json }) => {
+    handler: async ({ file, json, pretty }) => {
         try {
-            const ast = await parseAst(file)
+            const astNode = await parseAst(file)
 
             if (json) {
-                console.log(JSON.stringify(ast))
+                console.log(JSON.stringify(ast.Module.toJSON(astNode)))
+            } else if (pretty) {
+                console.log(inspect(ast.Module.toJSON(astNode), { depth: Infinity, colors: true }))
             } else {
-                console.log(ast.toString())
+                const data = ast.Module.encode(astNode).finish()
+                await Bun.write(stdout, data)
             }
         } catch (e) {
             console.error(e instanceof Error ? e.message : e)
@@ -53,15 +63,27 @@ const showIr = command({
             long: "json",
             description: "Print the IR as JSON",
         }),
+        pretty: flag({
+            long: "pretty",
+            description: "Print the AST in a pretty format",
+        }),
     },
-    handler: async ({ file, json }) => {
-        const ast = await parseAst(file)
-        const ir = astToIr(ast)
+    handler: async ({ file, json, pretty }) => {
+        try {
+            const astNode = await parseAst(file)
+            const irNode = astToIr(astNode)
 
-        if (json) {
-            console.log(JSON.stringify(ir))
-        } else {
-            console.log(ir.toString())
+            if (json) {
+                console.log(JSON.stringify(ir.Module.toJSON(irNode)))
+            } else if (pretty) {
+                console.log(inspect(ir.Module.toJSON(irNode), { depth: Infinity, colors: true }))
+            } else {
+                const data = ir.Module.encode(irNode).finish()
+                await Bun.write(stdout, data)
+            }
+        } catch (e) {
+            console.error(e instanceof Error ? e.message : e)
+            process.exit(1)
         }
     },
 })
