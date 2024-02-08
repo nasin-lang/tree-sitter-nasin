@@ -1,5 +1,7 @@
 syntax = "proto3";
 
+package torvo.ast;
+
 message Loc {
     uint32 start = 1;
     uint32 end = 2;

@@ -1,6 +1,6 @@
 {
-  "name": "turvo-lang",
-  "description": "Elegant pure functional programming language",
+  "name": "turvo-parser",
+  "description": "AST parser for the Torvo programming language",
   "author": "Felipe Nascimento <felipenasgomes@gmail.com>",
   "license": "GPL-3.0",
   "module": "src/index.ts",

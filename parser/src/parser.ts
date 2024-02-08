@@ -1,4 +1,3 @@
-import { type BunFile } from "bun"
 import {
     oneOf,
     seq,
@@ -16,7 +15,6 @@ import {
     ParserWithPrecedence,
     type LocationRange,
 } from "chunky-parser"
-import { basename, resolve } from "node:path"
 
 import { BinOpType, Expr, Loc, Pat, FnArg, Stmt, Module } from "./proto/ast"
 
@@ -226,11 +224,8 @@ const muduleBody = map(
     ({ value }) => value || []
 )
 
-export async function parseAst(file: BunFile): Promise<Module> {
-    const path = file.name ? resolve(file.name) : "unknown"
-    const name = file.name ? basename(file.name) : "main"
-
-    const input = new ParseInput(path, await file.text(), {})
+export function parseAst(path: string, name: string, content: string): Module {
+    const input = new ParseInput(path, content, {})
     const moduleBodyAst = parse(
         map(seq(_, muduleBody, _, eof), ({ value }) => value[1]),
         input

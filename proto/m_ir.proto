@@ -1,5 +1,7 @@
 syntax = "proto3";
 
+package torvo.m_ir;
+
 message Module {
     string name = 1;
     Scope scope = 10;

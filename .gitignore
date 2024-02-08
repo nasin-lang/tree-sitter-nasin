@@ -3,9 +3,11 @@ node_modules/
 
 # Generated files
 src/proto/*
+parser/src/proto/*
 
 # Compiled results
 bin/*
+target/
 
 # dotenv environment variable files
 .env
