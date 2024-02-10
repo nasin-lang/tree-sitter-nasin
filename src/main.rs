@@ -34,7 +34,7 @@ enum CliCommand {
 #[derive(Debug, Clone, ValueEnum)]
 enum ShowTarget {
     Ast,
-    Ir,
+    Lex,
 }
 
 fn main() {
@@ -71,9 +71,9 @@ fn main() {
                 ShowTarget::Ast => {
                     println!("{:?}", ast);
                 }
-                ShowTarget::Ir => {
-                    let ir = proto::m_ir::Module::from(&ast);
-                    println!("{}", ir);
+                ShowTarget::Lex => {
+                    let lex = proto::lex::Module::from(&ast);
+                    println!("{}", lex);
                 }
             }
         }

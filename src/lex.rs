@@ -1,12 +1,10 @@
 use std::collections::HashMap;
-use std::fmt;
-use std::fmt::Display;
 use std::rc::Rc;
 
 use crate::proto::ast;
-use crate::proto::m_ir;
+use crate::proto::lex;
 
-impl From<&ast::Module> for m_ir::Module {
+impl From<&ast::Module> for lex::Module {
     fn from(value: &ast::Module) -> Self {
         let mut builder = InstrBuilder::new();
 
@@ -14,7 +12,7 @@ impl From<&ast::Module> for m_ir::Module {
             builder.add_stmt(&stmt);
         }
 
-        m_ir::Module {
+        lex::Module {
             name: value.name.clone(),
             body: builder.finish(),
         }
@@ -26,7 +24,7 @@ struct InstrBuilder<'a> {
     parent: Option<&'a InstrBuilder<'a>>,
     names: Vec<Rc<str>>,
     ident_map: HashMap<String, Vec<Rc<str>>>,
-    body: Vec<m_ir::Instr>,
+    body: Vec<lex::Instr>,
 }
 
 impl<'a> InstrBuilder<'a> {
@@ -41,7 +39,7 @@ impl<'a> InstrBuilder<'a> {
         }
     }
 
-    pub fn finish(self) -> Vec<m_ir::Instr> {
+    pub fn finish(self) -> Vec<lex::Instr> {
         self.body
     }
 
@@ -84,7 +82,7 @@ impl<'a> InstrBuilder<'a> {
         count
     }
 
-    pub fn add_stmt(&mut self, node: &ast::Stmt) -> m_ir::Value {
+    pub fn add_stmt(&mut self, node: &ast::Stmt) -> lex::Value {
         match &node.stmt {
             Some(ast::stmt::Stmt::Var(var)) => {
                 let ast::pat::Pat::Name(name_pat) = var.pat.pat.as_ref().unwrap();
@@ -105,24 +103,24 @@ impl<'a> InstrBuilder<'a> {
                     .collect();
 
                 if let Some(ret) = &func.ret {
-                    let ret = m_ir::FnReturn {
+                    let ret = lex::FnReturn {
                         value: fn_builder.add_expr(&ret, None),
                     };
-                    fn_builder.body.push(m_ir::Instr {
-                        instr: Some(m_ir::instr::Instr::FnReturn(ret)),
+                    fn_builder.body.push(lex::Instr {
+                        instr: Some(lex::instr::Instr::FnReturn(ret)),
                     });
                 }
 
-                self.body.push(m_ir::Instr {
-                    instr: Some(m_ir::instr::Instr::FnDecl(m_ir::FnDecl {
+                self.body.push(lex::Instr {
+                    instr: Some(lex::instr::Instr::FnDecl(lex::FnDecl {
                         name: name.to_string(),
                         args,
                         body: fn_builder.finish(),
                     })),
                 });
 
-                m_ir::Value {
-                    value: Some(m_ir::value::Value::Ident(name.to_string())),
+                lex::Value {
+                    value: Some(lex::value::Value::Ident(name.to_string())),
                 }
             }
             _ => {
@@ -132,23 +130,23 @@ impl<'a> InstrBuilder<'a> {
         }
     }
 
-    pub fn add_expr(&mut self, expr: &ast::Expr, name: Option<&str>) -> m_ir::Value {
+    pub fn add_expr(&mut self, expr: &ast::Expr, name: Option<&str>) -> lex::Value {
         match expr.expr.as_ref().unwrap() {
             ast::expr::Expr::Num(num) => {
-                let value = m_ir::Value {
-                    value: Some(m_ir::value::Value::Num(m_ir::NumLit {
+                let value = lex::Value {
+                    value: Some(lex::value::Value::Num(lex::NumLit {
                         value: num.value.clone(),
                     })),
                 };
                 if let Some(name) = name {
-                    self.body.push(m_ir::Instr {
-                        instr: Some(m_ir::instr::Instr::Assign(m_ir::Assign {
+                    self.body.push(lex::Instr {
+                        instr: Some(lex::instr::Instr::Assign(lex::Assign {
                             name: name.to_string(),
                             value,
                         })),
                     });
-                    return m_ir::Value {
-                        value: Some(m_ir::value::Value::Ident(name.to_string())),
+                    return lex::Value {
+                        value: Some(lex::value::Value::Ident(name.to_string())),
                     };
                 }
                 return value;
@@ -157,39 +155,39 @@ impl<'a> InstrBuilder<'a> {
                 let left = self.add_expr(&op.left, None);
                 let right = self.add_expr(&op.right, None);
                 let name = name.map_or_else(|| self.add_name(None), |v| v.to_string());
-                self.body.push(m_ir::Instr {
-                    instr: Some(m_ir::instr::Instr::BinOp(m_ir::BinOp {
+                self.body.push(lex::Instr {
+                    instr: Some(lex::instr::Instr::BinOp(lex::BinOp {
                         name: name.clone(),
                         op: match op.op() {
-                            ast::BinOpType::Add => m_ir::BinOpType::Add,
-                            ast::BinOpType::Sub => m_ir::BinOpType::Sub,
-                            ast::BinOpType::Mod => m_ir::BinOpType::Mod,
-                            ast::BinOpType::Mul => m_ir::BinOpType::Mul,
-                            ast::BinOpType::Div => m_ir::BinOpType::Div,
-                            ast::BinOpType::Pow => m_ir::BinOpType::Pow,
+                            ast::BinOpType::Add => lex::BinOpType::Add,
+                            ast::BinOpType::Sub => lex::BinOpType::Sub,
+                            ast::BinOpType::Mod => lex::BinOpType::Mod,
+                            ast::BinOpType::Mul => lex::BinOpType::Mul,
+                            ast::BinOpType::Div => lex::BinOpType::Div,
+                            ast::BinOpType::Pow => lex::BinOpType::Pow,
                         }
                         .into(),
                         left,
                         right,
                     })),
                 });
-                return m_ir::Value {
-                    value: Some(m_ir::value::Value::Ident(name)),
+                return lex::Value {
+                    value: Some(lex::value::Value::Ident(name)),
                 };
             }
             ast::expr::Expr::Ident(ident) => {
-                let value = m_ir::Value {
-                    value: Some(m_ir::value::Value::Ident(ident.name.clone())),
+                let value = lex::Value {
+                    value: Some(lex::value::Value::Ident(ident.name.clone())),
                 };
                 if let Some(name) = name {
-                    self.body.push(m_ir::Instr {
-                        instr: Some(m_ir::instr::Instr::Assign(m_ir::Assign {
+                    self.body.push(lex::Instr {
+                        instr: Some(lex::instr::Instr::Assign(lex::Assign {
                             name: name.to_string(),
                             value,
                         })),
                     });
-                    return m_ir::Value {
-                        value: Some(m_ir::value::Value::Ident(name.to_string())),
+                    return lex::Value {
+                        value: Some(lex::value::Value::Ident(name.to_string())),
                     };
                 }
                 return value;
@@ -201,7 +199,7 @@ impl<'a> InstrBuilder<'a> {
                 }
 
                 let callee = match self.add_expr(&call.callee, None).value {
-                    Some(m_ir::value::Value::Ident(name)) => name,
+                    Some(lex::value::Value::Ident(name)) => name,
                     _ => {
                         // TODO: improve error handling
                         unreachable!()
@@ -210,16 +208,16 @@ impl<'a> InstrBuilder<'a> {
 
                 let name = name.map_or_else(|| self.add_name(None), |v| v.to_string());
 
-                self.body.push(m_ir::Instr {
-                    instr: Some(m_ir::instr::Instr::FnCall(m_ir::FnCall {
+                self.body.push(lex::Instr {
+                    instr: Some(lex::instr::Instr::FnCall(lex::FnCall {
                         name: name.clone(),
                         callee,
                         args,
                     })),
                 });
 
-                return m_ir::Value {
-                    value: Some(m_ir::value::Value::Ident(name)),
+                return lex::Value {
+                    value: Some(lex::value::Value::Ident(name)),
                 };
             }
             ast::expr::Expr::Block(block) => {
@@ -234,75 +232,5 @@ impl<'a> InstrBuilder<'a> {
                 unreachable!()
             }
         };
-    }
-}
-
-fn fmt_scope(scope: &[m_ir::Instr], f: &mut fmt::Formatter<'_>) -> fmt::Result {
-    for instr in scope.iter() {
-        for line in format!("{}", instr).lines() {
-            write!(f, "    {}\n", line)?;
-        }
-    }
-    Ok(())
-}
-
-impl Display for m_ir::Module {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "mod {}\n", self.name)?;
-        fmt_scope(&self.body, f)
-    }
-}
-
-impl Display for m_ir::Instr {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match &self.instr {
-            Some(m_ir::instr::Instr::FnDecl(func)) => {
-                write!(f, "fn {}({}) =\n", func.name, func.args.join(", "),)?;
-                fmt_scope(&func.body, f)
-            }
-            Some(m_ir::instr::Instr::Assign(assign)) => {
-                write!(f, "{} := {}", assign.name, assign.value)
-            }
-            Some(m_ir::instr::Instr::BinOp(op)) => write!(
-                f,
-                "{} = {} {} {}",
-                op.name,
-                op.left,
-                match op.op() {
-                    m_ir::BinOpType::Add => "+",
-                    m_ir::BinOpType::Sub => "-",
-                    m_ir::BinOpType::Mod => "%",
-                    m_ir::BinOpType::Mul => "*",
-                    m_ir::BinOpType::Div => "/",
-                    m_ir::BinOpType::Pow => "**",
-                },
-                op.right
-            ),
-            Some(m_ir::instr::Instr::FnCall(call)) => write!(
-                f,
-                "{} = {}({})",
-                call.name,
-                call.callee,
-                call.args
-                    .iter()
-                    .map(|arg| format!("{}", arg))
-                    .collect::<Vec<String>>()
-                    .join(", ")
-            ),
-            Some(m_ir::instr::Instr::FnReturn(ret)) => {
-                write!(f, "return {}", ret.value)
-            }
-            None => Ok(()),
-        }
-    }
-}
-
-impl Display for m_ir::Value {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match &self.value {
-            Some(m_ir::value::Value::Num(num)) => write!(f, "{}", num.value),
-            Some(m_ir::value::Value::Ident(ident)) => write!(f, "{}", ident),
-            None => Ok(()),
-        }
     }
 }

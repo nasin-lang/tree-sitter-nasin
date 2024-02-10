@@ -9,7 +9,7 @@ clean:
 	rm -rf parser/src/proto
 	cargo clean
 
-bin/torvo: src/* proto/ast.proto proto/m_ir.proto
+bin/torvo: Cargo.toml build.rs src/* proto/ast.proto proto/lex.proto
 	cargo build
 	cp -T target/debug/torvo bin/torvo
 
