@@ -87,9 +87,9 @@ impl<'a> InstrBuilder<'a> {
     pub fn add_stmt(&mut self, node: &ast::Stmt) -> m_ir::Value {
         match &node.stmt {
             Some(ast::stmt::Stmt::Var(var)) => {
-                let ast::pat::Pat::Name(name_pat) = var.pat.as_ref().unwrap().pat.as_ref().unwrap();
+                let ast::pat::Pat::Name(name_pat) = var.pat.pat.as_ref().unwrap();
                 let name = self.add_name(Some(&name_pat.name));
-                self.add_expr(&var.value.as_ref().unwrap(), Some(&name))
+                self.add_expr(&var.value, Some(&name))
             }
             Some(ast::stmt::Stmt::Fn(func)) => {
                 let name = self.add_name(Some(&func.name));
@@ -99,18 +99,19 @@ impl<'a> InstrBuilder<'a> {
                     .args
                     .iter()
                     .map(|arg| {
-                        let ast::pat::Pat::Name(name_pat) =
-                            arg.pat.as_ref().unwrap().pat.as_ref().unwrap();
+                        let ast::pat::Pat::Name(name_pat) = arg.pat.pat.as_ref().unwrap();
                         fn_builder.add_name(Some(&name_pat.name)).to_string()
                     })
                     .collect();
 
-                let ret = m_ir::FnReturn {
-                    value: Some(fn_builder.add_expr(&func.ret.as_ref().unwrap(), None)),
-                };
-                fn_builder.body.push(m_ir::Instr {
-                    instr: Some(m_ir::instr::Instr::FnReturn(ret)),
-                });
+                if let Some(ret) = &func.ret {
+                    let ret = m_ir::FnReturn {
+                        value: fn_builder.add_expr(&ret, None),
+                    };
+                    fn_builder.body.push(m_ir::Instr {
+                        instr: Some(m_ir::instr::Instr::FnReturn(ret)),
+                    });
+                }
 
                 self.body.push(m_ir::Instr {
                     instr: Some(m_ir::instr::Instr::FnDecl(m_ir::FnDecl {
@@ -143,7 +144,7 @@ impl<'a> InstrBuilder<'a> {
                     self.body.push(m_ir::Instr {
                         instr: Some(m_ir::instr::Instr::Assign(m_ir::Assign {
                             name: name.to_string(),
-                            value: Some(value),
+                            value,
                         })),
                     });
                     return m_ir::Value {
@@ -153,8 +154,8 @@ impl<'a> InstrBuilder<'a> {
                 return value;
             }
             ast::expr::Expr::BinOp(op) => {
-                let left = self.add_expr(op.left.as_ref().unwrap(), None);
-                let right = self.add_expr(op.right.as_ref().unwrap(), None);
+                let left = self.add_expr(&op.left, None);
+                let right = self.add_expr(&op.right, None);
                 let name = name.map_or_else(|| self.add_name(None), |v| v.to_string());
                 self.body.push(m_ir::Instr {
                     instr: Some(m_ir::instr::Instr::BinOp(m_ir::BinOp {
@@ -168,8 +169,8 @@ impl<'a> InstrBuilder<'a> {
                             ast::BinOpType::Pow => m_ir::BinOpType::Pow,
                         }
                         .into(),
-                        left: Some(left),
-                        right: Some(right),
+                        left,
+                        right,
                     })),
                 });
                 return m_ir::Value {
@@ -184,7 +185,7 @@ impl<'a> InstrBuilder<'a> {
                     self.body.push(m_ir::Instr {
                         instr: Some(m_ir::instr::Instr::Assign(m_ir::Assign {
                             name: name.to_string(),
-                            value: Some(value),
+                            value,
                         })),
                     });
                     return m_ir::Value {
@@ -199,7 +200,7 @@ impl<'a> InstrBuilder<'a> {
                     args.push(self.add_expr(arg, None));
                 }
 
-                let callee = match self.add_expr(call.callee.as_ref().unwrap(), None).value {
+                let callee = match self.add_expr(&call.callee, None).value {
                     Some(m_ir::value::Value::Ident(name)) => name,
                     _ => {
                         // TODO: improve error handling
@@ -226,7 +227,7 @@ impl<'a> InstrBuilder<'a> {
                     self.add_stmt(stmt);
                 }
 
-                return self.add_expr(block.ret.as_ref().unwrap(), name);
+                return self.add_expr(&block.ret, name);
             }
             _ => {
                 // FIXME: melhorar tratamento de erro
@@ -260,13 +261,13 @@ impl Display for m_ir::Instr {
                 fmt_scope(&func.body, f)
             }
             Some(m_ir::instr::Instr::Assign(assign)) => {
-                write!(f, "{} := {}", assign.name, assign.value.as_ref().unwrap())
+                write!(f, "{} := {}", assign.name, assign.value)
             }
             Some(m_ir::instr::Instr::BinOp(op)) => write!(
                 f,
                 "{} := {} {} {}",
                 op.name,
-                op.left.as_ref().unwrap(),
+                op.left,
                 match op.op() {
                     m_ir::BinOpType::Add => "+",
                     m_ir::BinOpType::Sub => "-",
@@ -275,7 +276,7 @@ impl Display for m_ir::Instr {
                     m_ir::BinOpType::Div => "/",
                     m_ir::BinOpType::Pow => "**",
                 },
-                op.right.as_ref().unwrap()
+                op.right
             ),
             Some(m_ir::instr::Instr::FnCall(call)) => write!(
                 f,
@@ -289,7 +290,7 @@ impl Display for m_ir::Instr {
                     .join(", ")
             ),
             Some(m_ir::instr::Instr::FnReturn(ret)) => {
-                write!(f, "return {}", ret.value.as_ref().unwrap())
+                write!(f, "return {}", ret.value)
             }
             None => Ok(()),
         }

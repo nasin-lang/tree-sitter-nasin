@@ -1,39 +1,39 @@
-syntax = "proto3";
+syntax = "proto2";
 
 package torvo.m_ir;
 
 message Module {
-    string name = 1;
-    repeated Instr body = 10;
+    required string name = 1;
+    repeated Instr body  = 10;
 }
 
 // Statements
 message Instr {
     oneof instr {
-        FnDecl fn_decl = 1;
-        Assign assign = 2;
-        BinOp bin_op = 3;
-        FnCall fn_call = 4;
+        FnDecl fn_decl     = 1;
+        Assign assign      = 2;
+        BinOp bin_op       = 3;
+        FnCall fn_call     = 4;
         FnReturn fn_return = 5;
     }
 }
 
 message FnDecl {
-    string name = 1;
+    required string name = 1;
     repeated string args = 10;
-    repeated Instr body = 20;
+    repeated Instr body  = 20;
 }
 
 message Assign {
-    string name = 1;
-    Value value = 2;
+    required string name = 1;
+    required Value value = 2;
 }
 
 message BinOp {
-    string name = 1;
-    BinOpType op = 2;
-    Value left = 10;
-    Value right = 11;
+    required string name  = 1;
+    required BinOpType op = 2;
+    required Value left   = 10;
+    required Value right  = 11;
 }
 
 enum BinOpType {
@@ -46,23 +46,23 @@ enum BinOpType {
 }
 
 message FnReturn {
-    Value value = 1;
+    required Value value = 1;
 }
 
 message FnCall {
-    string name = 1;
-    string callee = 2;
-    repeated Value args = 10;
+    required string name   = 1;
+    required string callee = 2;
+    repeated Value args    = 10;
 }
 
 // Values
 message Value {
     oneof value {
         string ident = 1;
-        NumLit num = 2;
+        NumLit num   = 2;
     }
 }
 
 message NumLit {
-    string value = 1;
+    required string value = 1;
 }
