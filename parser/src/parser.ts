@@ -22,18 +22,24 @@ function fromParsedLoc(parsedLoc: LocationRange): Loc {
     return { start: parsedLoc[0], end: parsedLoc[1] }
 }
 
+function tokenParserOnce<T extends string>(name: string, pattern: T) {
+    const escaped = pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const reg = new RegExp(`${escaped}(?!${escaped})`)
+    return new TokenParser<T>(name, reg)
+}
+
 const nl = new TokenParser("new line", /[\s\r\n]*[\r\n]/)
 const ws = new TokenParser("whitespace", /[ \t]+/)
-const comment = new TokenParser("comment", /#[^\r\n]*/)
+const comment = new TokenParser("comment", /\/\/[^\r\n]*/)
 const eof = new TokenParser("end of file", /$/)
 const num = new TokenParser("number", /(0x|0b)?(\d(_?\d)*)?\.?\d(_?\d)*/)
 const name = new TokenParser("name", /[\p{L}_][\p{L}\p{Nd}_]*/u)
-const plus = new TokenParser("plus", "+")
-const minus = new TokenParser("minus", "-")
-const asterisk = new TokenParser("asterisk", "*")
-const slash = new TokenParser("slash", "/")
-const percent = new TokenParser("percent", "%")
-const carret = new TokenParser("carret", "^")
+const plus = tokenParserOnce("plus", "+")
+const minus = tokenParserOnce("minus", "-")
+const asterisk = tokenParserOnce("asterisk", "*")
+const dAsterisk = tokenParserOnce("double asterisk", "**")
+const slash = tokenParserOnce("slash", "/")
+const percent = tokenParserOnce("percent", "%")
 const assign = new TokenParser("assign", ":=")
 const arrow = new TokenParser("arrow", "=>")
 const lparen = new TokenParser("left parenthesis", "(")
@@ -91,7 +97,7 @@ const ident = named(
 )
 
 const pow = map(
-    seq(expr.left, _, carret, _, expr.right),
+    seq(expr.left, _, dAsterisk, _, expr.right),
     ({ value, loc }): Expr => ({
         loc: fromParsedLoc(loc),
         binOp: {
