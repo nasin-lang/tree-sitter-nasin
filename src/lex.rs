@@ -257,7 +257,7 @@ impl Display for m_ir::Instr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.instr {
             Some(m_ir::instr::Instr::FnDecl(func)) => {
-                write!(f, "{}({}) =>\n", func.name, func.args.join(", "),)?;
+                write!(f, "fn {}({}) =\n", func.name, func.args.join(", "),)?;
                 fmt_scope(&func.body, f)
             }
             Some(m_ir::instr::Instr::Assign(assign)) => {
@@ -265,7 +265,7 @@ impl Display for m_ir::Instr {
             }
             Some(m_ir::instr::Instr::BinOp(op)) => write!(
                 f,
-                "{} := {} {} {}",
+                "{} = {} {} {}",
                 op.name,
                 op.left,
                 match op.op() {
@@ -280,7 +280,7 @@ impl Display for m_ir::Instr {
             ),
             Some(m_ir::instr::Instr::FnCall(call)) => write!(
                 f,
-                "{} := {}({})",
+                "{} = {}({})",
                 call.name,
                 call.callee,
                 call.args

@@ -40,8 +40,8 @@ const asterisk = tokenParserOnce("asterisk", "*")
 const dAsterisk = tokenParserOnce("double asterisk", "**")
 const slash = tokenParserOnce("slash", "/")
 const percent = tokenParserOnce("percent", "%")
-const assign = new TokenParser("assign", ":=")
-const arrow = new TokenParser("arrow", "=>")
+const equal = tokenParserOnce("equal", "=")
+const fn = new TokenParser("`fn`", "fn")
 const lparen = new TokenParser("left parenthesis", "(")
 const rparen = new TokenParser("right parenthesis", ")")
 const comma = new TokenParser("comma", ",")
@@ -61,11 +61,7 @@ function sepBy<T>(
         seq(
             parser,
             many0(map(seq(sep, _, parser), ({ value }) => value[2])),
-            {
-                required: sep,
-                optional: optional(sep),
-                none: not(sep),
-            }[last]
+            { required: sep, optional: optional(sep), none: not(sep) }[last]
         ),
         ({ value }) => [value[0], ...value[1]]
     )
@@ -145,14 +141,16 @@ const fnArg = map(pat, ({ value, loc }): FnArg => ({ loc: fromParsedLoc(loc), pa
 
 const fnExpr = map(
     seq(
-        optional(seq(lparen, _, optional(sepBy(fnArg, optional(comma), "required")), _, rparen, _)),
-        arrow,
+        fn,
+        _,
+        seq(lparen, _, optional(sepBy(fnArg, optional(comma), "required")), _, rparen, _),
+        equal,
         _,
         expr
     ),
     ({ value, loc }): Expr => ({
         loc: fromParsedLoc(loc),
-        fnExpr: { args: value[0]?.[2] || [], ret: value[3] },
+        fnExpr: { args: value[2][2] || [], ret: value[5] },
     })
 )
 
@@ -182,21 +180,21 @@ const fnDecl = named(
     "Function Declaration",
     map(
         seq(
+            fn,
+            _,
             name,
             _,
-            optional(
-                seq(lparen, _, optional(sepBy(fnArg, optional(comma), "required")), _, rparen, _)
-            ),
-            arrow,
+            seq(lparen, _, optional(sepBy(fnArg, optional(comma), "required")), _, rparen, _),
+            equal,
             _,
             expr
         ),
         ({ value, loc }): Stmt => ({
             loc: fromParsedLoc(loc),
             fn: {
-                name: value[0].text,
-                args: value[2]?.[2] || [],
-                ret: value[5],
+                name: value[2].text,
+                args: value[4][2] || [],
+                ret: value[7],
             },
         })
     )
@@ -205,7 +203,7 @@ const fnDecl = named(
 const varDecl = named(
     "Variable Declaration",
     map(
-        seq(pat, _, assign, _, expr),
+        seq(pat, _, equal, _, expr),
         ({ value, loc }): Stmt => ({
             loc: fromParsedLoc(loc),
             var: { pat: value[0], value: value[4] },
