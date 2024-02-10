@@ -4,11 +4,6 @@ package torvo.m_ir;
 
 message Module {
     string name = 1;
-    Scope scope = 10;
-}
-
-message Scope {
-    repeated string names = 1;
     repeated Instr body = 10;
 }
 
@@ -26,7 +21,7 @@ message Instr {
 message FnDecl {
     string name = 1;
     repeated string args = 10;
-    Scope scope = 20;
+    repeated Instr body = 20;
 }
 
 message Assign {
@@ -49,7 +44,6 @@ enum BinOpType {
     MOD = 4;
     POW = 5;
 }
-
 
 message FnReturn {
     Value value = 1;

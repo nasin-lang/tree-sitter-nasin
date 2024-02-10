@@ -1,3 +1,4 @@
+pub mod lex;
 pub mod proto;
 
 use std::fs::File;
@@ -7,7 +8,7 @@ use std::process::{exit, Command};
 use std::{env, io};
 
 use clap::{Parser, Subcommand, ValueEnum};
-use protobuf::Message;
+use prost::Message;
 
 #[derive(Parser, Debug)]
 #[command(name = "Torvo Language")]
@@ -25,8 +26,8 @@ enum CliCommand {
         /// Path to the file to show the artifacts of
         file: PathBuf,
         #[arg(short, long)]
-        /// Print the artifacts in a pretty format
-        pretty: bool,
+        /// Print the artifacts in a text format
+        text: bool,
     },
 }
 
@@ -40,17 +41,13 @@ fn main() {
     let cli = Cli::parse();
 
     match cli.cmd {
-        CliCommand::Show {
-            target,
-            file,
-            pretty,
-        } => {
-            let parser = env::current_exe()
+        CliCommand::Show { target, file, text } => {
+            let parser_path = env::current_exe()
                 .expect("failed to get execution path")
                 .parent()
                 .unwrap()
                 .join("torvo-parser");
-            let output = Command::new(dbg!(parser))
+            let output = Command::new(parser_path)
                 .arg(&file)
                 .arg(&file.file_stem().expect("failed to read module name"))
                 .stdin(File::open(file).expect("failed to open file"))
@@ -63,19 +60,20 @@ fn main() {
                 exit(output.status.code().unwrap_or(1));
             }
 
-            if let (&false, &ShowTarget::Ast) = (&pretty, &target) {
+            if let (&false, &ShowTarget::Ast) = (&text, &target) {
                 io::stdout().write_all(&output.stdout).unwrap();
                 return;
             }
 
-            let ast = proto::ast::Module::parse_from_bytes(output.stdout.as_slice()).unwrap();
+            let ast = proto::ast::Module::decode(output.stdout.as_slice()).unwrap();
 
             match target {
                 ShowTarget::Ast => {
-                    println!("{}", protobuf::text_format::print_to_string_pretty(&ast));
+                    println!("{:?}", ast);
                 }
                 ShowTarget::Ir => {
-                    println!("{}", protobuf::text_format::print_to_string_pretty(&ast));
+                    let ir = proto::m_ir::Module::from(&ast);
+                    println!("{}", ir);
                 }
             }
         }
