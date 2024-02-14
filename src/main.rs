@@ -1,3 +1,4 @@
+pub mod codegen;
 pub mod lex;
 pub mod proto;
 
@@ -8,6 +9,7 @@ use std::process::{exit, Command};
 use std::{env, io};
 
 use clap::{Parser, Subcommand, ValueEnum};
+use codegen::native_codegen::compile_program;
 use prost::Message;
 
 #[derive(Parser, Debug)]
@@ -20,6 +22,11 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum CliCommand {
+    /// Build file to a binary
+    Build {
+        /// Path to the file to compile
+        file: PathBuf,
+    },
     /// Show artifacts of compilation
     Show {
         target: ShowTarget,
@@ -41,6 +48,30 @@ fn main() {
     let cli = Cli::parse();
 
     match cli.cmd {
+        CliCommand::Build { file } => {
+            let parser_path = env::current_exe()
+                .expect("failed to get execution path")
+                .parent()
+                .unwrap()
+                .join("torvo-parser");
+            let output = Command::new(parser_path)
+                .arg(&file)
+                .arg(&file.file_stem().expect("failed to read module name"))
+                .stdin(File::open(file).expect("failed to open file"))
+                .output()
+                .expect("failed to parse file");
+
+            if !output.status.success() {
+                // TODO: better handling of errors
+                io::stderr().write_all(&output.stderr).unwrap();
+                exit(output.status.code().unwrap_or(1));
+            }
+
+            let ast = proto::ast::Module::decode(output.stdout.as_slice()).unwrap();
+            let lex = proto::lex::Module::from(&ast);
+
+            compile_program(&lex);
+        }
         CliCommand::Show { target, file, text } => {
             let parser_path = env::current_exe()
                 .expect("failed to get execution path")
