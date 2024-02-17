@@ -9,7 +9,7 @@ use std::process::{exit, Command};
 use std::{env, io};
 
 use clap::{Parser, Subcommand, ValueEnum};
-use codegen::native_codegen::compile_program;
+use codegen::compile_program;
 use prost::Message;
 
 #[derive(Parser, Debug)]
