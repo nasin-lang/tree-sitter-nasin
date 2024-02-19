@@ -11,16 +11,24 @@ pub fn compile_program(program: &lex::Module) {
     let triple = Triple::host();
     let mut codegen = binary::BinaryCodegen::new(triple, program.name.clone());
 
-    for instr in program.body.iter() {
-        if let Some(lex::instr::Instr::FnDecl(fn_decl)) = instr.instr.as_ref() {
-            codegen.declare_function(fn_decl);
-        };
+    for symbol in program.symbols.iter() {
+        match symbol.symbol.as_ref() {
+            Some(lex::symbol::Symbol::FnDecl(fn_decl)) => {
+                codegen.declare_function(fn_decl);
+            }
+            Some(lex::symbol::Symbol::DataDecl(data_decl)) => {
+                codegen.declare_data(data_decl);
+            }
+            _ => {
+                unreachable!();
+            }
+        }
     }
 
-    for instr in program.body.iter() {
-        if let Some(lex::instr::Instr::FnDecl(fn_decl)) = instr.instr.as_ref() {
-            codegen.define_function(fn_decl);
-        };
+    for symbol in program.symbols.iter() {
+        if let Some(lex::symbol::Symbol::FnDecl(fn_decl)) = symbol.symbol.as_ref() {
+            codegen.build_function(fn_decl);
+        }
     }
 
     codegen.write_to_file(&program.name);

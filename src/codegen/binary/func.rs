@@ -3,7 +3,7 @@ use std::iter::zip;
 use std::pin::Pin;
 
 use cranelift_codegen::entity::EntityRef;
-use cranelift_codegen::ir::{types, Block, Function, InstBuilder, Value};
+use cranelift_codegen::ir::{types, Block, Function, InstBuilder, MemFlags, Value};
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
 use cranelift_module::{FuncOrDataId, Module};
 use cranelift_object::ObjectModule;
@@ -13,9 +13,12 @@ use crate::proto::lex;
 pub struct FnCodegen<'a> {
     pub module: &'a mut ObjectModule,
     pub builder: FunctionBuilder<'a>,
+    // Store the last values of a BodyResult, so they can be accessed later when managing the
+    // control flow, manly for `if` and when building data initialization
+    pub last_result: Vec<Value>,
     variables: HashMap<String, Variable>,
     #[allow(dead_code)]
-    // This is a hack to get the borrow checker to allow `builder` to borrow `builder_ctx` wile
+    // This is a hack to get the borrow checker to allow `builder` to borrow `builder_ctx` while
     // moving `builder_ctx` to `FnCodegen`
     // I tried using using the ouroboros crate to do this, but it was really buggy due to the `'a`
     // The risk doing this is that it will break if `builder` or `builder_ctx` is moved out of sync
@@ -32,6 +35,7 @@ impl<'a> FnCodegen<'a> {
             module,
             builder_ctx,
             variables: HashMap::new(),
+            last_result: Vec::new(),
             builder: unsafe { FunctionBuilder::new(func, &mut *ptr) },
         }
     }
@@ -52,7 +56,7 @@ impl<'a> FnCodegen<'a> {
         this.finalize();
     }
 
-    pub fn use_var(&mut self, lex_value: &lex::Value) -> Value {
+    pub fn build_value(&mut self, lex_value: &lex::Value) -> Value {
         match lex_value.value.as_ref() {
             Some(lex::value::Value::Num(num)) => {
                 let ptr_ty = self.module.target_config().pointer_type();
@@ -62,11 +66,30 @@ impl<'a> FnCodegen<'a> {
                     .iconst(ptr_ty, num.value.parse::<i64>().unwrap())
             }
             Some(lex::value::Value::Ident(ident)) => {
-                let var = self
-                    .variables
-                    .get(ident)
-                    .expect(&format!("Variable {} not found", ident));
-                self.builder.use_var(*var)
+                if let Some(var) = self.variables.get(ident) {
+                    return self.builder.use_var(*var);
+                }
+
+                // Fall back to a global variable
+                match self.module.get_name(ident) {
+                    Some(FuncOrDataId::Data(data_id)) => {
+                        let data = self
+                            .module
+                            .declare_data_in_func(data_id, &mut self.builder.func);
+                        // FIXME: hardcoded type
+                        let ptr_ty = self.module.target_config().pointer_type();
+                        let ptr = self.builder.ins().global_value(ptr_ty, data);
+
+                        // It would probably better to hold the pointer and deref it lazily instead
+                        self.builder.ins().load(ptr_ty, MemFlags::new(), ptr, 0)
+                    }
+                    Some(FuncOrDataId::Func(_)) => {
+                        todo!();
+                    }
+                    None => {
+                        unreachable!();
+                    }
+                }
             }
             None => {
                 unreachable!();
@@ -74,11 +97,12 @@ impl<'a> FnCodegen<'a> {
         }
     }
 
-    pub fn define_var(&mut self, name: &str, ty: types::Type, value: Value) {
+    pub fn define_variable(&mut self, name: &str, ty: types::Type, value: Value) {
         let variables = &mut self.variables;
 
         variables.insert(name.to_string(), Variable::new(variables.len()));
         let var = variables.get(name).unwrap();
+
         self.builder.declare_var(*var, ty);
         self.builder.def_var(*var, value);
     }
@@ -93,7 +117,7 @@ impl<'a> FnCodegen<'a> {
         for (arg, block_param) in zip(args.iter(), entry_block_params.iter()) {
             // FIXME: hardcoded type
             let ptr_ty = self.module.target_config().pointer_type();
-            self.define_var(&arg, ptr_ty, *block_param);
+            self.define_variable(&arg, ptr_ty, *block_param);
         }
 
         entry_block
@@ -102,16 +126,16 @@ impl<'a> FnCodegen<'a> {
     pub fn instr(&mut self, instr: &lex::instr::Instr) {
         match instr {
             lex::instr::Instr::Assign(assign) => {
-                let value = self.use_var(&assign.value);
+                let value = self.build_value(&assign.value);
                 // FIXME: hardcoded type
                 let ptr_ty = self.module.target_config().pointer_type();
-                self.define_var(&assign.name, ptr_ty, value);
+                self.define_variable(&assign.name, ptr_ty, value);
             }
             lex::instr::Instr::BinOp(bin_op) => {
                 // Different instructions for different types, might want to use some kind of
                 // abstraction for this
-                let left = self.use_var(&bin_op.left);
-                let right = self.use_var(&bin_op.right);
+                let left = self.build_value(&bin_op.left);
+                let right = self.build_value(&bin_op.right);
 
                 let tmp = match bin_op.op() {
                     lex::BinOpType::Add => self.builder.ins().iadd(left, right),
@@ -128,31 +152,33 @@ impl<'a> FnCodegen<'a> {
 
                 // FIXME: hardcoded type
                 let ptr_ty = self.module.target_config().pointer_type();
-                self.define_var(&bin_op.name, ptr_ty, tmp);
+                self.define_variable(&bin_op.name, ptr_ty, tmp);
             }
             lex::instr::Instr::FnCall(fn_call) => {
                 let mut args = Vec::new();
                 for arg in fn_call.args.iter() {
-                    args.push(self.use_var(arg));
+                    args.push(self.build_value(arg));
                 }
 
                 let results = self.call(&fn_call.callee, &args);
                 if let &[tmp] = results {
                     // FIXME: hardcoded type
                     let ptr_ty = self.module.target_config().pointer_type();
-                    self.define_var(&fn_call.name, ptr_ty, tmp);
+                    self.define_variable(&fn_call.name, ptr_ty, tmp);
                 }
             }
             lex::instr::Instr::FnReturn(fn_return) => {
-                if fn_return.value.value.is_none() {
+                if fn_return.value.is_none() {
                     self.builder.ins().return_(&[]);
                 } else {
-                    let value = self.use_var(&fn_return.value);
+                    let value = self.build_value(&fn_return);
                     self.builder.ins().return_(&[value]);
                 }
             }
-            lex::instr::Instr::FnDecl(_) => {
-                panic!("Found function declaration in function body");
+            lex::instr::Instr::BodyReturn(body_return) => {
+                let value = self.build_value(&body_return);
+                self.last_result.clear();
+                self.last_result.push(value);
             }
         }
     }

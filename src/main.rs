@@ -1,5 +1,5 @@
 pub mod codegen;
-pub mod lex;
+pub mod lexer;
 pub mod proto;
 
 use std::fs::File;
@@ -69,6 +69,8 @@ fn main() {
 
             let ast = proto::ast::Module::decode(output.stdout.as_slice()).unwrap();
             let lex = proto::lex::Module::from(&ast);
+
+            println!("{}", lex);
 
             compile_program(&lex);
         }

@@ -22,12 +22,11 @@ pub mod ast {
 }
 
 pub mod lex {
-    use super::Indent;
-    use std::fmt::{self, Display};
+    use super::*;
 
     include!(concat!(env!("OUT_DIR"), "/torvo.lex.rs"));
 
-    fn write_scope(f: &mut fmt::Formatter<'_>, scope: &[Instr]) -> fmt::Result {
+    fn write_scope<T: Display>(f: &mut fmt::Formatter<'_>, scope: &[T]) -> fmt::Result {
         for instr in scope.iter() {
             write!(f, "{}\n", Indent(instr))?;
         }
@@ -37,19 +36,31 @@ pub mod lex {
     impl Display for Module {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             write!(f, "mod {}\n", self.name)?;
-            write_scope(f, &self.body)
+            write_scope(f, &self.symbols)
+        }
+    }
+
+    impl Display for Symbol {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            match &self.symbol {
+                Some(symbol::Symbol::FnDecl(func)) => {
+                    write!(f, "fn {}({}) =\n", func.name, func.args.join(", "),)?;
+                    write_scope(f, &func.body)
+                }
+                Some(symbol::Symbol::DataDecl(data)) => {
+                    write!(f, "{} =\n", data.name)?;
+                    write_scope(f, &data.body)
+                }
+                None => Ok(()),
+            }
         }
     }
 
     impl Display for Instr {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             match &self.instr {
-                Some(instr::Instr::FnDecl(func)) => {
-                    write!(f, "fn {}({}) =\n", func.name, func.args.join(", "),)?;
-                    write_scope(f, &func.body)
-                }
                 Some(instr::Instr::Assign(assign)) => {
-                    write!(f, "{} := {}", assign.name, assign.value)
+                    write!(f, "{} = {}", assign.name, assign.value)
                 }
                 Some(instr::Instr::BinOp(op)) => write!(
                     f,
@@ -78,7 +89,10 @@ pub mod lex {
                         .join(", ")
                 ),
                 Some(instr::Instr::FnReturn(ret)) => {
-                    write!(f, "return {}", ret.value)
+                    write!(f, "return {}", ret)
+                }
+                Some(instr::Instr::BodyReturn(ret)) => {
+                    write!(f, "{}", ret)
                 }
                 None => Ok(()),
             }

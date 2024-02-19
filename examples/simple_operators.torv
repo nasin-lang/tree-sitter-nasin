@@ -1,8 +1,11 @@
 fn sum(a b) =
     a + b
 
-fn main() =
-    a = 1 + 2 - 3 * 4
+foo =
+    1 + 2 - 3 * 4
+
+main =
+    a = foo
     b = 1 ** 2 / (3 + 4);
     c = 1 + sum(
         sum(2, 3)

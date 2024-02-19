@@ -4,9 +4,9 @@ use std::env;
 use std::fs::File;
 use std::io::BufWriter;
 
-use cranelift_codegen::ir::{AbiParam, Function, InstBuilder, TrapCode, UserFuncName};
+use cranelift_codegen::ir::{AbiParam, Function, InstBuilder, MemFlags, TrapCode, UserFuncName};
 use cranelift_codegen::{isa, settings, Context};
-use cranelift_module::{default_libcall_names, FuncId, Linkage, Module};
+use cranelift_module::{default_libcall_names, DataDescription, DataId, FuncId, Linkage, Module};
 use cranelift_object::{ObjectBuilder, ObjectModule};
 use func::FnCodegen;
 use target_lexicon::Triple;
@@ -14,15 +14,23 @@ use target_lexicon::Triple;
 use super::traits::Codegen;
 use crate::proto::lex;
 
-struct FnData {
+#[derive(Debug)]
+struct FnInfo {
     name: String,
     func_id: FuncId,
     func: Function,
 }
 
+#[derive(Debug)]
+struct DataInfo {
+    decl: lex::DataDecl,
+    data_id: DataId,
+}
+
 pub struct BinaryCodegen {
     pub module: ObjectModule,
-    symbols: Vec<FnData>,
+    func_list: Vec<FnInfo>,
+    data_list: Vec<DataInfo>,
 }
 
 impl BinaryCodegen {
@@ -38,7 +46,8 @@ impl BinaryCodegen {
 
         let mut this = BinaryCodegen {
             module,
-            symbols: Vec::new(),
+            func_list: Vec::new(),
+            data_list: Vec::new(),
         };
 
         // Declare libc functions
@@ -58,6 +67,10 @@ impl BinaryCodegen {
     }
 
     fn create_entry_function(&mut self, ctx: &mut Context) {
+        let ptr_ty = self.module.target_config().pointer_type();
+
+        // Define a initialization function for each
+
         let sig = self.module.make_signature();
         let mut func = Function::with_name_signature(UserFuncName::user(2, 0), sig);
         let func_id = self
@@ -68,15 +81,45 @@ impl BinaryCodegen {
         let mut fn_codegen = FnCodegen::new(&mut self.module, &mut func);
         fn_codegen.create_entry_block(&[]);
 
-        //  We're using a main function only because global variables are not implemented. In the
-        //  future, main will be a glocal variable of the entry module that will evaluate in a
-        //  Action monad that will be run here in the entry function
-        let main_return = { fn_codegen.call("main", &[])[0] };
+        let mut exit_code = None;
 
-        // We're using the return of main as exit status only because strings and printing are not
-        // implemented and I need some way to check if the program is working. When printing is
-        // implemented, this will be changed to a fixed success status, as it should be
-        fn_codegen.call("exit", &[main_return]);
+        // Global variables need to be implemented inside a function
+        for data_info in self.data_list.iter() {
+            let data_id = data_info.data_id;
+            let data_decl = &data_info.decl;
+
+            for instr in data_decl.body.iter() {
+                if let Some(instr) = instr.instr.as_ref() {
+                    fn_codegen.instr(instr);
+                }
+            }
+
+            let result = *fn_codegen.last_result.first().unwrap();
+
+            // We're using the return of main as exit status only because strings and printing are
+            // not implemented and I need some way to check if the program is working. When printing
+            // is implemented, this will be changed to a fixed success status, as it should be. In
+            // the future, main will evaluate in a Action monad that will be run in the entry
+            // function
+            if data_decl.name == "main" {
+                exit_code = Some(result);
+            } else {
+                let data = fn_codegen
+                    .module
+                    .declare_data_in_func(data_id, &mut fn_codegen.builder.func);
+
+                // FIXME: hardcoded type
+                let data_ptr = fn_codegen.builder.ins().global_value(ptr_ty, data);
+
+                fn_codegen
+                    .builder
+                    .ins()
+                    .store(MemFlags::new(), result, data_ptr, 0);
+            }
+        }
+
+        let exit_code = exit_code.unwrap_or_else(|| fn_codegen.builder.ins().iconst(ptr_ty, 0));
+        fn_codegen.call("exit", &[exit_code]);
         // This code is guaranteed to be unreachable, but Cranelift requires some block ending
         // instruction anyways, and `trap` generated less assembly instructions then `return`
         fn_codegen
@@ -107,7 +150,7 @@ impl Codegen for BinaryCodegen {
         let user_func_name = {
             // namespace is 1 because 0 is being used for reserved functions. This number is
             // completely arbitary and may be changed to be more involved in the future
-            UserFuncName::user(1, self.symbols.len() as u32)
+            UserFuncName::user(1, self.func_list.len() as u32)
         };
 
         let func = Function::with_name_signature(user_func_name, sig);
@@ -117,21 +160,41 @@ impl Codegen for BinaryCodegen {
             .declare_function(&decl.name, Linkage::Export, &func.signature)
             .unwrap();
 
-        self.symbols.push(FnData {
+        self.func_list.push(FnInfo {
             name: decl.name.clone(),
             func_id,
             func,
         });
     }
 
-    fn define_function(&mut self, decl: &lex::FnDecl) {
-        let fn_data = self
-            .symbols
+    fn build_function(&mut self, decl: &lex::FnDecl) {
+        let fn_info = self
+            .func_list
             .iter_mut()
-            .find(|fn_data| fn_data.name == decl.name)
+            .find(|fn_info| fn_info.name == decl.name)
             .expect("Function not declared");
 
-        FnCodegen::build(&mut self.module, &mut fn_data.func, &decl);
+        FnCodegen::build(&mut self.module, &mut fn_info.func, &decl);
+    }
+
+    fn declare_data(&mut self, decl: &lex::DataDecl) {
+        // FIXME: hardcoded type
+        let len = self.module.target_config().pointer_type().bytes() as usize;
+
+        let data_id = self
+            .module
+            .declare_data(&decl.name, Linkage::Local, true, false)
+            .unwrap();
+
+        let mut desc = DataDescription::new();
+        desc.define_zeroinit(len);
+
+        self.module.define_data(data_id, &desc).unwrap();
+
+        self.data_list.push(DataInfo {
+            decl: decl.clone(),
+            data_id,
+        });
     }
 
     fn write_to_file(mut self, file: &str) {
@@ -140,10 +203,10 @@ impl Codegen for BinaryCodegen {
         self.create_entry_function(&mut obj_ctx);
 
         // Define all functions in the module
-        for fn_data in self.symbols.into_iter() {
-            obj_ctx.func = fn_data.func;
+        for fn_info in self.func_list.into_iter() {
+            obj_ctx.func = fn_info.func;
             self.module
-                .define_function(fn_data.func_id, &mut obj_ctx)
+                .define_function(fn_info.func_id, &mut obj_ctx)
                 .unwrap();
         }
 

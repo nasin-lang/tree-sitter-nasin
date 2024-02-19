@@ -3,18 +3,14 @@ syntax = "proto2";
 package torvo.lex;
 
 message Module {
-    required string name = 1;
-    repeated Instr body  = 10;
+    required string name    = 1;
+    repeated Symbol symbols = 10;
 }
 
-// Statements
-message Instr {
-    oneof instr {
+message Symbol {
+    oneof symbol {
         FnDecl fn_decl     = 1;
-        Assign assign      = 2;
-        BinOp bin_op       = 3;
-        FnCall fn_call     = 4;
-        FnReturn fn_return = 5;
+        DataDecl data_decl = 2;
     }
 }
 
@@ -22,6 +18,21 @@ message FnDecl {
     required string name = 1;
     repeated string args = 10;
     repeated Instr body  = 20;
+}
+
+message DataDecl {
+    required string name = 1;
+    repeated Instr body  = 10;
+}
+
+message Instr {
+    oneof instr {
+        Assign assign     = 1;
+        BinOp bin_op      = 2;
+        FnCall fn_call    = 3;
+        Value fn_return   = 4;
+        Value body_return = 5;
+    }
 }
 
 message Assign {
