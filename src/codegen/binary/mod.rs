@@ -1,4 +1,5 @@
 mod func;
+mod variable_ref;
 
 use std::env;
 use std::fs::File;
@@ -6,6 +7,7 @@ use std::io::BufWriter;
 
 use cranelift_codegen::ir::{AbiParam, Function, InstBuilder, MemFlags, TrapCode, UserFuncName};
 use cranelift_codegen::{isa, settings, Context};
+use cranelift_frontend::FunctionBuilderContext;
 use cranelift_module::{default_libcall_names, DataDescription, DataId, FuncId, Linkage, Module};
 use cranelift_object::{ObjectBuilder, ObjectModule};
 use func::FnCodegen;
@@ -78,7 +80,8 @@ impl BinaryCodegen {
             .declare_function("_start", Linkage::Export, &func.signature)
             .unwrap();
 
-        let mut fn_codegen = FnCodegen::new(&mut self.module, &mut func);
+        let mut func_ctx = FunctionBuilderContext::new();
+        let mut fn_codegen = FnCodegen::new(&mut self.module, &mut func, &mut func_ctx);
         fn_codegen.create_entry_block(&[]);
 
         let mut exit_code = None;
@@ -174,7 +177,9 @@ impl Codegen for BinaryCodegen {
             .find(|fn_info| fn_info.name == decl.name)
             .expect("Function not declared");
 
-        FnCodegen::build(&mut self.module, &mut fn_info.func, &decl);
+        let mut func_ctx = FunctionBuilderContext::new();
+
+        FnCodegen::build(&mut self.module, &mut fn_info.func, &mut func_ctx, &decl);
     }
 
     fn declare_data(&mut self, decl: &lex::DataDecl) {

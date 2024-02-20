@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::iter::zip;
-use std::pin::Pin;
 
 use cranelift_codegen::ir::{types, Block, Function, InstBuilder, MemFlags, Value};
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
@@ -17,31 +16,29 @@ pub struct FnCodegen<'a> {
     // control flow, manly for `if` and when building data initialization
     pub last_result: Vec<Value>,
     variables: HashMap<String, VariableRef>,
-    #[allow(dead_code)]
-    // This is a hack to get the borrow checker to allow `builder` to borrow `builder_ctx` while
-    // moving `builder_ctx` to `FnCodegen`
-    // I tried using using the ouroboros crate to do this, but it was really buggy due to the `'a`
-    // The risk doing this is that it will break if `builder` or `builder_ctx` is moved out of sync
-    // with each other, since the borrow checker won't be able to catch it ahead of time
-    builder_ctx: Pin<Box<FunctionBuilderContext>>,
 }
 
 impl<'a> FnCodegen<'a> {
-    pub fn new(module: &'a mut ObjectModule, func: &'a mut Function) -> Self {
-        let mut builder_ctx = Box::pin(FunctionBuilderContext::new());
-        let ptr: *mut FunctionBuilderContext = &mut *builder_ctx;
-
+    pub fn new(
+        module: &'a mut ObjectModule,
+        func: &'a mut Function,
+        func_ctx: &'a mut FunctionBuilderContext,
+    ) -> Self {
         FnCodegen {
             module,
-            builder_ctx,
             variables: HashMap::new(),
             last_result: Vec::new(),
-            builder: unsafe { FunctionBuilder::new(func, &mut *ptr) },
+            builder: FunctionBuilder::new(func, func_ctx),
         }
     }
 
-    pub fn build(module: &'a mut ObjectModule, func: &'a mut Function, decl: &lex::FnDecl) {
-        let mut this = Self::new(module, func);
+    pub fn build(
+        module: &'a mut ObjectModule,
+        func: &'a mut Function,
+        func_ctx: &'a mut FunctionBuilderContext,
+        decl: &lex::FnDecl,
+    ) {
+        let mut this = Self::new(module, func, func_ctx);
 
         this.create_entry_block(&decl.args);
 
