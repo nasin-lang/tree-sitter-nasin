@@ -2,12 +2,12 @@ use std::collections::HashMap;
 use std::iter::zip;
 use std::pin::Pin;
 
-use cranelift_codegen::entity::EntityRef;
 use cranelift_codegen::ir::{types, Block, Function, InstBuilder, MemFlags, Value};
-use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
+use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
 use cranelift_module::{FuncOrDataId, Module};
 use cranelift_object::ObjectModule;
 
+use super::variable_ref::VariableRef;
 use crate::proto::lex;
 
 pub struct FnCodegen<'a> {
@@ -16,7 +16,7 @@ pub struct FnCodegen<'a> {
     // Store the last values of a BodyResult, so they can be accessed later when managing the
     // control flow, manly for `if` and when building data initialization
     pub last_result: Vec<Value>,
-    variables: HashMap<String, Variable>,
+    variables: HashMap<String, VariableRef>,
     #[allow(dead_code)]
     // This is a hack to get the borrow checker to allow `builder` to borrow `builder_ctx` while
     // moving `builder_ctx` to `FnCodegen`
@@ -66,8 +66,8 @@ impl<'a> FnCodegen<'a> {
                     .iconst(ptr_ty, num.value.parse::<i64>().unwrap())
             }
             Some(lex::value::Value::Ident(ident)) => {
-                if let Some(var) = self.variables.get(ident) {
-                    return self.builder.use_var(*var);
+                if let Some(var_ref) = self.variables.get(ident) {
+                    return var_ref.get_value(&self.builder);
                 }
 
                 // Fall back to a global variable
@@ -97,14 +97,10 @@ impl<'a> FnCodegen<'a> {
         }
     }
 
-    pub fn define_variable(&mut self, name: &str, ty: types::Type, value: Value) {
-        let variables = &mut self.variables;
-
-        variables.insert(name.to_string(), Variable::new(variables.len()));
-        let var = variables.get(name).unwrap();
-
-        self.builder.declare_var(*var, ty);
-        self.builder.def_var(*var, value);
+    pub fn store_value(&mut self, name: &str, _ty: types::Type, value: Value) {
+        // FIXME: check type for what kind of VariableRef to use
+        let var = VariableRef::ImmPrimitive(value);
+        self.variables.insert(name.to_string(), var);
     }
 
     pub fn create_entry_block(&mut self, args: &[String]) -> Block {
@@ -117,7 +113,7 @@ impl<'a> FnCodegen<'a> {
         for (arg, block_param) in zip(args.iter(), entry_block_params.iter()) {
             // FIXME: hardcoded type
             let ptr_ty = self.module.target_config().pointer_type();
-            self.define_variable(&arg, ptr_ty, *block_param);
+            self.store_value(&arg, ptr_ty, *block_param);
         }
 
         entry_block
@@ -129,7 +125,7 @@ impl<'a> FnCodegen<'a> {
                 let value = self.build_value(&assign.value);
                 // FIXME: hardcoded type
                 let ptr_ty = self.module.target_config().pointer_type();
-                self.define_variable(&assign.name, ptr_ty, value);
+                self.store_value(&assign.name, ptr_ty, value);
             }
             lex::instr::Instr::BinOp(bin_op) => {
                 // Different instructions for different types, might want to use some kind of
@@ -152,7 +148,7 @@ impl<'a> FnCodegen<'a> {
 
                 // FIXME: hardcoded type
                 let ptr_ty = self.module.target_config().pointer_type();
-                self.define_variable(&bin_op.name, ptr_ty, tmp);
+                self.store_value(&bin_op.name, ptr_ty, tmp);
             }
             lex::instr::Instr::FnCall(fn_call) => {
                 let mut args = Vec::new();
@@ -164,7 +160,7 @@ impl<'a> FnCodegen<'a> {
                 if let &[tmp] = results {
                     // FIXME: hardcoded type
                     let ptr_ty = self.module.target_config().pointer_type();
-                    self.define_variable(&fn_call.name, ptr_ty, tmp);
+                    self.store_value(&fn_call.name, ptr_ty, tmp);
                 }
             }
             lex::instr::Instr::FnReturn(fn_return) => {
