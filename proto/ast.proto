@@ -25,50 +25,49 @@ message Stmt {
 
 message VarDecl {
     required Pat pat    = 1;
+    optional Type type  = 2;
     required Expr value = 10;
 }
 
 message Pat {
     optional Loc loc = 1;
     oneof pat {
-        NamePat name = 2;
+        string name = 2;
     }
 }
 
-message NamePat {
-    required string name = 1;
-}
-
 message FnDecl {
-    required string name = 1;
-    repeated FnArg args  = 10;
-    optional Expr ret    = 15;
+    required string name   = 1;
+    repeated FnArg args    = 10;
+    optional Type ret_type = 11;
+    optional Expr ret      = 15;
 }
 
 message FnArg {
+    optional Loc loc   = 1;
+    required Pat pat   = 2;
+    optional Type type = 3;
+}
+
+// Type Expression
+message Type {
     optional Loc loc = 1;
-    required Pat pat = 2;
+    oneof type {
+        string ident = 2;
+    }
 }
 
 // Expressions
 message Expr {
     optional Loc loc   = 1;
     oneof expr {
-        NumLit num     = 2;
-        Ident ident    = 3;
+        string num     = 2;
+        string ident   = 3;
         FnCall fn_call = 4;
         BinOp bin_op   = 5;
         Block block    = 6;
         FnExpr fn_expr = 7;
     }
-}
-
-message NumLit {
-    required string value = 1;
-}
-
-message Ident {
-    required string name = 1;
 }
 
 message FnCall {

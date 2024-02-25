@@ -16,14 +16,14 @@ import {
     type LocationRange,
 } from "chunky-parser"
 
-import { BinOpType, Expr, Loc, Pat, FnArg, Stmt, Module } from "./proto/ast"
+import { BinOpType, Expr, Loc, Pat, FnArg, Stmt, Module, type Type } from "./proto/ast"
 
 function fromParsedLoc(parsedLoc: LocationRange): Loc {
     return { start: parsedLoc[0], end: parsedLoc[1] }
 }
 
 function tokenParserOnce<T extends string>(name: string, pattern: T) {
-    const escaped = pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const escaped = pattern.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
     const reg = new RegExp(`${escaped}(?!${escaped})`)
     return new TokenParser<T>(name, reg)
 }
@@ -84,12 +84,12 @@ export const expr: ParserWithPrecedence<Expr> = withPrecedence(
 
 const numLiteral = map(
     num,
-    ({ value, loc }): Expr => ({ loc: fromParsedLoc(loc), num: { value: value.text } })
+    ({ value, loc }): Expr => ({ loc: fromParsedLoc(loc), num: value.text })
 )
 
 const ident = named(
     "Identifier",
-    map(name, ({ value, loc }): Expr => ({ loc: fromParsedLoc(loc), ident: { name: value.text } }))
+    map(name, ({ value, loc }): Expr => ({ loc: fromParsedLoc(loc), ident: value.text }))
 )
 
 const pow = map(
@@ -130,14 +130,27 @@ const addSub = map(
     })
 )
 
-const namePat = map(
-    name,
-    ({ value, loc }): Pat => ({ loc: fromParsedLoc(loc), name: { name: value.text } })
-)
+const namePat = map(name, ({ value, loc }): Pat => ({ loc: fromParsedLoc(loc), name: value.text }))
 
 const pat = named("Pattern", oneOf(namePat))
 
-const fnArg = map(pat, ({ value, loc }): FnArg => ({ loc: fromParsedLoc(loc), pat: value }))
+const typeExpr: ParserWithPrecedence<Type> = withPrecedence(
+    map(
+        seq(lparen, _, () => typeExpr, _, rparen),
+        ({ value }) => value[2]
+    ),
+    () => typeIdent
+)
+
+const typeIdent = named(
+    "Type Identifier",
+    map(name, ({ value, loc }): Type => ({ loc: fromParsedLoc(loc), ident: value.text }))
+)
+
+const fnArg = map(
+    pat,
+    ({ value, loc }): FnArg => ({ loc: fromParsedLoc(loc), pat: value, type: undefined })
+)
 
 const fnExpr = map(
     seq(
@@ -195,6 +208,7 @@ const fnDecl = named(
                 name: value[2].text,
                 args: value[4][2] || [],
                 ret: value[7],
+                retType: undefined,
             },
         })
     )
@@ -206,7 +220,7 @@ const varDecl = named(
         seq(pat, _, equal, _, expr),
         ({ value, loc }): Stmt => ({
             loc: fromParsedLoc(loc),
-            var: { pat: value[0], value: value[4] },
+            var: { pat: value[0], value: value[4], type: undefined },
         })
     )
 )

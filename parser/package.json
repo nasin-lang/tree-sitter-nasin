@@ -1,30 +1,30 @@
 {
-  "name": "turvo-parser",
-  "description": "AST parser for the Torvo programming language",
-  "author": "Felipe Nascimento <felipenasgomes@gmail.com>",
-  "license": "GPL-3.0",
-  "module": "src/index.ts",
-  "version": "0.0.0",
-  "type": "module",
-  "scripts": {
-    "preinstall": "git config diff.lockb.textconv bun; git config diff.lockb.binary true",
-    "test": "bun test",
-    "lint": "bunx --bun eslint src; bunx --bun tsc --noEmit",
-    "dev": "bun src/index.ts"
-  },
-  "devDependencies": {
-    "@trivago/prettier-plugin-sort-imports": "^4.3.0",
-    "@types/bun": "latest",
-    "@typescript-eslint/eslint-plugin": "^6.18.0",
-    "@typescript-eslint/parser": "^6.18.0",
-    "eslint": "^8.56.0",
-    "prettier": "^3.1.1",
-    "type-fest": "^4.9.0",
-    "typescipt": "^1.0.0"
-  },
-  "dependencies": {
-    "chunky-parser": "^2.0.0",
-    "cmd-ts": "^0.13.0",
-    "ts-proto": "^1.167.0"
-  }
+    "name": "turvo-parser",
+    "description": "AST parser for the Torvo programming language",
+    "author": "Felipe Nascimento <felipenasgomes@gmail.com>",
+    "license": "GPL-3.0",
+    "module": "src/index.ts",
+    "version": "0.0.0",
+    "type": "module",
+    "scripts": {
+        "preinstall": "git config diff.lockb.textconv bun; git config diff.lockb.binary true",
+        "test": "bun test",
+        "lint": "bunx --bun eslint src; bunx --bun tsc --noEmit",
+        "dev": "bun src/index.ts"
+    },
+    "devDependencies": {
+        "@trivago/prettier-plugin-sort-imports": "^4.3.0",
+        "@types/bun": "latest",
+        "@typescript-eslint/eslint-plugin": "^6.18.0",
+        "@typescript-eslint/parser": "^6.18.0",
+        "eslint": "^8.56.0",
+        "prettier": "^3.1.1",
+        "type-fest": "^4.9.0",
+        "typescipt": "^1.0.0"
+    },
+    "dependencies": {
+        "chunky-parser": "^2.0.0",
+        "cmd-ts": "^0.13.0",
+        "ts-proto": "^1.167.0"
+    }
 }

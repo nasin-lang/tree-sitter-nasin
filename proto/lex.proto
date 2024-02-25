@@ -9,40 +9,44 @@ message Module {
 
 message Symbol {
     oneof symbol {
-        FnDecl fn_decl     = 1;
-        DataDecl data_decl = 2;
+        FnDecl fn_decl     = 10;
+        DataDecl data_decl = 11;
     }
 }
 
 message FnDecl {
     required string name = 1;
+    required FnType type = 2;
     repeated string args = 10;
     repeated Instr body  = 20;
 }
 
 message DataDecl {
     required string name = 1;
+    required Type type   = 2;
     repeated Instr body  = 10;
 }
 
 message Instr {
     oneof instr {
-        Assign assign     = 1;
-        BinOp bin_op      = 2;
-        FnCall fn_call    = 3;
-        Value fn_return   = 4;
-        Value body_return = 5;
+        Assign assign     = 10;
+        BinOp bin_op      = 11;
+        FnCall fn_call    = 12;
+        Value fn_return   = 13;
+        Value body_return = 14;
     }
 }
 
 message Assign {
     required string name = 1;
-    required Value value = 2;
+    required Type type   = 2;
+    required Value value = 3;
 }
 
 message BinOp {
     required string name  = 1;
-    required BinOpType op = 2;
+    required Type type    = 2;
+    required BinOpType op = 3;
     required Value left   = 10;
     required Value right  = 11;
 }
@@ -62,18 +66,56 @@ message FnReturn {
 
 message FnCall {
     required string name   = 1;
-    required string callee = 2;
+    required Type type     = 2;
+    required string callee = 3;
     repeated Value args    = 10;
+}
+
+// Type
+message Type {
+    oneof type {
+        /* Unknown type must only be used for the lexer before resolving to the correct type. No
+         * code can be generated with an unknown type. It's value is never read.
+         */
+        bool unknown = 10;
+        PrimType primitive = 11;
+        FnType fn          = 15;
+        /* Ambiguous type are a union of possible type, but only one will be used. In may targets,
+         * it needs to be resolved to a single type before any code generation.
+         */
+        AmbigType ambig = 20;
+    }
+}
+
+enum PrimType {
+    I8    = 0;
+    I16   = 1;
+    I32   = 2;
+    I64   = 3;
+    U8    = 4;
+    U16   = 5;
+    U32   = 6;
+    U64   = 7;
+    USize = 8;
+    F32   = 9;
+    F64   = 10;
+    Bool  = 11;
+    Char  = 12;
+}
+
+message FnType {
+    repeated Type ret  = 1;
+    repeated Type args = 10;
+}
+
+message AmbigType {
+    repeated Type types = 1;
 }
 
 // Values
 message Value {
     oneof value {
-        string ident = 1;
-        NumLit num   = 2;
+        string ident = 10;
+        string num   = 11;
     }
-}
-
-message NumLit {
-    required string value = 1;
 }

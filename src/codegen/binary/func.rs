@@ -60,7 +60,7 @@ impl<'a> FnCodegen<'a> {
                 // maybe this parsing should be handled by the lexer
                 self.builder
                     .ins()
-                    .iconst(ptr_ty, num.value.parse::<i64>().unwrap())
+                    .iconst(ptr_ty, num.parse::<i64>().unwrap())
             }
             Some(lex::value::Value::Ident(ident)) => {
                 if let Some(var_ref) = self.variables.get(ident) {

@@ -6,7 +6,8 @@ import * as ast from "./proto/ast"
 
 const cli = command({
     name: "torvo-parser",
-    description: "Parse a file content as a module. This command will write the AST as binary to stdout.",
+    description:
+        "Parse a file content as a module. This command will write the AST as binary to stdout.",
     args: {
         file: positional({
             displayName: "file",
@@ -14,8 +15,8 @@ const cli = command({
         }),
         name: positional({
             displayName: "name",
-            description: "Name of the module that will be parser"
-        })
+            description: "Name of the module that will be parser",
+        }),
     },
     handler: async ({ file, name }) => {
         try {
