@@ -86,7 +86,16 @@ pub mod lex {
                         write!(f, "{}: {}", arg, arg_ty)?;
                     }
 
-                    write!(f, ") =\n")?;
+                    write!(f, "): ")?;
+
+                    for (i, ret) in func.r#type.ret.iter().enumerate() {
+                        if i > 0 {
+                            write!(f, ", ")?;
+                        }
+                        write!(f, "{}", ret)?;
+                    }
+
+                    write!(f, " =\n")?;
 
                     write_scope(f, &func.body)
                 }

@@ -149,17 +149,12 @@ impl Registry {
     fn constrain_value_type_chain(&mut self, ident: &str, args: Option<TypeConstraintArgs>) {
         let mut stack = vec![(ident.to_string(), args)];
 
-        // won't be using a iterator here because we need to modify the queue
         while stack.len() > 0 {
             let (ident, args) = stack.pop().unwrap();
-
-            dbg!((&ident, &args));
 
             let Some(value_type) = self.value_types.get_mut(&ident) else {
                 continue;
             };
-
-            dbg!(&value_type);
 
             let skip_ident = match args {
                 Some(TypeConstraintArgs::Direct { ty }) => {
@@ -229,11 +224,10 @@ impl Registry {
                     value_type.consumed_by.insert(consumed_by.clone());
 
                     if eq_types(&value_type.ty, &ty) {
-                        println!("eq_types");
                         continue;
                     }
 
-                    value_type.ty = dbg!(merge_types([&value_type.ty, &ty])).expect(&format!(
+                    value_type.ty = merge_types([&value_type.ty, &ty]).expect(&format!(
                         "Failed to merge types {} and {}",
                         value_type.ty, ty
                     ));
@@ -252,8 +246,6 @@ impl Registry {
 
             // constrain the types that this depends on
             for (i, ref_value) in value_type.produced_by.refs.iter().enumerate() {
-                dbg!(&ref_value);
-
                 let Some(lex::value::Value::Ident(ref_ident)) = &ref_value.value.as_ref() else {
                     continue;
                 };

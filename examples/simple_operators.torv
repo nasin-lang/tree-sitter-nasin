@@ -1,7 +1,7 @@
-fn sum(a b) =
+fn sum(a b): i32 =
     a + b
 
-foo =
+foo: i32 =
     1 + 2 - 3 * 4
 
 main =

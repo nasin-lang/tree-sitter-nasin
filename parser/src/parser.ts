@@ -45,6 +45,7 @@ const fn = new TokenParser("`fn`", "fn")
 const lparen = new TokenParser("left parenthesis", "(")
 const rparen = new TokenParser("right parenthesis", ")")
 const comma = new TokenParser("comma", ",")
+const colon = new TokenParser("colon", ":")
 const semicolon = new TokenParser("semicolon", ";")
 
 // FIXME: whitespaces and comments should be collect so the linter and the formatter can use them
@@ -148,22 +149,27 @@ const typeIdent = named(
 )
 
 const fnArg = map(
-    pat,
-    ({ value, loc }): FnArg => ({ loc: fromParsedLoc(loc), pat: value, type: undefined })
+    seq(pat, optional(seq(_, colon, _, typeExpr))),
+    ({ value, loc }): FnArg => ({ loc: fromParsedLoc(loc), pat: value[0], type: value[1]?.[3] })
 )
 
 const fnExpr = map(
     seq(
         fn,
         _,
-        seq(lparen, _, optional(sepBy(fnArg, optional(comma), "required")), _, rparen, _),
+        lparen,
+        _,
+        optional(sepBy(fnArg, optional(comma), "required")),
+        _,
+        rparen,
+        _,
         equal,
         _,
         expr
     ),
     ({ value, loc }): Expr => ({
         loc: fromParsedLoc(loc),
-        fnExpr: { args: value[2][2] || [], ret: value[5] },
+        fnExpr: { args: value[4] || [], ret: value[10] },
     })
 )
 
@@ -197,7 +203,13 @@ const fnDecl = named(
             _,
             name,
             _,
-            seq(lparen, _, optional(sepBy(fnArg, optional(comma), "required")), _, rparen, _),
+            lparen,
+            _,
+            optional(sepBy(fnArg, optional(comma), "required")),
+            _,
+            rparen,
+            optional(seq(_, colon, _, typeExpr)),
+            _,
             equal,
             _,
             expr
@@ -206,9 +218,9 @@ const fnDecl = named(
             loc: fromParsedLoc(loc),
             fn: {
                 name: value[2].text,
-                args: value[4][2] || [],
-                ret: value[7],
-                retType: undefined,
+                args: value[6] || [],
+                retType: value[9]?.[3],
+                ret: value[13],
             },
         })
     )
@@ -217,10 +229,10 @@ const fnDecl = named(
 const varDecl = named(
     "Variable Declaration",
     map(
-        seq(pat, _, equal, _, expr),
+        seq(pat, optional(seq(_, colon, _, typeExpr)), _, equal, _, expr),
         ({ value, loc }): Stmt => ({
             loc: fromParsedLoc(loc),
-            var: { pat: value[0], value: value[4], type: undefined },
+            var: { pat: value[0], type: value[1]?.[3], value: value[5] },
         })
     )
 )
