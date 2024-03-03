@@ -1,6 +1,9 @@
 mod registry;
+mod types;
 
-use self::registry::Registry;
+use self::registry::ValueTypeDeps;
+use self::types::{ambig, binop_sig, fn_type, merge_types, types_iter};
+use self::{registry::Registry, types::num_type};
 use crate::proto::{ast, lex};
 
 impl From<&ast::Module> for lex::Module {
@@ -43,49 +46,69 @@ impl Lexer {
                     let ast::pat::Pat::Name(name_pat) = arg.pat.pat.as_ref().unwrap();
                     args.push(builder.registry.use_name(Some(name_pat)).to_string());
 
-                    // FIXME: hardcoded type
-                    let ty = Registry::num_type("0");
+                    let ty = lex::Type {
+                        r#type: Some(lex::r#type::Type::Unknown(true)),
+                    };
 
                     args_ty.push(ty.clone());
-                    builder.registry.set_value_type(name_pat.clone(), ty);
+                    builder.registry.insert_value_type(
+                        &name_pat,
+                        ty.clone(),
+                        ValueTypeDeps::default(),
+                    );
                 }
 
-                let ty = lex::Type {
-                    r#type: Some(lex::r#type::Type::Fn(lex::FnType {
-                        ret: vec![lex::Type {
-                            r#type: Some(lex::r#type::Type::Unknown(true)),
-                        }],
-                        args: args_ty.clone(),
-                    })),
-                };
-                self.registry.set_value_type(name.to_string(), ty.clone());
-                builder.registry.set_value_type(name.to_string(), ty);
+                let ty = fn_type(
+                    args_ty.clone(),
+                    [lex::Type {
+                        r#type: Some(lex::r#type::Type::Unknown(true)),
+                    }],
+                );
+
+                self.registry
+                    .insert_value_type(&name, ty.clone(), ValueTypeDeps::default());
+                builder
+                    .registry
+                    .insert_value_type(&name, ty.clone(), ValueTypeDeps::default());
 
                 let ret_ty: Vec<lex::Type> = if let Some(ret) = &func.ret {
-                    let (ret, ret_ty) = builder.add_expr(&ret, None);
+                    let (ret, _) = builder.add_expr(&ret, None);
                     builder.body.push(lex::Instr {
-                        instr: Some(lex::instr::Instr::FnReturn(ret)),
+                        instr: Some(lex::instr::Instr::FnReturn(ret.clone())),
                     });
+
+                    let ret_ty = builder.registry.value_type(&ret);
+
+                    // TODO: use the manually defined type to constrain the chain of types of the
+                    // return
+
                     vec![ret_ty]
                 } else {
                     vec![]
                 };
 
-                let fn_ty = lex::FnType {
-                    ret: ret_ty,
-                    args: args_ty,
-                };
+                dbg!(&builder.registry);
 
-                let ty = lex::Type {
-                    r#type: Some(lex::r#type::Type::Fn(fn_ty.clone())),
-                };
-                self.registry.set_value_type(name.to_string(), ty.clone());
-                builder.registry.set_value_type(name.to_string(), ty);
+                for (i, arg) in args.iter().enumerate() {
+                    let arg_value = lex::Value {
+                        value: Some(lex::value::Value::Ident(arg.to_string())),
+                    };
+                    let parsed_ty = builder.registry.value_type(&arg_value);
+                    args_ty[i] = parsed_ty;
+                }
+
+                let ty = fn_type(args_ty.clone(), ret_ty.clone());
+
+                self.registry.set_value_type(&name, ty.clone(), None);
+                builder.registry.set_value_type(&name, ty, None);
 
                 self.symbols.push(lex::Symbol {
                     symbol: Some(lex::symbol::Symbol::FnDecl(lex::FnDecl {
                         name,
-                        r#type: fn_ty,
+                        r#type: lex::FnType {
+                            ret: ret_ty,
+                            args: args_ty,
+                        },
                         args,
                         body: builder.finish(),
                     })),
@@ -102,8 +125,11 @@ impl Lexer {
                     instr: Some(lex::instr::Instr::BodyReturn(value)),
                 });
 
-                builder.registry.set_value_type(name.clone(), ty.clone());
-                self.registry.set_value_type(name.clone(), ty.clone());
+                builder
+                    .registry
+                    .insert_value_type(&name, ty.clone(), ValueTypeDeps::default());
+                self.registry
+                    .insert_value_type(&name, ty.clone(), ValueTypeDeps::default());
 
                 // Names can't repeat between data implementations, because they will probably be
                 // all implemented in the same scope
@@ -157,7 +183,19 @@ impl InstrBuilder {
 
                 let (value, ty) = self.add_expr(&var.value, Some(&name));
 
-                self.registry.set_value_type(name, ty.clone());
+                self.registry.insert_value_type(
+                    &name,
+                    ty.clone(),
+                    ValueTypeDeps {
+                        refs: vec![value.clone()],
+                        sig: types_iter(&ty)
+                            .map(|item| lex::FnType {
+                                args: vec![item.clone()],
+                                ret: vec![item.clone()],
+                            })
+                            .collect(),
+                    },
+                );
 
                 (value, ty)
             }
@@ -178,21 +216,44 @@ impl InstrBuilder {
                     value: Some(lex::value::Value::Num(num.clone())),
                 };
                 // TODO: improve type handling
-                let ty = self.registry.value_type(&value).unwrap();
+                let ty = self.registry.value_type(&value);
 
                 if let Some(name) = name {
                     value = self.assign(name, value, ty.clone());
                 }
 
-                return (value, ty);
+                (value, ty)
             }
             ast::expr::Expr::BinOp(op) => {
                 let (left, left_ty) = self.add_expr(&op.left, None);
                 let (right, right_ty) = self.add_expr(&op.right, None);
 
-                let ty = self.registry.merge_types(&left_ty, &right_ty);
+                // This will be implemented with typeclasses and generics
+                // so + will be like `for T: Sum fn(T, T): T`
+                // but none of this is implemented yet so we will use the number types instead, with
+                // one signature for each type
+                let num_ty = num_type("0");
+                let ty = merge_types([&num_ty, &left_ty, &right_ty]).unwrap();
+                let sigs = types_iter(&ty).map(binop_sig);
 
                 let name = name.map_or_else(|| self.registry.use_name(None), |v| v.to_string());
+
+                self.registry.insert_value_type(
+                    &name,
+                    ty.clone(),
+                    ValueTypeDeps {
+                        refs: vec![left.clone(), right.clone()],
+                        sig: sigs.collect(),
+                    },
+                );
+
+                if let lex::value::Value::Ident(left) = left.value.as_ref().unwrap() {
+                    self.registry.set_value_type(left, ty.clone(), Some(&name));
+                }
+                if let lex::value::Value::Ident(right) = right.value.as_ref().unwrap() {
+                    self.registry.set_value_type(right, ty.clone(), Some(&name));
+                }
+
                 self.body.push(lex::Instr {
                     instr: Some(lex::instr::Instr::BinOp(lex::BinOp {
                         name: name.clone(),
@@ -215,7 +276,7 @@ impl InstrBuilder {
                     value: Some(lex::value::Value::Ident(name)),
                 };
 
-                return (value, ty);
+                (value, ty)
             }
             ast::expr::Expr::Ident(ident) => {
                 let internal_name = self.registry.get_internal_name(ident).unwrap();
@@ -224,13 +285,13 @@ impl InstrBuilder {
                     value: Some(lex::value::Value::Ident(internal_name.to_string())),
                 };
 
-                let ty = self.registry.value_type(&value).unwrap();
+                let ty = self.registry.value_type(&value);
 
                 if let Some(name) = name {
                     value = self.assign(name, value, ty.clone());
                 }
 
-                return (value, ty);
+                (value, ty)
             }
             ast::expr::Expr::FnCall(call) => {
                 let mut args = Vec::new();
@@ -250,16 +311,34 @@ impl InstrBuilder {
                     }
                 };
 
-                let ret_ty = if let Some(lex::r#type::Type::Fn(fn_ty)) = &callee_ty.r#type.as_ref()
-                {
-                    // TODO: many return values
-                    &fn_ty.ret[0] as &lex::Type
-                } else {
-                    // TODO: improve error handling
-                    unreachable!()
-                };
+                let fn_sigs: Vec<_> = types_iter(&callee_ty)
+                    .filter_map(|ty| {
+                        if let Some(lex::r#type::Type::Fn(fn_ty)) = ty.r#type.as_ref() {
+                            Some(fn_ty.clone())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+
+                let ret_ty = ambig(
+                    fn_sigs
+                        .clone()
+                        .into_iter()
+                        // TODO: many return values
+                        .map(|mut fn_ty| fn_ty.ret.remove(0)),
+                );
 
                 let name = name.map_or_else(|| self.registry.use_name(None), |v| v.to_string());
+
+                self.registry.insert_value_type(
+                    &name,
+                    ret_ty.clone(),
+                    ValueTypeDeps {
+                        refs: args.clone(),
+                        sig: fn_sigs,
+                    },
+                );
 
                 self.body.push(lex::Instr {
                     instr: Some(lex::instr::Instr::FnCall(lex::FnCall {
@@ -274,19 +353,19 @@ impl InstrBuilder {
                     value: Some(lex::value::Value::Ident(name)),
                 };
 
-                return (value, ret_ty.clone());
+                (value, ret_ty.clone())
             }
             ast::expr::Expr::Block(block) => {
                 for stmt in block.body.iter() {
                     self.add_stmt(stmt);
                 }
 
-                return self.add_expr(&block.ret, name);
+                self.add_expr(&block.ret, name)
             }
             ast::expr::Expr::FnExpr(_) => {
                 todo!()
             }
-        };
+        }
     }
 
     pub fn assign(&mut self, name: &str, value: lex::Value, ty: lex::Type) -> lex::Value {
@@ -298,7 +377,8 @@ impl InstrBuilder {
             })),
         });
 
-        self.registry.set_value_type(name.to_string(), ty.clone());
+        self.registry
+            .insert_value_type(&name, ty.clone(), ValueTypeDeps::default());
 
         lex::Value {
             value: Some(lex::value::Value::Ident(name.to_string())),

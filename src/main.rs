@@ -45,6 +45,8 @@ enum ShowTarget {
 }
 
 fn main() {
+    unsafe { compact_debug::enable(true) };
+
     let cli = Cli::parse();
 
     match cli.cmd {
