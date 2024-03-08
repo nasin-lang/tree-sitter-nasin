@@ -1,0 +1,13 @@
+{
+  "name": "tree-sitter-torvo",
+  "module": "grammar.js",
+  "type": "module",
+  "devDependencies": {
+    "tree-sitter-cli": "^0.21.0",
+    "tsup": "^8.0.2",
+    "typescript": "^5.0.0"
+  },
+  "dependencies": {
+    "nan": "^2.19.0"
+  }
+}
