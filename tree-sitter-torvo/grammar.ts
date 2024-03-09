@@ -1,26 +1,135 @@
+import type { Simplify } from "type-fest"
+
+function bin_op(operator: Rule, operand: Rule) {
+    return seq(field("left", operand), operator, field("right", operand))
+}
+
 module.exports = grammar({
-    
+    name: "torvo",
+    word: ($) => $._ident,
+    conflicts: ($) => [
+        [$.fn_call, $.var_decl],
+        [$.fn_call, $._fn_args_list],
+    ],
+    rules: {
+        source_file: ($) => repeat($._module_stmt),
+
+        _module_stmt: ($) => choice($.fn_decl, $.global_decl),
+
+        fn_decl: ($) =>
+            seq(
+                "fn",
+                field("name", $.ident),
+                "(",
+                repeat(seq(field("param", $.fn_param), optional(","))),
+                ")",
+                optional(seq(":", field("ret_type", $._type_expr))),
+                "=",
+                field("ret", $._expr),
+            ),
+
+        fn_param: ($) =>
+            seq(field("pat", $._pat), optional(seq(":", field("type", $._type_expr)))),
+
+        fn_call: ($) =>
+            prec.left(
+                "call",
+                seq(field("callee", $._expr), "(", optional($._fn_args_list), ")"),
+            ),
+        _fn_args_list: ($) =>
+            prec(1, repeat1(seq(field("args", $._expr), optional(",")))),
+
+        global_decl: ($) =>
+            seq(
+                field("name", $.ident),
+                optional(seq(":", field("type", $._type_expr))),
+                "=",
+                field("value", $._expr),
+            ),
+
+        var_decl: ($) =>
+            seq(
+                field("pat", $._pat),
+                optional(seq(":", field("type", $._type_expr))),
+                "=",
+                field("value", $._expr),
+            ),
+
+        _expr: ($) =>
+            choice(
+                $._wrapped_expr,
+                $.ident,
+                $.number,
+                $.fn_call,
+                $.pow,
+                $.mul,
+                $.div,
+                $.mod,
+                $.sum,
+                $.sub,
+                $.block,
+            ),
+        _wrapped_expr: ($) => prec("atom", seq("(", $._expr, ")")),
+
+        sum: ($) => prec.left("sum-sub", bin_op("+", $._expr)),
+        sub: ($) => prec.left("sum-sub", bin_op("-", $._expr)),
+        mul: ($) => prec.left("mul-div", bin_op("*", $._expr)),
+        div: ($) => prec.left("mul-div", bin_op("/", $._expr)),
+        mod: ($) => prec.left("mul-div", bin_op("%", $._expr)),
+        pow: ($) => prec.left("pow", bin_op("**", $._expr)),
+
+        block: ($) => prec("block", $._block),
+        _block: ($) => prec.left($._block_clause),
+        _block_clause: ($) =>
+            prec.right(
+                1,
+                seq(
+                    field("body", $._block_stmt),
+                    optional(";"),
+                    choice(field("value", $._expr), $._block_clause),
+                ),
+            ),
+        _block_stmt: ($) => choice($.var_decl),
+
+        _type_expr: ($) => choice($.ident),
+
+        _pat: ($) => choice($.ident),
+
+        ident: ($) => prec("atom", $._ident),
+        _ident: () => /[\p{L}_][\p{L}\p{Nd}_]*/,
+
+        number: () => prec("atom", /(\d(_?\d)*)?\.?\d(_?\d)*/),
+    },
+    precedences: () => [["call", "atom", "pow", "mul-div", "sum-sub", "block"]],
 })
 
-// Type defs based on description fromhttps://tree-sitter.github.io/tree-sitter/creating-parsers#the-grammar-dsl
+// Type defs based on description from
+// https://tree-sitter.github.io/tree-sitter/creating-parsers#the-grammar-dsl
 declare global {
     /**
      * Opaque type representing a Tree-sitter grammar rule. Should not be read
      * directly.
      */
-    class Rule {}
+    class RuleObject {
+        private rule: unknown
+    }
     /**
-     * Opaque type representing a Tree-sitter defined precedence.
+     * Anything that can be accessed by `$.<name>`. Should not be read
+     * directly.
      */
-    class Prec {}
-    
-    type GrammarFunc<T extends string, P extends string, R> = ($: Record<T, Rule> & Record<P, Prec> => R
+    class GrammarSymbol {
+        private symbol: unknown
+    }
+
+    type Rule = string | RegExp | RuleObject | GrammarSymbol
+
+    type GrammarFunc<T extends string, R> = ($: Simplify<Record<T, GrammarSymbol>>) => R
 
     /**
      * Defines a Tree-sitter grammar.
      */
-    function grammar<T extends string, P extends string>(args: {
-        name: string;
+    function grammar<T extends string>(args: {
+        name: string
         /**
          * Every grammar rule is written as a JavaScript function that takes a
          * parameter conventionally called $. The syntax $.identifier is how
@@ -40,14 +149,14 @@ declare global {
          * assertions not feasible to use in an LR(1) grammar, as well as
          * certain flags being unnecessary for tree-sitter.
          */
-        rules: Record<T, GrammarFunc<T, P, Rule>>;
+        rules: Record<T, GrammarFunc<T, Rule>>
         /**
          * an array of tokens that may appear anywhere in the language. This is
          * often used for whitespace and comments. The default value of extras
          * is to accept whitespace. To control whitespace explicitly, specify
          * extras: $ => [] in your grammar.
          */
-        extras?: GrammarFunc<Rule[]>;
+        extras?: GrammarFunc<T, Rule[]>
         /**
          * an array of rule names that should be automatically removed from the
          * grammar by replacing all of their usages with a copy of their
@@ -55,7 +164,7 @@ declare global {
          * places but for which you don’t want to create syntax tree nodes at
          * runtime.
          */
-        inline?: T[];
+        inline?: NoInfer<T>[]
         /**
          * an array of arrays of rule names. Each inner array represents a set
          * of rules that’s involved in an LR(1) conflict that is intended to
@@ -65,7 +174,7 @@ declare global {
          * Tree-sitter will pick the subtree whose corresponding rule has the
          * highest total dynamic precedence.
          */
-        conflicts?: T[];
+        conflicts?: GrammarFunc<T, GrammarSymbol[][]>
         /**
          * an array of token names which can be returned by an external
          * scanner. External scanners allow you to write custom C code which
@@ -73,7 +182,7 @@ declare global {
          * (e.g. Python’s indentation tokens) that cannot be described by
          * regular expressions.
          */
-        externals?: T[];
+        externals?: NoInfer<T>[]
         /**
          * an array of array of strings, where each array of strings defines
          * named precedence levels in descending order. These names can be used
@@ -81,17 +190,17 @@ declare global {
          * names in the array, rather than globally. Can only be used with
          * parse precedence, not lexical precedence.
          */
-        precedences?: P[][];
+        precedences?: GrammarFunc<T, string[][]>
         /**
          * the name of a token that will match keywords for the purpose of the
          * keyword extraction optimization.
          */
-        word?: string
+        word?: GrammarFunc<T, GrammarSymbol>
         /**
          * an array of hidden rule names which should be considered to be
          * ‘supertypes’ in the generated node types file.
          */
-        supertypes?: T[]
+        supertypes?: NoInfer<T>[]
     }): unknown
 
     /**
@@ -136,11 +245,11 @@ declare global {
          * When two rules overlap in a way that represents either a true
          * ambiguity or a local ambiguity given one token of lookahead,
          * Tree-sitter will try to resolve the conflict by matching the rule
-         * with the higher precedence. * The default precedence of all rules is
+         * with the higher precedence. The default precedence of all rules is
          * zero. This works similarly to the precedence directives in Yacc
          * grammars.
          */
-        (n: number | Prec, rule: Rule): Rule
+        (n: number | string, rule: Rule): Rule
         /**
          * This function marks the given rule as left-associative (and
          * optionally applies a numerical precedence). When an LR(1) conflict
@@ -152,7 +261,7 @@ declare global {
          */
         left: {
             (rule: Rule): Rule
-            (n: number | Prec, rule: Rule): Rule
+            (n: number | string, rule: Rule): Rule
         }
         /**
          * This function marks the given rule as right-associative (and
@@ -163,9 +272,9 @@ declare global {
          * ends later. This works similarly to associativity directives in
          * Yacc grammars.
          */
-        left: {
+        right: {
             (rule: Rule): Rule
-            (n: number | Prec, rule: Rule): Rule
+            (n: number | string, rule: Rule): Rule
         }
         /**
          * This function is similar to prec, but the given numerical precedence
@@ -178,7 +287,7 @@ declare global {
          * total. This is similar to dynamic precedence directives in Bison
          * grammars.
          */
-        dynamic: (n: number | Prec, rule: Rule) => Rule
+        dynamic: (n: number | string, rule: Rule) => Rule
     }
 
     const token: {
@@ -210,3 +319,5 @@ declare global {
      */
     function field(name: string, rule: Rule): Rule
 }
+
+type NoInfer<T> = T extends infer U ? U : never

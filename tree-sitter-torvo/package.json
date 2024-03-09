@@ -1,13 +1,20 @@
 {
   "name": "tree-sitter-torvo",
   "module": "grammar.js",
-  "type": "module",
+  "scripts": {
+    "build": "tsup grammar.ts -d src && tree-sitter generate src/grammar.js",
+    "dev": "tsup grammar.ts -d src && tree-sitter generate -0 --report-states-for-rule - src/grammar.js && tree-sitter parse -sD0 --wasm ../examples/simple_operators.torv"
+  },
   "devDependencies": {
+    "@types/node": "^20.11.25",
+    "prettier": "^3.2.5",
     "tree-sitter-cli": "^0.21.0",
     "tsup": "^8.0.2",
+    "type-fest": "^4.12.0",
     "typescript": "^5.0.0"
   },
   "dependencies": {
     "nan": "^2.19.0"
-  }
+  },
+  "main": "bindings/node"
 }

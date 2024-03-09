@@ -1,6 +1,7 @@
 pub mod codegen;
 pub mod lexer;
 pub mod proto;
+pub mod tree_sitter_test;
 
 use std::fs::File;
 use std::io::Write;
@@ -46,6 +47,8 @@ enum ShowTarget {
 
 fn main() {
     unsafe { compact_debug::enable(true) };
+
+    tree_sitter_test::toy();
 
     let cli = Cli::parse();
 
