@@ -1,4 +1,24 @@
-src/
-bindings/
+# Rust artifacts
+Cargo.lock
+target/
+
+# Node artifacts
 build/
-binding.gyp
+prebuilds/
+node_modules/
+
+# C artifacts
+*.a
+*.so
+*.so.*
+*.dylib
+*.dll
+*.pc
+
+# Grammar volatiles
+*.wasm
+*.obj
+*.o
+
+# Parser log
+log.html
