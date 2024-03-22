@@ -5,6 +5,9 @@ authors = ["Felipe Nascimento <felipenasgomes@gmail.com>"]
 version = "0.1.0"
 edition = "2021"
 
+[workspace]
+members = ["tree-sitter-torvo"]
+
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
@@ -18,6 +21,9 @@ itertools = "0.12.1"
 prost = "0.12.3"
 prost-types = "0.12.3"
 target-lexicon = "0.12.13"
+tree-sitter = "~0.20.10"
+tree-sitter-torvo = { version = "0.0.1", path = "tree-sitter-torvo" }
 
 [build-dependencies]
 prost-build = "0.12.3"
+protoc-bin-vendored = "3.0.0"

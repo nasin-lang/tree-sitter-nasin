@@ -1,5 +1,5 @@
 .PHONY: all
-all: bin/torvo bin/torvo-parser
+all: bin/torvo
 
 .PHONY: clean
 clean:
@@ -9,26 +9,19 @@ clean:
 	cargo clean
 
 .PHONY: proto
-proto: proto/ast.proto proto/lex.proto parser/src/proto/ast.ts
+proto: proto/lex.proto
 	cargo clean && cargo build
 
 RUST_SRC = $(shell find src/ -type f -name '*.rs')
-bin/torvo: Cargo.toml build.rs $(RUST_SRC) proto/ast.proto proto/lex.proto
+bin/torvo: Cargo.toml build.rs $(RUST_SRC) proto/lex.proto tree-sitter-torvo/src/parser.c
 	cargo build     \
 	&& mkdir -p bin \
 	&& cp -T target/debug/torvo bin/torvo
 
-PARSER_SRC = $(shell find parser/src/ -type f -name '*.ts')
-bin/torvo-parser: $(PARSER_SRC) parser/src/proto/ast.ts parser/node_modules
-	cd parser          \
-	&& mkdir -p ../bin \
-	&& bun build src/index.ts --outfile ../bin/torvo-parser --compile
+tree-sitter-torvo/src/parser.c: tree-sitter-torvo/grammar.js tree-sitter-torvo/node_modules
+	cd tree-sitter-torvo \
+	&& bun run generate
 
-parser/src/proto/ast.ts: proto/ast.proto parser/node_modules
-	cd parser             \
-	&& mkdir -p src/proto \
-	&& protoc -I ../proto --plugin ./node_modules/.bin/protoc-gen-ts_proto --ts_proto_out src/proto ../proto/ast.proto --ts_proto_opt=emitDefaultValues=json-methods
-
-parser/node_modules: parser/package.json
-	cd parser \
-	&& bun install
+tree-sitter-torvo/node_modules: tree-sitter-torvo/package.json
+	cd tree-sitter-torvo \
+	&& bun installd

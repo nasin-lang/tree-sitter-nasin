@@ -1,0 +1,15 @@
+{
+  "name": "tree-sitter-torvo",
+  "main": "bindings/node",
+  "scripts": {
+    "generate": "tree-sitter generate",
+    "dev": "tree-sitter generate -0 --report-states-for-rule - && tree-sitter parse -sD0 --wasm ../examples/*"
+  },
+  "devDependencies": {
+    "prettier": "^3.2.5",
+    "tree-sitter-cli": "^0.21.0"
+  },
+  "dependencies": {
+    "nan": "^2.19.0"
+  }
+}

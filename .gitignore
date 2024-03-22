@@ -1,5 +1,6 @@
 # Dependency directories
 node_modules/
+.cargo/
 
 # Generated files
 parser/src/proto/*
@@ -17,3 +18,7 @@ target/
 
 # Finder (MacOS) folder config
 .DS_Store
+
+# replit config
+.replit
+replit.nix

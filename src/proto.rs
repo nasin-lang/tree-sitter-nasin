@@ -18,10 +18,6 @@ where
     }
 }
 
-pub mod ast {
-    include!(concat!(env!("OUT_DIR"), "/torvo.ast.rs"));
-}
-
 pub mod lex {
     use std::iter::zip;
 
