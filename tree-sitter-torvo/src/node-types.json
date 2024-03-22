@@ -42,28 +42,28 @@
         "required": true,
         "types": [
           {
-            "type": "%",
-            "named": false
+            "type": "double_star",
+            "named": true
           },
           {
-            "type": "*",
-            "named": false
+            "type": "minus",
+            "named": true
           },
           {
-            "type": "**",
-            "named": false
+            "type": "percent",
+            "named": true
           },
           {
-            "type": "+",
-            "named": false
+            "type": "plus",
+            "named": true
           },
           {
-            "type": "-",
-            "named": false
+            "type": "slash",
+            "named": true
           },
           {
-            "type": "/",
-            "named": false
+            "type": "star",
+            "named": true
           }
         ]
       },
@@ -241,7 +241,7 @@
           }
         ]
       },
-      "param": {
+      "params": {
         "multiple": true,
         "required": false,
         "types": [
@@ -251,7 +251,17 @@
           }
         ]
       },
-      "ret": {
+      "ret_type": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "ident",
+            "named": true
+          }
+        ]
+      },
+      "return": {
         "multiple": true,
         "required": true,
         "types": [
@@ -281,16 +291,6 @@
           },
           {
             "type": "number",
-            "named": true
-          }
-        ]
-      },
-      "ret_type": {
-        "multiple": false,
-        "required": false,
-        "types": [
-          {
-            "type": "ident",
             "named": true
           }
         ]
@@ -324,7 +324,7 @@
     }
   },
   {
-    "type": "global_decl",
+    "type": "global_var_decl",
     "named": true,
     "fields": {
       "name": {
@@ -394,7 +394,7 @@
     "fields": {}
   },
   {
-    "type": "source_file",
+    "type": "root",
     "named": true,
     "fields": {},
     "children": {
@@ -406,7 +406,7 @@
           "named": true
         },
         {
-          "type": "global_decl",
+          "type": "global_var_decl",
           "named": true
         }
       ]
@@ -473,10 +473,6 @@
     }
   },
   {
-    "type": "%",
-    "named": false
-  },
-  {
     "type": "(",
     "named": false
   },
@@ -485,27 +481,7 @@
     "named": false
   },
   {
-    "type": "*",
-    "named": false
-  },
-  {
-    "type": "**",
-    "named": false
-  },
-  {
-    "type": "+",
-    "named": false
-  },
-  {
     "type": ",",
-    "named": false
-  },
-  {
-    "type": "-",
-    "named": false
-  },
-  {
-    "type": "/",
     "named": false
   },
   {
@@ -521,7 +497,31 @@
     "named": false
   },
   {
+    "type": "double_star",
+    "named": true
+  },
+  {
     "type": "fn",
     "named": false
+  },
+  {
+    "type": "minus",
+    "named": true
+  },
+  {
+    "type": "percent",
+    "named": true
+  },
+  {
+    "type": "plus",
+    "named": true
+  },
+  {
+    "type": "slash",
+    "named": true
+  },
+  {
+    "type": "star",
+    "named": true
   }
 ]

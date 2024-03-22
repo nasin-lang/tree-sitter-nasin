@@ -1,12 +1,11 @@
 const PREC = {
-    CALL: 0,
-    CALL_ARGS: 1,
-    ATOM: 2,
-    POW: 3,
-    MUL: 4,
-    SUM: 5,
-    BLOCK: 6,
-    BLOCK_CLAUSE: 7,
+    BLOCK: 0,
+    BLOCK_CLAUSE: 1,
+    SUM: 2,
+    MUL: 3,
+    POW: 4,
+    ATOM: 5,
+    CALL: 6,
 }
 
 function bin_op(prec_lvl, operator, operand) {
@@ -19,31 +18,27 @@ function bin_op(prec_lvl, operator, operand) {
 module.exports = grammar({
     name: "torvo",
     word: ($) => $._ident,
-    conflicts: ($) => [
-        [$.call, $.var_decl],
-        [$.call, $._call_args_list],
-    ],
     rules: {
-        source_file: ($) => repeat($._module_stmt),
+        root: ($) => repeat($._module_stmt),
 
-        _module_stmt: ($) => choice($.fn_decl, $.global_decl),
+        _module_stmt: ($) => choice($.fn_decl, $.global_var_decl),
 
         fn_decl: ($) =>
             seq(
                 "fn",
                 field("name", $.ident),
                 "(",
-                repeat(seq(field("param", $.fn_param), optional(","))),
+                repeat(seq(field("params", $.fn_param), optional(","))),
                 ")",
                 optional(seq(":", field("ret_type", $._type_expr))),
                 "=",
-                field("ret", $._expr),
+                field("return", $._expr),
             ),
 
         fn_param: ($) =>
             seq(field("pat", $._pat), optional(seq(":", field("type", $._type_expr)))),
 
-        global_decl: ($) =>
+        global_var_decl: ($) =>
             seq(
                 field("name", $.ident),
                 optional(seq(":", field("type", $._type_expr))),
@@ -71,12 +66,12 @@ module.exports = grammar({
 
         bin_op: ($) =>
             choice(
-                bin_op(PREC.SUM, "+", $._expr),
-                bin_op(PREC.SUM, "-", $._expr),
-                bin_op(PREC.MUL, "*", $._expr),
-                bin_op(PREC.MUL, "/", $._expr),
-                bin_op(PREC.MUL, "%", $._expr),
-                bin_op(PREC.POW, "**", $._expr),
+                bin_op(PREC.SUM, $.plus, $._expr),
+                bin_op(PREC.SUM, $.minus, $._expr),
+                bin_op(PREC.MUL, $.star, $._expr),
+                bin_op(PREC.MUL, $.slash, $._expr),
+                bin_op(PREC.MUL, $.percent, $._expr),
+                bin_op(PREC.POW, $.double_star, $._expr),
             ),
 
         call: ($) =>
@@ -85,7 +80,7 @@ module.exports = grammar({
                 seq(field("callee", $._expr), "(", optional($._call_args_list), ")"),
             ),
         _call_args_list: ($) =>
-            prec(PREC.CALL_ARGS, repeat1(seq(field("args", $._expr), optional(",")))),
+            prec(PREC.CALL, repeat1(seq(field("args", $._expr), optional(",")))),
 
         block: ($) => prec(PREC.BLOCK, $._block),
         _block: ($) => prec.left($._block_clause),
@@ -103,6 +98,13 @@ module.exports = grammar({
         _type_expr: ($) => choice($.ident),
 
         _pat: ($) => choice($.ident),
+
+        plus: () => "+",
+        minus: () => "-",
+        star: () => "*",
+        double_star: () => "**",
+        slash: () => "/",
+        percent: () => "%",
 
         ident: ($) => prec(PREC.ATOM, $._ident),
         _ident: () => /[\p{L}_][\p{L}\p{Nd}_]*/,
