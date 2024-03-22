@@ -9,16 +9,19 @@ clean:
 	cargo clean
 
 .PHONY: proto
-proto: proto/ast.proto proto/lex.proto
+proto: proto/lex.proto
 	cargo clean && cargo build
 
 RUST_SRC = $(shell find src/ -type f -name '*.rs')
-bin/torvo: Cargo.toml build.rs $(RUST_SRC) proto/ast.proto proto/lex.proto tree-sitter-torvo/src/parser.c
+bin/torvo: Cargo.toml build.rs $(RUST_SRC) proto/lex.proto tree-sitter-torvo/src/parser.c
 	cargo build     \
 	&& mkdir -p bin \
 	&& cp -T target/debug/torvo bin/torvo
 
-tree-sitter-torvo/src/parser.c: tree-sitter-torvo/grammar.ts tree-sitter-torvo/package.json
+tree-sitter-torvo/src/parser.c: tree-sitter-torvo/grammar.js tree-sitter-torvo/node_modules
 	cd tree-sitter-torvo \
-	&& bun install       \
-	&& bun run build
+	&& bun run generate
+
+tree-sitter-torvo/node_modules: tree-sitter-torvo/package.json
+	cd tree-sitter-torvo \
+	&& bun installd

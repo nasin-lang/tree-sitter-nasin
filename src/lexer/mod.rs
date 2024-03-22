@@ -1,74 +1,82 @@
 mod registry;
 mod types;
 
+use tree_sitter as ts;
+
 use self::registry::ValueTypeDeps;
 use self::types::{ambig, binop_sig, fn_type, merge_types, primitive, types_iter};
 use self::{registry::Registry, types::num_type};
-use crate::proto::{ast, lex};
+use crate::proto::lex;
+use crate::tree_sitter_utils::TreeSitterUtils;
 
-impl From<&ast::Module> for lex::Module {
-    fn from(value: &ast::Module) -> Self {
-        let mut lexer = Lexer::new(value.name.clone());
-
-        for stmt in value.body.iter() {
-            lexer.add_symbol(&stmt);
-        }
-
-        lexer.finish()
-    }
-}
-
-pub struct Lexer {
+pub struct Lexer<'a> {
     pub name: String,
+    pub source: &'a str,
     registry: Registry,
     symbols: Vec<lex::Symbol>,
 }
 
-impl Lexer {
-    pub fn new(name: String) -> Self {
+impl<'a> Lexer<'a> {
+    pub fn new(name: String, source: &'a str) -> Self {
         Lexer {
             name,
+            source,
             symbols: Vec::new(),
             registry: Registry::new(),
         }
     }
 
-    pub fn add_symbol(&mut self, node: &ast::Stmt) {
-        match &node.stmt {
-            Some(ast::stmt::Stmt::Fn(func)) => {
-                let name = self.registry.use_name(Some(&func.name));
+    pub fn parse(name: String, source: &'a str, node: &'a ts::Node<'a>) -> lex::Module {
+        node.of_kind("root");
 
-                let mut builder = InstrBuilder::new(&mut self.registry);
+        let mut this = Lexer::new(name, source);
 
-                let mut args = Vec::new();
-                let mut args_ty = Vec::new();
-                for arg in func.args.iter() {
-                    let ast::pat::Pat::Name(name_pat) = arg.pat.pat.as_ref().unwrap();
-                    args.push(builder.registry.use_name(Some(name_pat)).to_string());
+        for sym_node in node.iter_children() {
+            this.add_symbol(sym_node);
+        }
 
-                    let ty = arg.r#type.as_ref().map_or(
+        this.finish()
+    }
+
+    pub fn add_symbol(&mut self, node: ts::Node<'a>) {
+        match node.kind() {
+            "fn_decl" => {
+                let ident_node = node.required_field("name").of_kind("ident");
+                let ident = ident_node.get_text(self.source);
+                let name = self.registry.use_name(Some(&ident));
+
+                let mut builder = InstrBuilder::new(&mut self.registry, self.source);
+
+                let mut params = Vec::new();
+                let mut params_ty = Vec::new();
+                for param_node in node.iter_field("params") {
+                    let param_name_node = param_node.required_field("pat").of_kind("ident");
+                    let param_name = param_name_node.get_text(self.source);
+                    params.push(builder.registry.use_name(Some(param_name)).to_string());
+
+                    let ty = param_node.field("type").as_ref().map_or(
                         lex::Type {
                             r#type: Some(lex::r#type::Type::Unknown(true)),
                         },
-                        |ty| builder.parse_type(&ty),
+                        |ty_node| builder.parse_type(ty_node),
                     );
 
-                    args_ty.push(ty.clone());
+                    params_ty.push(ty.clone());
                     builder.registry.insert_value_type(
-                        &name_pat,
+                        &param_name,
                         ty.clone(),
                         ValueTypeDeps::default(),
                     );
                 }
 
-                let mut ret_ty = func.ret_type.as_ref().map_or(
+                let mut ret_ty = node.field("ret_type").as_ref().map_or(
                     lex::Type {
                         r#type: Some(lex::r#type::Type::Unknown(true)),
                     },
-                    |ty| builder.parse_type(&ty),
+                    |ty_node| builder.parse_type(ty_node),
                 );
 
-                let ty = fn_type(args_ty.clone(), [ret_ty.clone()]);
+                let ty = fn_type(params_ty.clone(), [ret_ty.clone()]);
 
                 self.registry
                     .insert_value_type(&name, ty.clone(), ValueTypeDeps::default());
@@ -76,28 +84,26 @@ impl Lexer {
                     .registry
                     .insert_value_type(&name, ty.clone(), ValueTypeDeps::default());
 
-                if let Some(ret) = &func.ret {
-                    let (ret, _) = builder.add_expr(&ret, None);
-                    builder.body.push(lex::Instr {
-                        instr: Some(lex::instr::Instr::FnReturn(ret.clone())),
-                    });
+                let (ret, _) = builder.add_expr(&node.required_field("return"), None);
+                builder.body.push(lex::Instr {
+                    instr: Some(lex::instr::Instr::FnReturn(ret.clone())),
+                });
 
-                    if let lex::value::Value::Ident(ident) = ret.value.as_ref().unwrap() {
-                        builder.registry.set_value_type(ident, ret_ty, Some(&name));
-                    }
-
-                    ret_ty = builder.registry.value_type(&ret);
+                if let lex::value::Value::Ident(ident) = ret.value.as_ref().unwrap() {
+                    builder.registry.set_value_type(&ident, ret_ty, Some(&name));
                 }
 
-                for (i, arg) in args.iter().enumerate() {
+                ret_ty = builder.registry.value_type(&ret);
+
+                for (i, arg) in params.iter().enumerate() {
                     let arg_value = lex::Value {
                         value: Some(lex::value::Value::Ident(arg.to_string())),
                     };
                     let parsed_ty = builder.registry.value_type(&arg_value);
-                    args_ty[i] = parsed_ty;
+                    params_ty[i] = parsed_ty;
                 }
 
-                let ty = fn_type(args_ty.clone(), [ret_ty.clone()]);
+                let ty = fn_type(params_ty.clone(), [ret_ty.clone()]);
 
                 self.registry.set_value_type(&name, ty.clone(), None);
                 builder.registry.set_value_type(&name, ty, None);
@@ -107,20 +113,21 @@ impl Lexer {
                         name,
                         r#type: lex::FnType {
                             ret: vec![ret_ty],
-                            args: args_ty,
+                            args: params_ty,
                         },
-                        args,
+                        args: params,
                         body: builder.finish(),
                     })),
                 });
             }
-            Some(ast::stmt::Stmt::Var(var)) => {
-                let ast::pat::Pat::Name(original_name) = var.pat.pat.as_ref().unwrap();
-                let name = self.registry.use_name(Some(original_name));
+            "global_var_decl" => {
+                let ident_node = node.required_field("name").of_kind("ident");
+                let ident = ident_node.get_text(self.source);
+                let name = self.registry.use_name(Some(ident));
 
-                let mut builder = InstrBuilder::new(&mut self.registry);
+                let mut builder = InstrBuilder::new(&mut self.registry, self.source);
 
-                let ty = var.r#type.as_ref().map_or(
+                let ty = node.field("type").map_or(
                     lex::Type {
                         r#type: Some(lex::r#type::Type::Unknown(true)),
                     },
@@ -133,13 +140,13 @@ impl Lexer {
                 self.registry
                     .insert_value_type(&name, ty.clone(), ValueTypeDeps::default());
 
-                let (value, _) = builder.add_expr(&var.value, None);
+                let (value, _) = builder.add_expr(&node.required_field("value"), None);
                 builder.body.push(lex::Instr {
                     instr: Some(lex::instr::Instr::BodyReturn(value.clone())),
                 });
 
                 if let lex::value::Value::Ident(ident) = value.value.as_ref().unwrap() {
-                    builder.registry.set_value_type(ident, ty, Some(&name));
+                    builder.registry.set_value_type(&ident, ty, Some(&name));
                 }
 
                 let ty = builder.registry.value_type(&value);
@@ -159,10 +166,7 @@ impl Lexer {
                     })),
                 });
             }
-            _ => {
-                // FIXME: melhorar tratamento de erro
-                unreachable!()
-            }
+            k => panic!("Found unexpected symbol `{}`", k),
         };
     }
 
@@ -174,16 +178,18 @@ impl Lexer {
     }
 }
 
-struct InstrBuilder {
+struct InstrBuilder<'a> {
     registry: Registry,
     body: Vec<lex::Instr>,
+    source: &'a str,
 }
 
-impl InstrBuilder {
-    pub fn new(parent_registry: &Registry) -> Self {
+impl<'a> InstrBuilder<'a> {
+    pub fn new(parent_registry: &Registry, source: &'a str) -> Self {
         InstrBuilder {
             registry: Registry::with_parent(parent_registry),
             body: Vec::new(),
+            source,
         }
     }
 
@@ -214,36 +220,33 @@ impl InstrBuilder {
         self.body
     }
 
-    pub fn add_stmt(&mut self, node: &ast::Stmt) -> (lex::Value, lex::Type) {
-        match &node.stmt {
-            Some(ast::stmt::Stmt::Var(var)) => {
-                let ast::pat::Pat::Name(name_pat) = var.pat.pat.as_ref().unwrap();
-                let name = self.registry.use_name(Some(name_pat));
+    pub fn add_stmt(&mut self, node: &ts::Node) -> (lex::Value, lex::Type) {
+        match node.kind() {
+            "var_decl" => {
+                let var_name_node = node.required_field("pat").of_kind("ident");
+                let var_name = var_name_node.get_text(self.source);
+                let name = self.registry.use_name(Some(var_name));
 
-                let (value, ty) = self.add_expr(&var.value, Some(&name));
+                let (value, mut ty) = self.add_expr(&node.required_field("value"), Some(&name));
 
-                if let Some(ty) = var.r#type.as_ref() {
-                    let ty = self.parse_type(ty);
-                    self.registry.set_value_type(&name, ty, None);
+                if let Some(ty_node) = node.field("type") {
+                    ty = self.parse_type(&ty_node);
+                    self.registry.set_value_type(&name, ty.clone(), None);
                 }
 
                 (value, ty)
             }
-            Some(ast::stmt::Stmt::Fn(_)) => {
-                todo!()
-            }
-            None => {
-                // FIXME: melhorar tratamento de erro
-                unreachable!()
-            }
+            k => panic!("Found unexpected statement `{}`", k),
         }
     }
 
-    pub fn add_expr(&mut self, expr: &ast::Expr, name: Option<&str>) -> (lex::Value, lex::Type) {
-        match expr.expr.as_ref().unwrap() {
-            ast::expr::Expr::Num(num) => {
+    pub fn add_expr(&mut self, node: &ts::Node, name: Option<&str>) -> (lex::Value, lex::Type) {
+        match node.kind() {
+            "number" => {
                 let mut value = lex::Value {
-                    value: Some(lex::value::Value::Num(num.clone())),
+                    value: Some(lex::value::Value::Num(
+                        node.get_text(self.source).to_string(),
+                    )),
                 };
                 // TODO: improve type handling
                 let ty = self.registry.value_type(&value);
@@ -254,9 +257,9 @@ impl InstrBuilder {
 
                 (value, ty)
             }
-            ast::expr::Expr::BinOp(op) => {
-                let (left, left_ty) = self.add_expr(&op.left, None);
-                let (right, right_ty) = self.add_expr(&op.right, None);
+            "bin_op" => {
+                let (left, left_ty) = self.add_expr(&node.required_field("left"), None);
+                let (right, right_ty) = self.add_expr(&node.required_field("right"), None);
 
                 // This will be implemented with typeclasses and generics
                 // so + will be like `for T: Sum fn(T, T): T`
@@ -277,17 +280,20 @@ impl InstrBuilder {
                     },
                 );
 
+                let op_node = node.required_field("op");
+
                 self.body.push(lex::Instr {
                     instr: Some(lex::instr::Instr::BinOp(lex::BinOp {
                         name: name.clone(),
                         r#type: ty.clone(),
-                        op: match op.op() {
-                            ast::BinOpType::Add => lex::BinOpType::Add,
-                            ast::BinOpType::Sub => lex::BinOpType::Sub,
-                            ast::BinOpType::Mod => lex::BinOpType::Mod,
-                            ast::BinOpType::Mul => lex::BinOpType::Mul,
-                            ast::BinOpType::Div => lex::BinOpType::Div,
-                            ast::BinOpType::Pow => lex::BinOpType::Pow,
+                        op: match op_node.get_text(self.source) {
+                            "+" => lex::BinOpType::Add,
+                            "-" => lex::BinOpType::Sub,
+                            "%" => lex::BinOpType::Mod,
+                            "*" => lex::BinOpType::Mul,
+                            "/" => lex::BinOpType::Div,
+                            "**" => lex::BinOpType::Pow,
+                            _ => unreachable!(),
                         }
                         .into(),
                         left,
@@ -301,8 +307,11 @@ impl InstrBuilder {
 
                 (value, ty)
             }
-            ast::expr::Expr::Ident(ident) => {
-                let internal_name = self.registry.get_internal_name(ident).unwrap();
+            "ident" => {
+                let internal_name = self
+                    .registry
+                    .get_internal_name(node.get_text(self.source))
+                    .unwrap();
 
                 let mut value = lex::Value {
                     value: Some(lex::value::Value::Ident(internal_name.to_string())),
@@ -316,14 +325,14 @@ impl InstrBuilder {
 
                 (value, ty)
             }
-            ast::expr::Expr::FnCall(call) => {
+            "call" => {
                 let mut args = Vec::new();
-                for arg in call.args.iter() {
-                    let (value, _) = self.add_expr(arg, None);
+                for arg_node in node.iter_field("args") {
+                    let (value, _) = self.add_expr(&arg_node, None);
                     args.push(value);
                 }
 
-                let (callee, callee_ty) = self.add_expr(&call.callee, None);
+                let (callee, callee_ty) = self.add_expr(&node.required_field("callee"), None);
                 let callee_name = match callee.value {
                     Some(lex::value::Value::Ident(name)) => {
                         self.registry.get_internal_name(&name).unwrap().to_string()
@@ -378,23 +387,21 @@ impl InstrBuilder {
 
                 (value, ret_ty.clone())
             }
-            ast::expr::Expr::Block(block) => {
-                for stmt in block.body.iter() {
-                    self.add_stmt(stmt);
+            "block" => {
+                for stmt_node in node.iter_field("body") {
+                    self.add_stmt(&stmt_node);
                 }
 
-                self.add_expr(&block.ret, name)
+                self.add_expr(&node.required_field("value"), name)
             }
-            ast::expr::Expr::FnExpr(_) => {
-                todo!()
-            }
+            k => panic!("Found unexpected expression `{}`", k),
         }
     }
 
-    pub fn parse_type(&mut self, ty: &ast::Type) -> lex::Type {
-        match ty.r#type.as_ref() {
-            Some(ast::r#type::Type::Ident(indent)) => {
-                match indent.as_str() {
+    pub fn parse_type(&mut self, node: &ts::Node<'_>) -> lex::Type {
+        match node.kind() {
+            "ident" => {
+                match node.get_text(self.source) {
                     "i8" => primitive!(I8),
                     "i16" => primitive!(I16),
                     "i32" => primitive!(I32),
@@ -408,13 +415,11 @@ impl InstrBuilder {
                     "f64" => primitive!(F64),
                     _ => {
                         // TODO: improve error handling
-                        panic!("{} is not a type, dummy", indent);
+                        panic!("{} is not a type, dummy", node.to_sexp());
                     }
                 }
             }
-            None => {
-                unreachable!()
-            }
+            k => panic!("Found unexpected type `{}`", k),
         }
     }
 

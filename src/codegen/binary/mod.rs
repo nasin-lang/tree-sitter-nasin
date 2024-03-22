@@ -250,7 +250,7 @@ impl Codegen for BinaryCodegen {
             .write_stream(BufWriter::new(out_file))
             .unwrap();
 
-        std::process::Command::new("clang")
+        std::process::Command::new("cc")
             .arg("-nostartfiles")
             .arg("-o")
             .arg(file)
