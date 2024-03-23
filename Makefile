@@ -24,4 +24,4 @@ tree-sitter-torvo/src/parser.c: tree-sitter-torvo/grammar.js tree-sitter-torvo/n
 
 tree-sitter-torvo/node_modules: tree-sitter-torvo/package.json
 	cd tree-sitter-torvo \
-	&& bun installd
+	&& bun install
