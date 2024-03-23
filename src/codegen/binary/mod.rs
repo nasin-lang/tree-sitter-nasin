@@ -250,7 +250,18 @@ impl Codegen for BinaryCodegen {
             .write_stream(BufWriter::new(out_file))
             .unwrap();
 
-        std::process::Command::new("cc")
+        // TODO: windows support
+        let cc = [
+            "/usr/bin/clang",
+            "/usr/local/bin/clang",
+            "/usr/bin/gcc",
+            "/usr/local/bin/gcc",
+        ]
+        .into_iter()
+        .find(|path| std::fs::metadata(path).is_ok())
+        .expect("Could not find clang or gcc");
+
+        std::process::Command::new(cc)
             .arg("-nostartfiles")
             .arg("-o")
             .arg(file)
