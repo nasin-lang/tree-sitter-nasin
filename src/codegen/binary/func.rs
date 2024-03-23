@@ -7,7 +7,7 @@ use cranelift_object::ObjectModule;
 use itertools::izip;
 
 use super::{type_gen::TypeGen, variable_ref::VariableRef};
-use crate::proto::lex;
+use crate::proto::m_ir;
 
 pub struct FnCodegen<'a> {
     pub module: &'a mut ObjectModule,
@@ -38,7 +38,7 @@ impl<'a> FnCodegen<'a> {
         func: &'a mut Function,
         func_ctx: &'a mut FunctionBuilderContext,
         symbols: HashMap<String, VariableRef>,
-        decl: &lex::FnDecl,
+        decl: &m_ir::FnDecl,
     ) {
         let mut this = Self::new(module, func, func_ctx, symbols);
 
@@ -55,16 +55,16 @@ impl<'a> FnCodegen<'a> {
         this.finalize();
     }
 
-    pub fn build_value(&mut self, lex_value: &lex::Value) -> Value {
+    pub fn build_value(&mut self, lex_value: &m_ir::Value) -> Value {
         match lex_value.value.as_ref() {
-            Some(lex::value::Value::Num(num)) => {
+            Some(m_ir::value::Value::Num(num)) => {
                 // maybe this parsing should be handled by the lexer
                 self.builder
                     .ins()
                     // FIXME: hardcoded type
                     .iconst(types::I32, num.parse::<i64>().unwrap())
             }
-            Some(lex::value::Value::Ident(ident)) => {
+            Some(m_ir::value::Value::Ident(ident)) => {
                 let var_ref = self
                     .variables
                     .get(ident)
@@ -84,7 +84,7 @@ impl<'a> FnCodegen<'a> {
         self.variables.insert(name.to_string(), var);
     }
 
-    pub fn create_entry_block(&mut self, args: &[String], args_ty: &[lex::Type]) -> Block {
+    pub fn create_entry_block(&mut self, args: &[String], args_ty: &[m_ir::Type]) -> Block {
         let entry_block = self.builder.create_block();
         self.builder
             .append_block_params_for_function_params(entry_block);
@@ -102,14 +102,14 @@ impl<'a> FnCodegen<'a> {
         entry_block
     }
 
-    pub fn instr(&mut self, instr: &lex::instr::Instr) {
+    pub fn instr(&mut self, instr: &m_ir::instr::Instr) {
         match instr {
-            lex::instr::Instr::Assign(assign) => {
+            m_ir::instr::Instr::Assign(assign) => {
                 let ty = self.module.get_type(&assign.r#type);
                 let value = self.build_value(&assign.value);
                 self.store_value(&assign.name, ty, value);
             }
-            lex::instr::Instr::BinOp(bin_op) => {
+            m_ir::instr::Instr::BinOp(bin_op) => {
                 let ty = self.module.get_type(&bin_op.r#type);
                 // Different instructions for different types, might want to use some kind of
                 // abstraction for this
@@ -119,26 +119,26 @@ impl<'a> FnCodegen<'a> {
                 let tmp = match ty {
                     // FIXME: unsigned types
                     types::I8 | types::I16 | types::I32 | types::I64 => match bin_op.op() {
-                        lex::BinOpType::Add => self.builder.ins().iadd(left, right),
-                        lex::BinOpType::Sub => self.builder.ins().isub(left, right),
-                        lex::BinOpType::Mul => self.builder.ins().imul(left, right),
-                        lex::BinOpType::Div => self.builder.ins().sdiv(left, right),
-                        lex::BinOpType::Mod => self.builder.ins().srem(left, right),
-                        lex::BinOpType::Pow => {
+                        m_ir::BinOpType::Add => self.builder.ins().iadd(left, right),
+                        m_ir::BinOpType::Sub => self.builder.ins().isub(left, right),
+                        m_ir::BinOpType::Mul => self.builder.ins().imul(left, right),
+                        m_ir::BinOpType::Div => self.builder.ins().sdiv(left, right),
+                        m_ir::BinOpType::Mod => self.builder.ins().srem(left, right),
+                        m_ir::BinOpType::Pow => {
                             // TODO: exponentiation by squaring
                             // https://stackoverflow.com/a/101613
                             self.builder.ins().imul(left, right)
                         }
                     },
                     types::F32 | types::F64 => match bin_op.op() {
-                        lex::BinOpType::Add => self.builder.ins().fadd(left, right),
-                        lex::BinOpType::Sub => self.builder.ins().fsub(left, right),
-                        lex::BinOpType::Mul => self.builder.ins().fmul(left, right),
-                        lex::BinOpType::Div => self.builder.ins().fdiv(left, right),
-                        lex::BinOpType::Mod => {
+                        m_ir::BinOpType::Add => self.builder.ins().fadd(left, right),
+                        m_ir::BinOpType::Sub => self.builder.ins().fsub(left, right),
+                        m_ir::BinOpType::Mul => self.builder.ins().fmul(left, right),
+                        m_ir::BinOpType::Div => self.builder.ins().fdiv(left, right),
+                        m_ir::BinOpType::Mod => {
                             panic!("Modulo is not defined for floating point numbers")
                         }
-                        lex::BinOpType::Pow => {
+                        m_ir::BinOpType::Pow => {
                             todo!()
                         }
                     },
@@ -151,7 +151,7 @@ impl<'a> FnCodegen<'a> {
                 let ptr_ty = self.module.target_config().pointer_type();
                 self.store_value(&bin_op.name, ptr_ty, tmp);
             }
-            lex::instr::Instr::FnCall(fn_call) => {
+            m_ir::instr::Instr::FnCall(fn_call) => {
                 let mut args = Vec::new();
                 for arg in fn_call.args.iter() {
                     args.push(self.build_value(arg));
@@ -163,7 +163,7 @@ impl<'a> FnCodegen<'a> {
                     self.store_value(&fn_call.name, ty, tmp);
                 }
             }
-            lex::instr::Instr::FnReturn(fn_return) => {
+            m_ir::instr::Instr::FnReturn(fn_return) => {
                 if fn_return.value.is_none() {
                     self.builder.ins().return_(&[]);
                 } else {
@@ -171,7 +171,7 @@ impl<'a> FnCodegen<'a> {
                     self.builder.ins().return_(&[value]);
                 }
             }
-            lex::instr::Instr::BodyReturn(body_return) => {
+            m_ir::instr::Instr::BodyReturn(body_return) => {
                 let value = self.build_value(&body_return);
                 self.last_result.clear();
                 self.last_result.push(value);

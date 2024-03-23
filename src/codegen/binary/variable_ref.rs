@@ -2,7 +2,7 @@ use cranelift_codegen::ir::{FuncRef, Function, InstBuilder, MemFlags, Value};
 use cranelift_frontend::FunctionBuilder;
 use cranelift_module::{DataId, FuncId, Module};
 
-use crate::proto::lex;
+use crate::proto::m_ir;
 
 use super::type_gen::TypeGen;
 
@@ -14,9 +14,9 @@ use super::type_gen::TypeGen;
 #[derive(Debug, Clone)]
 pub enum VariableRef {
     ImmPrimitive(Value),
-    GlobalPrimitive(DataId, lex::Type),
-    ExternalFunc(FuncId, Function, lex::FnType),
-    GlobalFunc(FuncId, Function, lex::FnType),
+    GlobalPrimitive(DataId, m_ir::Type),
+    ExternalFunc(FuncId, Function, m_ir::FnType),
+    GlobalFunc(FuncId, Function, m_ir::FnType),
     // TODO: mutable and aggregate types
 }
 

@@ -1,5 +1,5 @@
 pub mod codegen;
-pub mod lexer;
+pub mod module_builder;
 pub mod proto;
 pub mod tree_sitter_utils;
 
@@ -57,7 +57,7 @@ fn main() {
 
             println!("{}\n", tree.root_node().to_sexp());
 
-            let module = lexer::Lexer::parse(
+            let module = module_builder::ModuleBuilder::parse(
                 name.to_str().expect("What even is this name").to_string(),
                 &src,
                 &tree.root_node(),
@@ -80,7 +80,7 @@ fn main() {
                     println!("{}", tree.root_node().to_sexp());
                 }
                 ShowTarget::Lex => {
-                    let module = lexer::Lexer::parse(
+                    let module = module_builder::ModuleBuilder::parse(
                         name.to_str().expect("What even is this name").to_string(),
                         &src,
                         &tree.root_node(),

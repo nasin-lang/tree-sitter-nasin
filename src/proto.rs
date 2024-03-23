@@ -18,12 +18,12 @@ where
     }
 }
 
-pub mod lex {
+pub mod m_ir {
     use std::iter::zip;
 
     use super::*;
 
-    include!(concat!(env!("OUT_DIR"), "/torvo.lex.rs"));
+    include!(concat!(env!("OUT_DIR"), "/torvo.m_ir.rs"));
 
     impl Eq for Type {}
 

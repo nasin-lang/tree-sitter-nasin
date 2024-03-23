@@ -1,6 +1,6 @@
 syntax = "proto2";
 
-package torvo.lex;
+package torvo.m_ir;
 
 message Module {
     required string name    = 1;

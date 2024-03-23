@@ -6,19 +6,19 @@ use tree_sitter as ts;
 use self::registry::ValueTypeDeps;
 use self::types::{ambig, binop_sig, fn_type, merge_types, primitive, types_iter};
 use self::{registry::Registry, types::num_type};
-use crate::proto::lex;
+use crate::proto::m_ir;
 use crate::tree_sitter_utils::TreeSitterUtils;
 
-pub struct Lexer<'a> {
+pub struct ModuleBuilder<'a> {
     pub name: String,
     pub source: &'a str,
     registry: Registry,
-    symbols: Vec<lex::Symbol>,
+    symbols: Vec<m_ir::Symbol>,
 }
 
-impl<'a> Lexer<'a> {
+impl<'a> ModuleBuilder<'a> {
     pub fn new(name: String, source: &'a str) -> Self {
-        Lexer {
+        ModuleBuilder {
             name,
             source,
             symbols: Vec::new(),
@@ -26,10 +26,10 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    pub fn parse(name: String, source: &'a str, node: &'a ts::Node<'a>) -> lex::Module {
+    pub fn parse(name: String, source: &'a str, node: &'a ts::Node<'a>) -> m_ir::Module {
         node.of_kind("root");
 
-        let mut this = Lexer::new(name, source);
+        let mut this = ModuleBuilder::new(name, source);
 
         for sym_node in node.iter_children() {
             this.add_symbol(sym_node);
@@ -55,8 +55,8 @@ impl<'a> Lexer<'a> {
                     params.push(builder.registry.use_name(Some(param_name)).to_string());
 
                     let ty = param_node.field("type").as_ref().map_or(
-                        lex::Type {
-                            r#type: Some(lex::r#type::Type::Unknown(true)),
+                        m_ir::Type {
+                            r#type: Some(m_ir::r#type::Type::Unknown(true)),
                         },
                         |ty_node| builder.parse_type(ty_node),
                     );
@@ -70,8 +70,8 @@ impl<'a> Lexer<'a> {
                 }
 
                 let mut ret_ty = node.field("ret_type").as_ref().map_or(
-                    lex::Type {
-                        r#type: Some(lex::r#type::Type::Unknown(true)),
+                    m_ir::Type {
+                        r#type: Some(m_ir::r#type::Type::Unknown(true)),
                     },
                     |ty_node| builder.parse_type(ty_node),
                 );
@@ -85,19 +85,19 @@ impl<'a> Lexer<'a> {
                     .insert_value_type(&name, ty.clone(), ValueTypeDeps::default());
 
                 let (ret, _) = builder.add_expr(&node.required_field("return"), None);
-                builder.body.push(lex::Instr {
-                    instr: Some(lex::instr::Instr::FnReturn(ret.clone())),
+                builder.body.push(m_ir::Instr {
+                    instr: Some(m_ir::instr::Instr::FnReturn(ret.clone())),
                 });
 
-                if let lex::value::Value::Ident(ident) = ret.value.as_ref().unwrap() {
+                if let m_ir::value::Value::Ident(ident) = ret.value.as_ref().unwrap() {
                     builder.registry.set_value_type(&ident, ret_ty, Some(&name));
                 }
 
                 ret_ty = builder.registry.value_type(&ret);
 
                 for (i, arg) in params.iter().enumerate() {
-                    let arg_value = lex::Value {
-                        value: Some(lex::value::Value::Ident(arg.to_string())),
+                    let arg_value = m_ir::Value {
+                        value: Some(m_ir::value::Value::Ident(arg.to_string())),
                     };
                     let parsed_ty = builder.registry.value_type(&arg_value);
                     params_ty[i] = parsed_ty;
@@ -108,10 +108,10 @@ impl<'a> Lexer<'a> {
                 self.registry.set_value_type(&name, ty.clone(), None);
                 builder.registry.set_value_type(&name, ty, None);
 
-                self.symbols.push(lex::Symbol {
-                    symbol: Some(lex::symbol::Symbol::FnDecl(lex::FnDecl {
+                self.symbols.push(m_ir::Symbol {
+                    symbol: Some(m_ir::symbol::Symbol::FnDecl(m_ir::FnDecl {
                         name,
-                        r#type: lex::FnType {
+                        r#type: m_ir::FnType {
                             ret: vec![ret_ty],
                             args: params_ty,
                         },
@@ -128,8 +128,8 @@ impl<'a> Lexer<'a> {
                 let mut builder = InstrBuilder::new(&mut self.registry, self.source);
 
                 let ty = node.field("type").map_or(
-                    lex::Type {
-                        r#type: Some(lex::r#type::Type::Unknown(true)),
+                    m_ir::Type {
+                        r#type: Some(m_ir::r#type::Type::Unknown(true)),
                     },
                     |ty| builder.parse_type(&ty),
                 );
@@ -141,11 +141,11 @@ impl<'a> Lexer<'a> {
                     .insert_value_type(&name, ty.clone(), ValueTypeDeps::default());
 
                 let (value, _) = builder.add_expr(&node.required_field("value"), None);
-                builder.body.push(lex::Instr {
-                    instr: Some(lex::instr::Instr::BodyReturn(value.clone())),
+                builder.body.push(m_ir::Instr {
+                    instr: Some(m_ir::instr::Instr::BodyReturn(value.clone())),
                 });
 
-                if let lex::value::Value::Ident(ident) = value.value.as_ref().unwrap() {
+                if let m_ir::value::Value::Ident(ident) = value.value.as_ref().unwrap() {
                     builder.registry.set_value_type(&ident, ty, Some(&name));
                 }
 
@@ -158,8 +158,8 @@ impl<'a> Lexer<'a> {
                 // all implemented in the same scope
                 self.registry.append_names(&builder.registry);
 
-                self.symbols.push(lex::Symbol {
-                    symbol: Some(lex::symbol::Symbol::DataDecl(lex::DataDecl {
+                self.symbols.push(m_ir::Symbol {
+                    symbol: Some(m_ir::symbol::Symbol::DataDecl(m_ir::DataDecl {
                         name,
                         r#type: ty,
                         body: builder.finish(),
@@ -170,8 +170,8 @@ impl<'a> Lexer<'a> {
         };
     }
 
-    pub fn finish(self) -> lex::Module {
-        lex::Module {
+    pub fn finish(self) -> m_ir::Module {
+        m_ir::Module {
             name: self.name,
             symbols: self.symbols,
         }
@@ -180,7 +180,7 @@ impl<'a> Lexer<'a> {
 
 struct InstrBuilder<'a> {
     registry: Registry,
-    body: Vec<lex::Instr>,
+    body: Vec<m_ir::Instr>,
     source: &'a str,
 }
 
@@ -193,23 +193,23 @@ impl<'a> InstrBuilder<'a> {
         }
     }
 
-    pub fn finish(mut self) -> Vec<lex::Instr> {
-        let name_value = |name: &str| lex::Value {
-            value: Some(lex::value::Value::Ident(name.to_string())),
+    pub fn finish(mut self) -> Vec<m_ir::Instr> {
+        let name_value = |name: &str| m_ir::Value {
+            value: Some(m_ir::value::Value::Ident(name.to_string())),
         };
 
         for inst in self.body.iter_mut() {
             // Instructions with a type should have their type loaded from the registry
             match inst.instr.as_mut() {
-                Some(lex::instr::Instr::BinOp(binop)) => {
+                Some(m_ir::instr::Instr::BinOp(binop)) => {
                     let value = name_value(&binop.name);
                     binop.r#type = self.registry.value_type(&value);
                 }
-                Some(lex::instr::Instr::FnCall(fncall)) => {
+                Some(m_ir::instr::Instr::FnCall(fncall)) => {
                     let value = name_value(&fncall.name);
                     fncall.r#type = self.registry.value_type(&value);
                 }
-                Some(lex::instr::Instr::Assign(assign)) => {
+                Some(m_ir::instr::Instr::Assign(assign)) => {
                     let value = name_value(&assign.name);
                     assign.r#type = self.registry.value_type(&value);
                 }
@@ -220,7 +220,7 @@ impl<'a> InstrBuilder<'a> {
         self.body
     }
 
-    pub fn add_stmt(&mut self, node: &ts::Node) -> (lex::Value, lex::Type) {
+    pub fn add_stmt(&mut self, node: &ts::Node) -> (m_ir::Value, m_ir::Type) {
         match node.kind() {
             "var_decl" => {
                 let var_name_node = node.required_field("pat").of_kind("ident");
@@ -240,11 +240,11 @@ impl<'a> InstrBuilder<'a> {
         }
     }
 
-    pub fn add_expr(&mut self, node: &ts::Node, name: Option<&str>) -> (lex::Value, lex::Type) {
+    pub fn add_expr(&mut self, node: &ts::Node, name: Option<&str>) -> (m_ir::Value, m_ir::Type) {
         match node.kind() {
             "number" => {
-                let mut value = lex::Value {
-                    value: Some(lex::value::Value::Num(
+                let mut value = m_ir::Value {
+                    value: Some(m_ir::value::Value::Num(
                         node.get_text(self.source).to_string(),
                     )),
                 };
@@ -282,17 +282,17 @@ impl<'a> InstrBuilder<'a> {
 
                 let op_node = node.required_field("op");
 
-                self.body.push(lex::Instr {
-                    instr: Some(lex::instr::Instr::BinOp(lex::BinOp {
+                self.body.push(m_ir::Instr {
+                    instr: Some(m_ir::instr::Instr::BinOp(m_ir::BinOp {
                         name: name.clone(),
                         r#type: ty.clone(),
                         op: match op_node.get_text(self.source) {
-                            "+" => lex::BinOpType::Add,
-                            "-" => lex::BinOpType::Sub,
-                            "%" => lex::BinOpType::Mod,
-                            "*" => lex::BinOpType::Mul,
-                            "/" => lex::BinOpType::Div,
-                            "**" => lex::BinOpType::Pow,
+                            "+" => m_ir::BinOpType::Add,
+                            "-" => m_ir::BinOpType::Sub,
+                            "%" => m_ir::BinOpType::Mod,
+                            "*" => m_ir::BinOpType::Mul,
+                            "/" => m_ir::BinOpType::Div,
+                            "**" => m_ir::BinOpType::Pow,
                             _ => unreachable!(),
                         }
                         .into(),
@@ -301,8 +301,8 @@ impl<'a> InstrBuilder<'a> {
                     })),
                 });
 
-                let value = lex::Value {
-                    value: Some(lex::value::Value::Ident(name)),
+                let value = m_ir::Value {
+                    value: Some(m_ir::value::Value::Ident(name)),
                 };
 
                 (value, ty)
@@ -313,8 +313,8 @@ impl<'a> InstrBuilder<'a> {
                     .get_internal_name(node.get_text(self.source))
                     .unwrap();
 
-                let mut value = lex::Value {
-                    value: Some(lex::value::Value::Ident(internal_name.to_string())),
+                let mut value = m_ir::Value {
+                    value: Some(m_ir::value::Value::Ident(internal_name.to_string())),
                 };
 
                 let ty = self.registry.value_type(&value);
@@ -334,7 +334,7 @@ impl<'a> InstrBuilder<'a> {
 
                 let (callee, callee_ty) = self.add_expr(&node.required_field("callee"), None);
                 let callee_name = match callee.value {
-                    Some(lex::value::Value::Ident(name)) => {
+                    Some(m_ir::value::Value::Ident(name)) => {
                         self.registry.get_internal_name(&name).unwrap().to_string()
                     }
                     _ => {
@@ -345,7 +345,7 @@ impl<'a> InstrBuilder<'a> {
 
                 let fn_sigs: Vec<_> = types_iter(&callee_ty)
                     .filter_map(|ty| {
-                        if let Some(lex::r#type::Type::Fn(fn_ty)) = ty.r#type.as_ref() {
+                        if let Some(m_ir::r#type::Type::Fn(fn_ty)) = ty.r#type.as_ref() {
                             Some(fn_ty.clone())
                         } else {
                             None
@@ -372,8 +372,8 @@ impl<'a> InstrBuilder<'a> {
                     },
                 );
 
-                self.body.push(lex::Instr {
-                    instr: Some(lex::instr::Instr::FnCall(lex::FnCall {
+                self.body.push(m_ir::Instr {
+                    instr: Some(m_ir::instr::Instr::FnCall(m_ir::FnCall {
                         name: name.clone(),
                         r#type: ret_ty.clone(),
                         callee: callee_name,
@@ -381,8 +381,8 @@ impl<'a> InstrBuilder<'a> {
                     })),
                 });
 
-                let value = lex::Value {
-                    value: Some(lex::value::Value::Ident(name)),
+                let value = m_ir::Value {
+                    value: Some(m_ir::value::Value::Ident(name)),
                 };
 
                 (value, ret_ty.clone())
@@ -398,7 +398,7 @@ impl<'a> InstrBuilder<'a> {
         }
     }
 
-    pub fn parse_type(&mut self, node: &ts::Node<'_>) -> lex::Type {
+    pub fn parse_type(&mut self, node: &ts::Node<'_>) -> m_ir::Type {
         match node.kind() {
             "ident" => {
                 match node.get_text(self.source) {
@@ -423,9 +423,9 @@ impl<'a> InstrBuilder<'a> {
         }
     }
 
-    pub fn assign(&mut self, name: &str, value: lex::Value, ty: lex::Type) -> lex::Value {
-        self.body.push(lex::Instr {
-            instr: Some(lex::instr::Instr::Assign(lex::Assign {
+    pub fn assign(&mut self, name: &str, value: m_ir::Value, ty: m_ir::Type) -> m_ir::Value {
+        self.body.push(m_ir::Instr {
+            instr: Some(m_ir::instr::Instr::Assign(m_ir::Assign {
                 name: name.to_string(),
                 r#type: ty.clone(),
                 value,
@@ -435,8 +435,8 @@ impl<'a> InstrBuilder<'a> {
         self.registry
             .insert_value_type(&name, ty.clone(), ValueTypeDeps::default());
 
-        lex::Value {
-            value: Some(lex::value::Value::Ident(name.to_string())),
+        m_ir::Value {
+            value: Some(m_ir::value::Value::Ident(name.to_string())),
         }
     }
 }

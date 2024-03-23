@@ -9,11 +9,11 @@ clean:
 	cargo clean
 
 .PHONY: proto
-proto: proto/lex.proto
+proto: proto/m_ir.proto
 	cargo clean && cargo build
 
 RUST_SRC = $(shell find src/ -type f -name '*.rs')
-bin/torvo: Cargo.toml build.rs $(RUST_SRC) proto/lex.proto tree-sitter-torvo/src/parser.c
+bin/torvo: Cargo.toml build.rs $(RUST_SRC) proto/m_ir.proto tree-sitter-torvo/src/parser.c
 	cargo build     \
 	&& mkdir -p bin \
 	&& cp -T target/debug/torvo bin/torvo

@@ -1,19 +1,19 @@
 use std::collections::{HashMap, HashSet};
 
 use super::types::{eq_types, match_types, merge_types, num_type};
-use crate::{lexer::types::ambig, proto::lex};
+use crate::{prepare::types::ambig, proto::m_ir};
 
 #[derive(Debug, Clone)]
 struct ValueType {
-    ty: lex::Type,
+    ty: m_ir::Type,
     produced_by: ValueTypeDeps,
     consumed_by: HashSet<String>,
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct ValueTypeDeps {
-    pub sig: Vec<lex::FnType>,
-    pub refs: Vec<lex::Value>,
+    pub sig: Vec<m_ir::FnType>,
+    pub refs: Vec<m_ir::Value>,
 }
 
 /// Arguments used to constrain a type, is used to avoid deep recursion in the type inference by
@@ -21,14 +21,14 @@ pub struct ValueTypeDeps {
 #[derive(Debug, PartialEq, Eq)]
 enum TypeConstraintArgs {
     Direct {
-        ty: lex::Type,
+        ty: m_ir::Type,
     },
     TopDown {
         produced_by: String,
-        producer_ty: lex::Type,
+        producer_ty: m_ir::Type,
     },
     BottomUp {
-        ty: lex::Type,
+        ty: m_ir::Type,
         consumed_by: String,
     },
 }
@@ -105,22 +105,22 @@ impl Registry {
         }
     }
 
-    pub fn value_type(&self, value: &lex::Value) -> lex::Type {
+    pub fn value_type(&self, value: &m_ir::Value) -> m_ir::Type {
         match &value.value {
-            Some(lex::value::Value::Ident(ident)) => match self.value_types.get(ident) {
+            Some(m_ir::value::Value::Ident(ident)) => match self.value_types.get(ident) {
                 Some(value_type) => value_type.ty.clone(),
-                None => lex::Type {
-                    r#type: Some(lex::r#type::Type::Unknown(true)),
+                None => m_ir::Type {
+                    r#type: Some(m_ir::r#type::Type::Unknown(true)),
                 },
             },
-            Some(lex::value::Value::Num(num)) => num_type(num),
-            None => lex::Type {
-                r#type: Some(lex::r#type::Type::Unknown(true)),
+            Some(m_ir::value::Value::Num(num)) => num_type(num),
+            None => m_ir::Type {
+                r#type: Some(m_ir::r#type::Type::Unknown(true)),
             },
         }
     }
 
-    pub fn insert_value_type(&mut self, ident: &str, ty: lex::Type, produced_by: ValueTypeDeps) {
+    pub fn insert_value_type(&mut self, ident: &str, ty: m_ir::Type, produced_by: ValueTypeDeps) {
         self.value_types.insert(
             ident.to_string(),
             ValueType {
@@ -132,7 +132,7 @@ impl Registry {
         self.constrain_value_type_chain(ident, None);
     }
 
-    pub fn set_value_type(&mut self, ident: &str, ty: lex::Type, consumed_by: Option<&str>) {
+    pub fn set_value_type(&mut self, ident: &str, ty: m_ir::Type, consumed_by: Option<&str>) {
         self.constrain_value_type_chain(
             ident,
             if let Some(consumed_by) = consumed_by {
@@ -183,7 +183,7 @@ impl Registry {
                         .refs
                         .iter()
                         .position(|ref_value| {
-                            let Some(lex::value::Value::Ident(ref_ident)) =
+                            let Some(m_ir::value::Value::Ident(ref_ident)) =
                                 &ref_value.value.as_ref()
                             else {
                                 return false;
@@ -246,7 +246,7 @@ impl Registry {
 
             // constrain the types that this depends on
             for (i, ref_value) in value_type.produced_by.refs.iter().enumerate() {
-                let Some(lex::value::Value::Ident(ref_ident)) = &ref_value.value.as_ref() else {
+                let Some(m_ir::value::Value::Ident(ref_ident)) = &ref_value.value.as_ref() else {
                     continue;
                 };
 

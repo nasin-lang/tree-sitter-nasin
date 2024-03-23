@@ -20,12 +20,12 @@ use self::func::FnCodegen;
 use self::type_gen::TypeGen;
 use self::variable_ref::VariableRef;
 use super::traits::Codegen;
-use crate::proto::lex;
+use crate::proto::m_ir;
 
 pub struct BinaryCodegen {
     pub module: ObjectModule,
     last_func_num: u32,
-    data_list: Vec<lex::DataDecl>,
+    data_list: Vec<m_ir::DataDecl>,
     symbols_ref: HashMap<String, VariableRef>,
 }
 
@@ -58,9 +58,9 @@ impl BinaryCodegen {
                 .declare_function("exit", Linkage::Import, &func.signature)
                 .unwrap();
 
-            let fn_type = lex::FnType {
-                args: vec![lex::Type {
-                    r#type: Some(lex::r#type::Type::Primitive(lex::PrimType::I32.into())),
+            let fn_type = m_ir::FnType {
+                args: vec![m_ir::Type {
+                    r#type: Some(m_ir::r#type::Type::Primitive(m_ir::PrimType::I32.into())),
                 }],
                 ret: vec![],
             };
@@ -145,7 +145,7 @@ impl BinaryCodegen {
 }
 
 impl Codegen for BinaryCodegen {
-    fn declare_function(&mut self, decl: &lex::FnDecl) {
+    fn declare_function(&mut self, decl: &m_ir::FnDecl) {
         let mut sig = self.module.make_signature();
 
         for arg_ty in decl.r#type.args.iter() {
@@ -180,7 +180,7 @@ impl Codegen for BinaryCodegen {
         );
     }
 
-    fn build_function(&mut self, decl: &lex::FnDecl) {
+    fn build_function(&mut self, decl: &m_ir::FnDecl) {
         let symbols = self.symbols_ref.clone();
 
         let Some(VariableRef::GlobalFunc(_, func, _)) = self.symbols_ref.get_mut(&decl.name) else {
@@ -192,7 +192,7 @@ impl Codegen for BinaryCodegen {
         FnCodegen::build(&mut self.module, func, &mut func_ctx, symbols, &decl);
     }
 
-    fn declare_data(&mut self, decl: &lex::DataDecl) {
+    fn declare_data(&mut self, decl: &m_ir::DataDecl) {
         if decl.name == "main" {
             self.data_list.push(decl.clone());
             return;
