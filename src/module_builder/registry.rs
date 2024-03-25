@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
-use super::types::{eq_types, match_types, merge_types, num_type};
-use crate::{prepare::types::ambig, proto::m_ir};
+use super::types::{ambig, eq_types, match_types, merge_types, num_type};
+use crate::proto::m_ir;
 
 #[derive(Debug, Clone)]
 struct ValueType {
@@ -35,7 +35,7 @@ enum TypeConstraintArgs {
 
 /// Handles name dedup, anonymous variable naming and non-target specific name mangling
 /// Stores known types and handles type checking and inference
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Registry {
     /// Maps original names to the internal ones. Whenever a name is shadowed, it's added to the
     /// Vec at the same entry, and the last one will be the one used when the name is referenced
@@ -50,13 +50,6 @@ impl Registry {
         Self {
             name_map: HashMap::new(),
             value_types: HashMap::new(),
-        }
-    }
-
-    pub fn with_parent(parent: &Registry) -> Self {
-        Self {
-            name_map: parent.name_map.clone(),
-            value_types: parent.value_types.clone(),
         }
     }
 
@@ -92,17 +85,6 @@ impl Registry {
         self.name_map
             .get(original_name)
             .map(|names| names.last().unwrap().as_str())
-    }
-
-    /// Append the names from the given registry to this one
-    pub fn append_names(&mut self, other: &Registry) {
-        for (key, value) in other.name_map.iter() {
-            let mut value = value.clone();
-            self.name_map
-                .entry(key.clone())
-                .and_modify(|current| current.append(&mut value))
-                .or_insert(value);
-        }
     }
 
     pub fn value_type(&self, value: &m_ir::Value) -> m_ir::Type {
