@@ -1,124 +1,167 @@
 use std::collections::HashMap;
 
-use cranelift_codegen::ir::{types, Block, Function, InstBuilder, Value};
+use cranelift_codegen::ir::types;
+use cranelift_codegen::ir::{FuncRef, Function, InstBuilder, MemFlags, Value};
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
-use cranelift_module::Module;
+use cranelift_module::{DataId, FuncId, Module};
 use cranelift_object::ObjectModule;
 use itertools::izip;
 
-use super::{type_gen::TypeGen, variable_ref::VariableRef};
+use super::type_gen::TypeGen;
 use crate::proto::m_ir;
 
+// Cranelift's variables are for mutable primitives, immutable primitive can just use values.
+// Aggregate values can be either stack slots, if they have known length and are never moved, or
+// heap allocated if else, regardless of mutability
+
+pub struct GlobalBinding {
+    pub symbol_name: String,
+    pub data_id: DataId,
+    pub ty: m_ir::Type,
+    pub native_ty: types::Type,
+}
+
+pub struct FuncBinding {
+    pub symbol_name: String,
+    pub func_id: FuncId,
+    pub params: Vec<m_ir::Param>,
+    pub ret: Vec<m_ir::Type>,
+}
+
+pub struct LocalBinding {
+    pub value: Option<Value>,
+    pub ty: m_ir::Type,
+    pub native_ty: types::Type,
+}
+
 pub struct FnCodegen<'a> {
+    pub symbol_name: String,
     pub module: &'a mut ObjectModule,
     pub builder: FunctionBuilder<'a>,
-    // Store the last values of a BodyResult, so they can be accessed later when managing the
-    // control flow, manly for `if` and when building data initialization
-    pub last_result: Vec<Value>,
-    pub variables: HashMap<String, VariableRef>,
+    pub globals: &'a [GlobalBinding],
+    pub funcs: &'a [FuncBinding],
+    pub params: Vec<LocalBinding>,
+    pub locals: Vec<LocalBinding>,
+    global_ptrs: HashMap<u32, Value>,
+    func_refs: HashMap<u32, FuncRef>,
 }
 
 impl<'a> FnCodegen<'a> {
     pub fn new(
+        symbol_name: &str,
         module: &'a mut ObjectModule,
         func: &'a mut Function,
         func_ctx: &'a mut FunctionBuilderContext,
-        symbols: HashMap<String, VariableRef>,
+        globals: &'a [GlobalBinding],
+        funcs: &'a [FuncBinding],
+        params: &'a [m_ir::Param],
+        locals: &'a [m_ir::Local],
     ) -> Self {
+        let mut builder = FunctionBuilder::new(func, func_ctx);
+
+        let entry_block = builder.create_block();
+        builder.append_block_params_for_function_params(entry_block);
+
+        let params = izip!(params, builder.block_params(entry_block))
+            .map(|(param, value)| LocalBinding {
+                value: Some(value.clone()),
+                ty: param.r#type.clone(),
+                native_ty: module.get_type(&param.r#type),
+            })
+            .collect();
+
+        builder.switch_to_block(entry_block);
+
+        let locals = locals
+            .iter()
+            .map(|local| LocalBinding {
+                value: None,
+                ty: local.r#type.clone(),
+                native_ty: module.get_type(&local.r#type),
+            })
+            .collect();
+
         FnCodegen {
+            symbol_name: symbol_name.to_string(),
             module,
-            variables: symbols,
-            last_result: Vec::new(),
-            builder: FunctionBuilder::new(func, func_ctx),
+            builder,
+            globals,
+            funcs,
+            params,
+            locals,
+            global_ptrs: HashMap::new(),
+            func_refs: HashMap::new(),
         }
     }
 
-    pub fn build(
-        module: &'a mut ObjectModule,
-        func: &'a mut Function,
-        func_ctx: &'a mut FunctionBuilderContext,
-        symbols: HashMap<String, VariableRef>,
-        decl: &m_ir::FnDecl,
-    ) {
-        let mut this = Self::new(module, func, func_ctx, symbols);
-
-        this.create_entry_block(&decl.args, &decl.r#type.args);
-
-        for instr in decl.body.iter() {
-            if let Some(instr) = instr.instr.as_ref() {
-                this.instr(instr);
-            }
-        }
-
-        println!("<{}>: {}", decl.name, &this.builder.func);
-
-        this.finalize();
-    }
-
-    pub fn build_value(&mut self, lex_value: &m_ir::Value) -> Value {
-        match lex_value.value.as_ref() {
-            Some(m_ir::value::Value::Num(num)) => {
-                // maybe this parsing should be handled by the lexer
-                self.builder
-                    .ins()
-                    // FIXME: hardcoded type
-                    .iconst(types::I32, num.parse::<i64>().unwrap())
-            }
-            Some(m_ir::value::Value::Ident(ident)) => {
-                let var_ref = self
-                    .variables
-                    .get(ident)
-                    .expect(&format!("Variable {} not found", ident));
-
-                var_ref.get_value(&mut self.module, &mut self.builder)
-            }
+    pub fn get_value(&self, mir_value: &m_ir::Value) -> Value {
+        let local = match mir_value.value.as_ref() {
+            Some(m_ir::value::Value::Local(idx)) => self.locals.get(*idx as usize),
+            Some(m_ir::value::Value::Param(idx)) => self.params.get(*idx as usize),
             None => {
                 unreachable!();
             }
         }
-    }
+        .expect(&format!("{:?} not found", mir_value));
 
-    pub fn store_value(&mut self, name: &str, _ty: types::Type, value: Value) {
-        // FIXME: check type for what kind of VariableRef to use
-        let var = VariableRef::ImmPrimitive(value);
-        self.variables.insert(name.to_string(), var);
-    }
-
-    pub fn create_entry_block(&mut self, args: &[String], args_ty: &[m_ir::Type]) -> Block {
-        let entry_block = self.builder.create_block();
-        self.builder
-            .append_block_params_for_function_params(entry_block);
-
-        let entry_block_params = self.builder.block_params(entry_block).to_vec();
-        for (arg, arg_ty, block_param) in
-            izip!(args.iter(), args_ty.iter(), entry_block_params.into_iter())
-        {
-            let ty = self.module.get_type(arg_ty);
-            self.store_value(&arg, ty, block_param);
-        }
-
-        self.builder.switch_to_block(entry_block);
-
-        entry_block
+        local.value.as_ref().expect("Value not defined").clone()
     }
 
     pub fn instr(&mut self, instr: &m_ir::instr::Instr) {
         match instr {
-            m_ir::instr::Instr::Assign(assign) => {
-                let ty = self.module.get_type(&assign.r#type);
-                let value = self.build_value(&assign.value);
-                self.store_value(&assign.name, ty, value);
+            m_ir::instr::Instr::Const(v) => {
+                let local = self
+                    .locals
+                    .get_mut(v.target_idx as usize)
+                    .expect("Local not found");
+
+                let value = match &v.value {
+                    Some(m_ir::r#const::Value::Number(num)) => self
+                        .builder
+                        .ins()
+                        .iconst(local.native_ty, num.parse::<i64>().expect("Invalid number")),
+                    None => unreachable!(),
+                };
+
+                local.value = Some(value);
             }
-            m_ir::instr::Instr::BinOp(bin_op) => {
-                let ty = self.module.get_type(&bin_op.r#type);
+            m_ir::instr::Instr::LoadGlobal(v) => {
+                let global = self
+                    .globals
+                    .get(v.global_idx as usize)
+                    .expect("Global not found");
+
+                let ptr = self.get_global_ptr(v.global_idx);
+
+                let value = self
+                    .builder
+                    .ins()
+                    .load(global.native_ty, MemFlags::new(), ptr, 0);
+
+                let local = self.locals.get_mut(v.target_idx as usize).unwrap();
+                local.value = Some(value);
+            }
+            m_ir::instr::Instr::StoreGlobal(v) => {
+                let ptr = self.get_global_ptr(v.global_idx);
+
+                let value = self.get_value(&v.value);
+
+                self.builder.ins().store(MemFlags::new(), value, ptr, 0);
+            }
+            m_ir::instr::Instr::BinOp(v) => {
                 // Different instructions for different types, might want to use some kind of
                 // abstraction for this
-                let left = self.build_value(&bin_op.left);
-                let right = self.build_value(&bin_op.right);
+                let left = self.get_value(&v.left);
+                let right = self.get_value(&v.right);
 
-                let tmp = match ty {
+                let local = self
+                    .locals
+                    .get_mut(v.target_idx as usize)
+                    .expect("Local not found");
+
+                let value = match local.native_ty {
                     // FIXME: unsigned types
-                    types::I8 | types::I16 | types::I32 | types::I64 => match bin_op.op() {
+                    types::I8 | types::I16 | types::I32 | types::I64 => match v.op() {
                         m_ir::BinOpType::Add => self.builder.ins().iadd(left, right),
                         m_ir::BinOpType::Sub => self.builder.ins().isub(left, right),
                         m_ir::BinOpType::Mul => self.builder.ins().imul(left, right),
@@ -130,7 +173,7 @@ impl<'a> FnCodegen<'a> {
                             self.builder.ins().imul(left, right)
                         }
                     },
-                    types::F32 | types::F64 => match bin_op.op() {
+                    types::F32 | types::F64 => match v.op() {
                         m_ir::BinOpType::Add => self.builder.ins().fadd(left, right),
                         m_ir::BinOpType::Sub => self.builder.ins().fsub(left, right),
                         m_ir::BinOpType::Mul => self.builder.ins().fmul(left, right),
@@ -143,52 +186,51 @@ impl<'a> FnCodegen<'a> {
                         }
                     },
                     _ => {
-                        panic!("Type {} not supported", ty);
+                        panic!("Type {} not supported", &local.ty);
                     }
                 };
 
-                // FIXME: hardcoded type
-                let ptr_ty = self.module.target_config().pointer_type();
-                self.store_value(&bin_op.name, ptr_ty, tmp);
+                local.value = Some(value);
             }
-            m_ir::instr::Instr::FnCall(fn_call) => {
-                let mut args = Vec::new();
-                for arg in fn_call.args.iter() {
-                    args.push(self.build_value(arg));
-                }
+            m_ir::instr::Instr::FnCall(v) => {
+                let func_ref = match self.func_refs.get(&v.func_idx) {
+                    Some(func_ref) => *func_ref,
+                    None => {
+                        let func = self
+                            .funcs
+                            .get(v.func_idx as usize)
+                            .expect("Function not found");
+                        let func_ref = self
+                            .module
+                            .declare_func_in_func(func.func_id.clone(), &mut self.builder.func);
+                        self.func_refs.insert(v.func_idx, func_ref);
+                        func_ref
+                    }
+                };
 
-                let results = self.call(&fn_call.callee, &args);
-                if let &[tmp] = results {
-                    let ty = self.module.get_type(&fn_call.r#type);
-                    self.store_value(&fn_call.name, ty, tmp);
+                let args = v.args.iter().map(|a| self.get_value(a)).collect::<Vec<_>>();
+
+                let instr = self.builder.ins().call(func_ref, &args);
+                let results = self.builder.inst_results(instr);
+
+                if let &[value] = results {
+                    let local = self
+                        .locals
+                        .get_mut(v.target_idx as usize)
+                        .expect("Local not found");
+
+                    local.value = Some(value);
                 }
             }
             m_ir::instr::Instr::FnReturn(fn_return) => {
                 if fn_return.value.is_none() {
                     self.builder.ins().return_(&[]);
                 } else {
-                    let value = self.build_value(&fn_return);
+                    let value = self.get_value(&fn_return);
                     self.builder.ins().return_(&[value]);
                 }
             }
-            m_ir::instr::Instr::BodyReturn(body_return) => {
-                let value = self.build_value(&body_return);
-                self.last_result.clear();
-                self.last_result.push(value);
-            }
         }
-    }
-
-    pub fn call(&mut self, func_name: &str, args: &[Value]) -> &[Value] {
-        let var_ref = self
-            .variables
-            .get(func_name)
-            .expect(&format!("Function {} not found", func_name));
-
-        let func_ref = var_ref.get_func_ref(&mut self.module, &mut self.builder);
-
-        let instr = self.builder.ins().call(func_ref, args);
-        self.builder.inst_results(instr)
     }
 
     pub fn finalize(mut self) {
@@ -200,5 +242,29 @@ impl<'a> FnCodegen<'a> {
         self.builder.seal_all_blocks();
 
         self.builder.finalize();
+    }
+
+    fn get_global_ptr(&mut self, global_idx: u32) -> Value {
+        match self.global_ptrs.get(&global_idx) {
+            Some(ptr) => ptr.clone(),
+            None => {
+                let global = self
+                    .globals
+                    .get(global_idx as usize)
+                    .expect("Global not found");
+
+                let data = self
+                    .module
+                    .declare_data_in_func(global.data_id.clone(), &mut self.builder.func);
+                let ptr = self
+                    .builder
+                    .ins()
+                    .global_value(self.module.poiter_type(), data);
+
+                self.global_ptrs.insert(global_idx, ptr.clone());
+
+                ptr
+            }
+        }
     }
 }

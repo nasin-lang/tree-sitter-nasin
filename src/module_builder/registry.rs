@@ -1,148 +1,137 @@
 use std::collections::{HashMap, HashSet};
 
-use super::types::{ambig, eq_types, match_types, merge_types, num_type};
+use super::types::{ambig, eq_types, fn_type, match_types, merge_types, unknown_type};
 use crate::proto::m_ir;
+
+#[derive(Debug, Clone, Copy, Hash, Eq, PartialEq)]
+pub enum ValueRef {
+    Func(u32),
+    Global(u32),
+    Local(u32),
+    Param(u32),
+}
+
+impl From<m_ir::Value> for ValueRef {
+    fn from(value: m_ir::Value) -> Self {
+        match value.value {
+            Some(m_ir::value::Value::Local(idx)) => ValueRef::Local(idx),
+            Some(m_ir::value::Value::Param(idx)) => ValueRef::Param(idx),
+            None => unreachable!(),
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 struct ValueType {
     ty: m_ir::Type,
     produced_by: ValueTypeDeps,
-    consumed_by: HashSet<String>,
+    consumed_by: HashSet<ValueRef>,
+}
+
+impl Default for ValueType {
+    fn default() -> Self {
+        Self {
+            ty: unknown_type(),
+            produced_by: ValueTypeDeps::default(),
+            consumed_by: HashSet::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct ValueTypeDeps {
     pub sig: Vec<m_ir::FnType>,
-    pub refs: Vec<m_ir::Value>,
+    pub refs: Vec<ValueRef>,
 }
 
-/// Arguments used to constrain a type, is used to avoid deep recursion in the type inference by
-/// having a vector of constraints that are yet to be resolved
+/// Arguments used to constrain a type, is used to avoid deep recursion in the type
+/// inference by having a vector of constraints that are yet to be resolved
 #[derive(Debug, PartialEq, Eq)]
 enum TypeConstraintArgs {
     Direct {
         ty: m_ir::Type,
     },
     TopDown {
-        produced_by: String,
+        produced_by: ValueRef,
         producer_ty: m_ir::Type,
     },
     BottomUp {
         ty: m_ir::Type,
-        consumed_by: String,
+        consumed_by: ValueRef,
     },
 }
 
-/// Handles name dedup, anonymous variable naming and non-target specific name mangling
-/// Stores known types and handles type checking and inference
+/// Maps identifiers to the last ref (local index, global index, etc) that represents
+/// them. Whenever a identifier is shadowed, its id is updated
 #[derive(Debug, Clone)]
-pub struct Registry {
-    /// Maps original names to the internal ones. Whenever a name is shadowed, it's added to the
-    /// Vec at the same entry, and the last one will be the one used when the name is referenced
-    /// again
-    name_map: HashMap<String, Vec<String>>,
-    /// Maps the types of values to their identifiers
-    value_types: HashMap<String, ValueType>,
+pub struct IdentMap {
+    map: HashMap<String, ValueRef>,
 }
 
-impl Registry {
+impl IdentMap {
     pub fn new() -> Self {
         Self {
-            name_map: HashMap::new(),
-            value_types: HashMap::new(),
+            map: HashMap::new(),
         }
     }
 
-    /// Get a new internal name for the given original name. If the original name is already in use,
-    /// it will be suffixed with a number. If the original name is None, a new temporary name will
-    /// be generated
-    pub fn use_name(&mut self, original_name: Option<&str>) -> String {
-        let original_name = original_name.unwrap_or("");
-        let count = self.count_ident(original_name);
-
-        let internal_name = if original_name == "" {
-            format!("v{}", count + 1)
-        } else {
-            if count > 0 {
-                format!("{}_{}", original_name, count)
-            } else {
-                original_name.to_string()
-            }
-        };
-
-        if !self.name_map.contains_key(original_name) {
-            self.name_map.insert(original_name.to_string(), Vec::new());
-        }
-
-        let internal_names = self.name_map.get_mut(original_name).unwrap();
-        internal_names.push(internal_name.clone());
-
-        internal_name
+    pub fn insert(&mut self, ident: &str, value_ref: ValueRef) {
+        self.map.insert(ident.to_string(), value_ref);
     }
 
-    /// Get the last internal name for the given original name
-    pub fn get_internal_name(&self, original_name: &str) -> Option<&str> {
-        self.name_map
-            .get(original_name)
-            .map(|names| names.last().unwrap().as_str())
+    pub fn get(&self, ident: &str) -> Option<ValueRef> {
+        self.map.get(ident).copied()
     }
 
-    pub fn value_type(&self, value: &m_ir::Value) -> m_ir::Type {
-        match &value.value {
-            Some(m_ir::value::Value::Ident(ident)) => match self.value_types.get(ident) {
-                Some(value_type) => value_type.ty.clone(),
-                None => m_ir::Type {
-                    r#type: Some(m_ir::r#type::Type::Unknown(true)),
-                },
-            },
-            Some(m_ir::value::Value::Num(num)) => num_type(num),
-            None => m_ir::Type {
-                r#type: Some(m_ir::r#type::Type::Unknown(true)),
-            },
-        }
+    pub fn clear(&mut self) {
+        self.map.clear();
     }
 
-    pub fn insert_value_type(&mut self, ident: &str, ty: m_ir::Type, produced_by: ValueTypeDeps) {
-        self.value_types.insert(
-            ident.to_string(),
-            ValueType {
-                ty: ty.clone(),
-                produced_by,
-                consumed_by: HashSet::new(),
-            },
-        );
-        self.constrain_value_type_chain(ident, None);
+    pub fn extend(&mut self, other: Self) {
+        self.map.extend(other.map);
     }
+}
 
-    pub fn set_value_type(&mut self, ident: &str, ty: m_ir::Type, consumed_by: Option<&str>) {
-        self.constrain_value_type_chain(
-            ident,
-            if let Some(consumed_by) = consumed_by {
-                Some(TypeConstraintArgs::BottomUp {
-                    ty,
-                    consumed_by: consumed_by.to_string(),
-                })
-            } else {
-                Some(TypeConstraintArgs::Direct { ty })
-            },
-        );
-    }
+pub trait Registry {
+    fn idents(&self) -> &IdentMap;
+    fn idents_mut(&mut self) -> &mut IdentMap;
+    fn register_local(&mut self, ident: &str, ty: m_ir::Type, produced_by: ValueTypeDeps) -> u32;
+    fn get_locals(&self) -> impl Iterator<Item = m_ir::Local>;
+    fn value_type(&self, value_ref: &ValueRef) -> Option<m_ir::Type>;
+    fn set_value_type(
+        &mut self,
+        value_ref: ValueRef,
+        ty: m_ir::Type,
+        consumed_by: Option<ValueRef>,
+    );
+}
 
-    fn constrain_value_type_chain(&mut self, ident: &str, args: Option<TypeConstraintArgs>) {
-        let mut stack = vec![(ident.to_string(), args)];
+trait RegistryExt: Registry {
+    fn get_mut_value_type(&mut self, value_ref: &ValueRef) -> Option<&mut ValueType>;
+
+    fn constrain_value_type_chain(
+        &mut self,
+        value_ref: ValueRef,
+        args: Option<TypeConstraintArgs>,
+    ) {
+        let mut stack = vec![(value_ref, args)];
 
         while stack.len() > 0 {
-            let (ident, args) = stack.pop().unwrap();
+            let (value_ref, args) = stack.pop().unwrap();
 
-            let Some(value_type) = self.value_types.get_mut(&ident) else {
-                continue;
+            let Some(value_type) = self.get_mut_value_type(&value_ref) else {
+                panic!(
+                    "Type of {:?} cannot be refined because it does not exist in the registry or is not mutable",
+                    value_ref
+                );
             };
 
-            let skip_ident = match args {
+            let skip_ref = match args {
                 Some(TypeConstraintArgs::Direct { ty }) => {
-                    // We we'll not escape the loop in case of a redundant constraint when the
-                    // constraint is direct because this might be used only to constrain the types
-                    // of the references, like `insert_value_type` does.
+                    // We we'll not escape the loop in case of a redundant constraint when
+                    // the constraint is direct because this might be used only to
+                    // constrain the types of the references, like `insert_value_type`
+                    // does.
 
                     value_type.ty = merge_types([&value_type.ty, &ty]).expect(&format!(
                         "Failed to merge types {} and {}",
@@ -164,17 +153,10 @@ impl Registry {
                         .produced_by
                         .refs
                         .iter()
-                        .position(|ref_value| {
-                            let Some(m_ir::value::Value::Ident(ref_ident)) =
-                                &ref_value.value.as_ref()
-                            else {
-                                return false;
-                            };
-                            ref_ident == &produced_by
-                        })
+                        .position(|r| r == &produced_by)
                         .expect(&format!(
-                            "Failed to constrain type: {} does not depend on {}",
-                            &ident, &produced_by
+                            "Failed to constrain type: {:?} does not depend on {:?}",
+                            &value_ref, &produced_by
                         ));
 
                     let sigs_len = value_type.produced_by.sig.len();
@@ -184,9 +166,9 @@ impl Registry {
                         .sig
                         .retain(|sig| match_types([&producer_ty, &sig.args[arg_idx]]));
 
-                    // Since the new type is a merge of the returned types of the producing
-                    // signatures, if it didn't change, we know that nothing changed and don't need
-                    // need to propagate the change
+                    // Since the new type is a merge of the returned types of the
+                    // producing signatures, if it didn't change, we know that nothing
+                    // changed and don't need need to propagate the change
                     if sigs_len == value_type.produced_by.sig.len() {
                         continue;
                     }
@@ -221,18 +203,14 @@ impl Registry {
 
                     Some(consumed_by)
                 }
-                // If there are no constraints, we don't need to change the value type, but we
-                // should still propagate it
+                // If there are no constraints, we don't need to change the value type,
+                // but we should still propagate it
                 None => None,
             };
 
             // constrain the types that this depends on
             for (i, ref_value) in value_type.produced_by.refs.iter().enumerate() {
-                let Some(m_ir::value::Value::Ident(ref_ident)) = &ref_value.value.as_ref() else {
-                    continue;
-                };
-
-                if Some(ref_ident) == skip_ident.as_ref() {
+                if Some(ref_value) == skip_ref.as_ref() {
                     continue;
                 }
 
@@ -245,38 +223,266 @@ impl Registry {
                 );
 
                 stack.push((
-                    ref_ident.clone(),
+                    ref_value.clone(),
                     Some(TypeConstraintArgs::BottomUp {
                         ty: ty.clone(),
-                        consumed_by: ident.to_string(),
+                        consumed_by: value_ref,
                     }),
                 ))
             }
 
             // constrain the types that depend on this
             for consumed_by in value_type.consumed_by.iter() {
-                if Some(consumed_by) == skip_ident.as_ref() {
+                if Some(consumed_by) == skip_ref.as_ref() {
                     continue;
                 }
 
                 stack.push((
                     consumed_by.clone(),
                     Some(TypeConstraintArgs::TopDown {
-                        produced_by: ident.to_string(),
+                        produced_by: value_ref,
                         producer_ty: value_type.ty.clone(),
                     }),
                 ))
             }
         }
     }
+}
 
-    fn count_ident(&self, ident: &str) -> usize {
-        let count = self
-            .name_map
-            .get(ident)
-            .map(|names| names.len())
-            .unwrap_or(0);
+#[derive(Debug)]
+pub struct ModuleRegistry {
+    idents: IdentMap,
+    funcs: Vec<m_ir::Type>,
+    globals: Vec<ValueType>,
+    init_locals: Vec<ValueType>,
+}
 
-        count
+impl ModuleRegistry {
+    pub fn new() -> Self {
+        Self {
+            idents: IdentMap::new(),
+            funcs: Vec::new(),
+            globals: Vec::new(),
+            init_locals: Vec::new(),
+        }
+    }
+
+    pub fn register_func<P>(&mut self, ident: &str, params: P) -> u32
+    where
+        P: IntoIterator<Item = m_ir::Type>,
+    {
+        let idx = self.funcs.len();
+        self.funcs.push(fn_type(
+            params,
+            // Multiple return values are not supported yet
+            [unknown_type()],
+        ));
+        self.idents.insert(ident, ValueRef::Func(idx as u32));
+        idx as u32
+    }
+
+    pub fn register_global(&mut self, ident: &str, ty: m_ir::Type) -> u32 {
+        let idx = self.globals.len();
+        self.globals.push(ValueType {
+            ty,
+            ..Default::default()
+        });
+        self.idents.insert(ident, ValueRef::Global(idx as u32));
+        idx as u32
+    }
+}
+
+impl Registry for ModuleRegistry {
+    fn idents(&self) -> &IdentMap {
+        &self.idents
+    }
+
+    fn idents_mut(&mut self) -> &mut IdentMap {
+        &mut self.idents
+    }
+
+    fn value_type(&self, value_ref: &ValueRef) -> Option<m_ir::Type> {
+        match &value_ref {
+            ValueRef::Local(idx) => Some(self.init_locals.get(*idx as usize)?.ty.clone()),
+            ValueRef::Func(idx) => Some(self.funcs.get(*idx as usize)?.clone()),
+            ValueRef::Global(idx) => Some(self.globals.get(*idx as usize)?.ty.clone()),
+            _ => None,
+        }
+    }
+
+    fn set_value_type(
+        &mut self,
+        value_ref: ValueRef,
+        ty: m_ir::Type,
+        consumed_by: Option<ValueRef>,
+    ) {
+        if let ValueRef::Func(idx) = &value_ref {
+            let idx = *idx as usize;
+
+            if idx >= self.funcs.len() {
+                panic!("Function {} does not exist", idx);
+            }
+
+            if consumed_by.is_some() {
+                panic!("Cannot set type of a function indirectly");
+            }
+
+            self.funcs[idx] = merge_types([&self.funcs[idx], &ty]).expect(&format!(
+                "Failed to merge types {} and {}",
+                self.funcs[idx], ty
+            ));
+
+            return;
+        }
+
+        self.constrain_value_type_chain(
+            value_ref,
+            if let Some(consumed_by) = consumed_by {
+                Some(TypeConstraintArgs::BottomUp { ty, consumed_by })
+            } else {
+                Some(TypeConstraintArgs::Direct { ty })
+            },
+        );
+    }
+
+    fn register_local(&mut self, ident: &str, ty: m_ir::Type, produced_by: ValueTypeDeps) -> u32 {
+        let idx = self.init_locals.len();
+        self.init_locals.push(ValueType {
+            ty,
+            produced_by,
+            ..Default::default()
+        });
+        self.idents.insert(ident, ValueRef::Local(idx as u32));
+
+        self.constrain_value_type_chain(ValueRef::Local(idx as u32), None);
+
+        idx as u32
+    }
+
+    fn get_locals(&self) -> impl Iterator<Item = m_ir::Local> {
+        self.init_locals.iter().map(|value_type| m_ir::Local {
+            r#type: value_type.ty.clone(),
+        })
+    }
+}
+
+impl RegistryExt for ModuleRegistry {
+    fn get_mut_value_type(&mut self, value_ref: &ValueRef) -> Option<&mut ValueType> {
+        match value_ref {
+            ValueRef::Global(idx) => self.globals.get_mut(*idx as usize),
+            ValueRef::Local(idx) => self.init_locals.get_mut(*idx as usize),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct FuncRegistry<'a> {
+    pub module_registry: &'a mut ModuleRegistry,
+    idents: IdentMap,
+    params: Vec<ValueType>,
+    locals: Vec<ValueType>,
+}
+
+impl<'a> FuncRegistry<'a> {
+    pub fn new(module_registry: &'a mut ModuleRegistry) -> Self {
+        let idents = module_registry.idents.clone();
+        Self {
+            module_registry,
+            idents,
+            params: Vec::new(),
+            locals: Vec::new(),
+        }
+    }
+
+    pub fn register_param(&mut self, ident: &str, ty: m_ir::Type) -> u32 {
+        let idx = self.params.len();
+        self.params.push(ValueType {
+            ty,
+            ..Default::default()
+        });
+        self.idents.insert(ident, ValueRef::Param(idx as u32));
+        idx as u32
+    }
+
+    pub fn get_params(&self) -> impl Iterator<Item = m_ir::Param> {
+        self.params
+            .clone()
+            .into_iter()
+            .map(|value_type| m_ir::Param {
+                r#type: value_type.ty,
+            })
+    }
+}
+
+impl Registry for FuncRegistry<'_> {
+    fn idents(&self) -> &IdentMap {
+        &self.idents
+    }
+
+    fn idents_mut(&mut self) -> &mut IdentMap {
+        &mut self.idents
+    }
+
+    fn value_type(&self, value_ref: &ValueRef) -> Option<m_ir::Type> {
+        match value_ref {
+            ValueRef::Param(idx) => Some(self.params.get(*idx as usize)?.ty.clone()),
+            ValueRef::Local(idx) => Some(self.locals.get(*idx as usize)?.ty.clone()),
+            _ => self.module_registry.value_type(value_ref),
+        }
+    }
+
+    fn set_value_type(
+        &mut self,
+        value_ref: ValueRef,
+        ty: m_ir::Type,
+        consumed_by: Option<ValueRef>,
+    ) {
+        if let ValueRef::Func(_) = &value_ref {
+            self.module_registry
+                .set_value_type(value_ref, ty, consumed_by);
+            return;
+        }
+
+        self.constrain_value_type_chain(
+            value_ref,
+            if let Some(consumed_by) = consumed_by {
+                Some(TypeConstraintArgs::BottomUp { ty, consumed_by })
+            } else {
+                Some(TypeConstraintArgs::Direct { ty })
+            },
+        );
+    }
+
+    fn register_local(&mut self, ident: &str, ty: m_ir::Type, produced_by: ValueTypeDeps) -> u32 {
+        let idx = self.locals.len();
+        self.locals.push(ValueType {
+            ty,
+            produced_by,
+            ..Default::default()
+        });
+        self.module_registry
+            .idents
+            .insert(ident, ValueRef::Local(idx as u32));
+
+        self.constrain_value_type_chain(ValueRef::Local(idx as u32), None);
+
+        idx as u32
+    }
+
+    fn get_locals(&self) -> impl Iterator<Item = m_ir::Local> {
+        self.locals.iter().map(|value_type| m_ir::Local {
+            r#type: value_type.ty.clone(),
+        })
+    }
+}
+
+impl<'a> RegistryExt for FuncRegistry<'a> {
+    fn get_mut_value_type(&mut self, value_ref: &ValueRef) -> Option<&mut ValueType> {
+        match value_ref {
+            ValueRef::Param(idx) => self.params.get_mut(*idx as usize),
+            ValueRef::Local(idx) => self.locals.get_mut(*idx as usize),
+            _ => self.module_registry.get_mut_value_type(value_ref),
+        }
     }
 }

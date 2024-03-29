@@ -11,24 +11,20 @@ pub fn compile_program(program: &m_ir::Module) {
     let triple = Triple::host();
     let mut codegen = binary::BinaryCodegen::new(triple, program.name.clone());
 
-    for symbol in program.symbols.iter() {
-        match symbol.symbol.as_ref() {
-            Some(m_ir::symbol::Symbol::FnDecl(fn_decl)) => {
-                codegen.declare_function(fn_decl);
-            }
-            Some(m_ir::symbol::Symbol::DataDecl(data_decl)) => {
-                codegen.declare_data(data_decl);
-            }
-            _ => {
-                unreachable!();
-            }
-        }
+    for (i, data) in program.data.iter().enumerate() {
+        codegen.declare_global(i, data);
     }
 
-    for symbol in program.symbols.iter() {
-        if let Some(m_ir::symbol::Symbol::FnDecl(fn_decl)) = symbol.symbol.as_ref() {
-            codegen.build_function(fn_decl);
-        }
+    for (i, func) in program.funcs.iter().enumerate() {
+        codegen.declare_function(i, func);
+    }
+
+    for (i, func) in program.funcs.iter().enumerate() {
+        codegen.build_function(i, func);
+    }
+
+    if let Some(init) = &program.init {
+        codegen.build_module_init(init);
     }
 
     codegen.write_to_file(&program.name);

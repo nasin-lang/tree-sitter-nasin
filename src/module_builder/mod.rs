@@ -5,17 +5,20 @@ mod types;
 use tree_sitter as ts;
 
 use self::instr_builder::InstrBuilder;
-use self::registry::Registry;
-use self::registry::ValueTypeDeps;
+use self::registry::ModuleRegistry;
 use self::types::fn_type;
+use crate::module_builder::registry::{FuncRegistry, Registry, ValueRef};
+use crate::module_builder::types::unknown_type;
 use crate::proto::m_ir;
 use crate::tree_sitter_utils::TreeSitterUtils;
 
 pub struct ModuleBuilder<'a> {
     pub name: String,
     pub source: &'a str,
-    registry: Registry,
-    symbols: Vec<m_ir::Symbol>,
+    registry: ModuleRegistry,
+    data: Vec<m_ir::DataDecl>,
+    funcs: Vec<m_ir::FnDecl>,
+    init_body: Vec<m_ir::Instr>,
 }
 
 impl<'a> ModuleBuilder<'a> {
@@ -23,8 +26,10 @@ impl<'a> ModuleBuilder<'a> {
         ModuleBuilder {
             name,
             source,
-            symbols: Vec::new(),
-            registry: Registry::new(),
+            data: Vec::new(),
+            funcs: Vec::new(),
+            registry: ModuleRegistry::new(),
+            init_body: Vec::new(),
         }
     }
 
@@ -33,161 +38,143 @@ impl<'a> ModuleBuilder<'a> {
 
         let mut this = ModuleBuilder::new(name, source);
 
-        let registered_syms: Vec<_> = node
-            .iter_children()
-            .map(|sym_node| {
-                let ident_node = sym_node.required_field("name").of_kind("ident");
-                let ident = ident_node.get_text(this.source);
-                let name = this.registry.use_name(Some(&ident));
+        for sym_node in node.iter_children() {
+            let ident_node = sym_node.required_field("name").of_kind("ident");
+            let ident = ident_node.get_text(this.source).to_string();
 
-                (name, sym_node)
-            })
-            .collect();
-
-        for (name, sym_node) in registered_syms {
-            this.add_symbol(name, sym_node);
+            match sym_node.kind() {
+                "fn_decl" => this.add_func(ident, sym_node),
+                "global_var_decl" => this.add_global(ident, sym_node),
+                _ => panic!("Unexpected symbol kind: {}", sym_node.kind()),
+            }
         }
 
         this.finish()
     }
 
-    pub fn add_symbol(&mut self, name: String, node: ts::Node<'a>) {
-        match node.kind() {
-            "fn_decl" => {
-                let mut local_registry = self.registry.clone();
-                let mut local_builder = InstrBuilder::new(&mut local_registry, self.source);
+    pub fn add_func(&mut self, name: String, node: ts::Node<'a>) {
+        assert_eq!(node.kind(), "fn_decl");
 
-                let mut params = Vec::new();
-                let mut params_ty = Vec::new();
-                for param_node in node.iter_field("params") {
-                    let param_name_node = param_node.required_field("pat").of_kind("ident");
-                    let param_name = param_name_node.get_text(self.source);
-                    params.push(
-                        local_builder
-                            .registry
-                            .use_name(Some(param_name))
-                            .to_string(),
-                    );
+        let mut local_registry = FuncRegistry::new(&mut self.registry);
+        let mut local_builder = InstrBuilder::new(&mut local_registry, self.source);
 
-                    let ty = param_node.field("type").as_ref().map_or(
-                        m_ir::Type {
-                            r#type: Some(m_ir::r#type::Type::Unknown(true)),
-                        },
-                        |ty_node| local_builder.parse_type(ty_node),
-                    );
+        for param_node in node.iter_field("params") {
+            let param_name_node = param_node.required_field("pat").of_kind("ident");
+            let param_name = param_name_node.get_text(self.source);
 
-                    params_ty.push(ty.clone());
-                    local_builder.registry.insert_value_type(
-                        &param_name,
-                        ty.clone(),
-                        ValueTypeDeps::default(),
-                    );
-                }
+            let ty = param_node
+                .field("type")
+                .as_ref()
+                .map_or(unknown_type(), |ty_node| local_builder.parse_type(ty_node));
 
-                let mut ret_ty = node.field("ret_type").as_ref().map_or(
-                    m_ir::Type {
-                        r#type: Some(m_ir::r#type::Type::Unknown(true)),
-                    },
-                    |ty_node| local_builder.parse_type(ty_node),
-                );
+            local_builder.registry.register_param(param_name, ty);
+        }
 
-                let ty = fn_type(params_ty.clone(), [ret_ty.clone()]);
+        let func_idx = local_builder
+            .registry
+            .module_registry
+            .register_func(&name, local_builder.registry.get_params().map(|p| p.r#type));
+        let func_ref = ValueRef::Func(func_idx);
 
-                self.registry
-                    .insert_value_type(&name, ty.clone(), ValueTypeDeps::default());
-                local_builder.registry.insert_value_type(
-                    &name,
-                    ty.clone(),
-                    ValueTypeDeps::default(),
-                );
+        let ret = node
+            .field("ret_type")
+            .as_ref()
+            .map_or(unknown_type(), |ty_node| local_builder.parse_type(ty_node));
 
-                let (ret, _) = local_builder.add_expr(&node.required_field("return"), None);
-                local_builder.body.push(m_ir::Instr {
-                    instr: Some(m_ir::instr::Instr::FnReturn(ret.clone())),
-                });
+        let (ret_value, _) = local_builder.add_expr(&node.required_field("return"));
+        let ret_ref: ValueRef = ret_value.clone().into();
 
-                if let m_ir::value::Value::Ident(ident) = ret.value.as_ref().unwrap() {
-                    local_builder
-                        .registry
-                        .set_value_type(&ident, ret_ty, Some(&name));
-                }
+        local_builder.body.push(m_ir::Instr {
+            instr: Some(m_ir::instr::Instr::FnReturn(ret_value.clone())),
+        });
 
-                ret_ty = local_builder.registry.value_type(&ret);
+        local_builder
+            .registry
+            .set_value_type(ret_ref.clone(), ret, None);
 
-                for (i, arg) in params.iter().enumerate() {
-                    let arg_value = m_ir::Value {
-                        value: Some(m_ir::value::Value::Ident(arg.to_string())),
-                    };
-                    let parsed_ty = local_builder.registry.value_type(&arg_value);
-                    params_ty[i] = parsed_ty;
-                }
+        let locals: Vec<_> = local_builder.registry.get_locals().collect();
+        let params: Vec<_> = local_builder.registry.get_params().collect();
+        let ret = local_builder.registry.value_type(&ret_ref).unwrap();
 
-                let ty = fn_type(params_ty.clone(), [ret_ty.clone()]);
+        let ty = fn_type(params.iter().map(|p| p.r#type.clone()), [ret.clone()]);
 
-                self.registry.set_value_type(&name, ty.clone(), None);
-                local_builder.registry.set_value_type(&name, ty, None);
+        local_builder
+            .registry
+            .module_registry
+            .set_value_type(func_ref.clone(), ty.clone(), None);
 
-                self.symbols.push(m_ir::Symbol {
-                    symbol: Some(m_ir::symbol::Symbol::FnDecl(m_ir::FnDecl {
-                        name,
-                        r#type: m_ir::FnType {
-                            ret: vec![ret_ty],
-                            args: params_ty,
-                        },
-                        args: params,
-                        body: local_builder.finish(),
-                    })),
-                });
-            }
-            "global_var_decl" => {
-                let mut local_builder = InstrBuilder::new(&mut self.registry, self.source);
+        let body = local_builder.finish();
 
-                let ty = node.field("type").map_or(
-                    m_ir::Type {
-                        r#type: Some(m_ir::r#type::Type::Unknown(true)),
-                    },
-                    |ty| local_builder.parse_type(&ty),
-                );
+        self.funcs.push(m_ir::FnDecl {
+            export: Some(m_ir::Export { name }),
+            locals,
+            params,
+            ret: vec![ret],
+            body,
+        });
+    }
 
-                local_builder.registry.insert_value_type(
-                    &name,
-                    ty.clone(),
-                    ValueTypeDeps::default(),
-                );
+    pub fn add_global(&mut self, name: String, node: ts::Node<'a>) {
+        assert_eq!(node.kind(), "global_var_decl");
 
-                let (value, _) = local_builder.add_expr(&node.required_field("value"), None);
-                local_builder.body.push(m_ir::Instr {
-                    instr: Some(m_ir::instr::Instr::BodyReturn(value.clone())),
-                });
+        let mut local_builder = InstrBuilder::new(&mut self.registry, self.source);
 
-                if let m_ir::value::Value::Ident(ident) = value.value.as_ref().unwrap() {
-                    local_builder
-                        .registry
-                        .set_value_type(&ident, ty, Some(&name));
-                }
+        let ty = node
+            .field("type")
+            .map_or(unknown_type(), |ty| local_builder.parse_type(&ty));
 
-                let ty = local_builder.registry.value_type(&value);
+        let global_idx = local_builder.registry.register_global(&name, ty.clone());
+        let global_ref = ValueRef::Global(global_idx);
 
-                local_builder
-                    .registry
-                    .set_value_type(&name, ty.clone(), None);
+        let (value, _) = local_builder.add_expr(&node.required_field("value"));
+        let value_ref: ValueRef = value.clone().into();
 
-                self.symbols.push(m_ir::Symbol {
-                    symbol: Some(m_ir::symbol::Symbol::DataDecl(m_ir::DataDecl {
-                        name,
-                        r#type: ty,
-                        body: local_builder.finish(),
-                    })),
-                });
-            }
-            k => panic!("Found unexpected symbol `{}`", k),
-        };
+        // Shadow the global value with the local result so next time we use the global we
+        // get the local value instead of loading the global again.
+        local_builder
+            .registry
+            .idents_mut()
+            .insert(&name, value_ref.clone());
+
+        local_builder.body.push(m_ir::Instr {
+            instr: Some(m_ir::instr::Instr::StoreGlobal(m_ir::StoreGlobal {
+                global_idx,
+                value,
+            })),
+        });
+
+        local_builder
+            .registry
+            .set_value_type(value_ref.clone(), ty, Some(global_ref.clone()));
+
+        let ty = local_builder.registry.value_type(&value_ref).unwrap();
+
+        self.data.push(m_ir::DataDecl {
+            // FIXME: read export info from the source
+            export: if name == "main" {
+                Some(m_ir::Export { name })
+            } else {
+                None
+            },
+            r#type: ty,
+        });
+
+        self.init_body.extend(local_builder.finish());
     }
 
     pub fn finish(self) -> m_ir::Module {
         m_ir::Module {
             name: self.name,
-            symbols: self.symbols,
+            data: self.data,
+            funcs: self.funcs,
+            init: if self.init_body.len() > 0 {
+                Some(m_ir::ModuleInit {
+                    locals: self.registry.get_locals().collect(),
+                    body: self.init_body,
+                })
+            } else {
+                None
+            },
         }
     }
 }

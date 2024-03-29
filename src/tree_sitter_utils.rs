@@ -16,7 +16,7 @@ impl<'a> TreeSitterUtils<'a> for ts::Node<'a> {
         self
     }
 
-    fn get_text(&'a self, source: &'a str) -> &'a str {
+    fn get_text(&self, source: &'a str) -> &'a str {
         &source[self.start_byte()..self.end_byte()]
     }
 

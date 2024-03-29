@@ -1,26 +1,22 @@
-use std::fmt::{self, Display};
+use std::fmt::{self, Display, Write};
 use std::hash::{Hash, Hasher};
 
-struct Indent<T: Display>(T);
+fn indented<T: Display, I: IntoIterator<Item = T>>(n: usize, items: I) -> String {
+    let mut s = String::new();
 
-impl<T> Display for Indent<T>
-where
-    T: Display,
-{
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for (i, line) in format!("{}", self.0).lines().enumerate() {
-            if i > 0 {
-                write!(f, "\n")?;
+    for (i, item) in items.into_iter().enumerate() {
+        for (j, line) in item.to_string().lines().enumerate() {
+            if i > 0 || j > 0 {
+                write!(s, "\n").unwrap();
             }
-            write!(f, "    {}", line)?;
+            write!(s, "{}{}", " ".repeat(n), line).unwrap();
         }
-        Ok(())
     }
+
+    s
 }
 
 pub mod m_ir {
-    use std::iter::zip;
-
     use super::*;
 
     include!(concat!(env!("OUT_DIR"), "/torvo.m_ir.rs"));
@@ -53,110 +49,125 @@ pub mod m_ir {
         }
     }
 
-    fn write_scope<T: Display>(f: &mut fmt::Formatter<'_>, scope: &[T]) -> fmt::Result {
-        for instr in scope.iter() {
-            write!(f, "{}\n", Indent(instr))?;
-        }
-        Ok(())
-    }
-
     impl Display for Module {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            write!(f, "mod {}\n", self.name)?;
-            write_scope(f, &self.symbols)
-        }
-    }
+            write!(f, "module \"{}\":", self.name,)?;
 
-    impl Display for Symbol {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            match &self.symbol {
-                Some(symbol::Symbol::FnDecl(func)) => {
-                    write!(f, "fn {}(", func.name)?;
+            for (i, global) in self.data.iter().enumerate() {
+                write!(f, "\n  global {}:", i)?;
 
-                    for (i, (arg, arg_ty)) in
-                        zip(func.args.iter(), func.r#type.args.iter()).enumerate()
-                    {
-                        if i > 0 {
-                            write!(f, ", ")?;
-                        }
-                        write!(f, "{}: {}", arg, arg_ty)?;
-                    }
-
-                    write!(f, "): ")?;
-
-                    for (i, ret) in func.r#type.ret.iter().enumerate() {
-                        if i > 0 {
-                            write!(f, ", ")?;
-                        }
-                        write!(f, "{}", ret)?;
-                    }
-
-                    write!(f, " =\n")?;
-
-                    write_scope(f, &func.body)
+                if let Some(Export { name }) = &global.export {
+                    write!(f, " (export \"{}\")", name)?;
                 }
-                Some(symbol::Symbol::DataDecl(data)) => {
-                    write!(f, "{}: {} =\n", data.name, data.r#type)?;
-                    write_scope(f, &data.body)
-                }
-                None => Ok(()),
+
+                write!(f, " {}", global.r#type)?;
             }
+
+            for (i, func) in self.funcs.iter().enumerate() {
+                write!(f, "\n  func {}:", i)?;
+
+                if let Some(Export { name }) = &func.export {
+                    write!(f, " (export \"{}\")", name)?;
+                }
+
+                write!(f, " (params")?;
+                for param in &func.params {
+                    write!(f, " {}", param.r#type)?;
+                }
+                write!(f, ")")?;
+
+                write!(f, " (returns")?;
+                for ret in &func.ret {
+                    write!(f, " {}", ret)?;
+                }
+                write!(f, ")")?;
+
+                for (i, local) in func.locals.iter().enumerate() {
+                    write!(f, "\n       %{}: {}", i, local.r#type)?;
+                }
+
+                write!(f, "\n{}", indented(4, &func.body))?;
+            }
+
+            if let Some(init) = &self.init {
+                write!(f, "\n  init: ")?;
+
+                for (i, local) in init.locals.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, "\n        ")?;
+                    }
+                    write!(f, "%{}: {}", i, local.r#type)?;
+                }
+
+                write!(f, "\n{}", indented(4, &init.body))?;
+            }
+
+            Ok(())
         }
     }
 
     impl Display for Instr {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             match &self.instr {
-                Some(instr::Instr::Assign(assign)) => {
-                    write!(f, "{}: {} = {}", assign.name, assign.r#type, assign.value)
+                Some(instr::Instr::Const(v)) => {
+                    write!(f, "%{} = const ", v.target_idx)?;
+                    match &v.value {
+                        Some(r#const::Value::Number(num)) => {
+                            write!(f, "{}", num)?;
+                        }
+                        None => {}
+                    }
                 }
-                Some(instr::Instr::BinOp(op)) => write!(
-                    f,
-                    "{}: {} = {} {} {}",
-                    op.name,
-                    op.r#type,
-                    op.left,
-                    match op.op() {
-                        BinOpType::Add => "+",
-                        BinOpType::Sub => "-",
-                        BinOpType::Mod => "%",
-                        BinOpType::Mul => "*",
-                        BinOpType::Div => "/",
-                        BinOpType::Pow => "**",
-                    },
-                    op.right
-                ),
-                Some(instr::Instr::FnCall(call)) => write!(
-                    f,
-                    "{}: {} = {}({})",
-                    call.name,
-                    call.r#type,
-                    call.callee,
-                    call.args
-                        .iter()
-                        .map(|arg| format!("{}", arg))
-                        .collect::<Vec<String>>()
-                        .join(", ")
-                ),
+                Some(instr::Instr::LoadGlobal(v)) => {
+                    write!(
+                        f,
+                        "%{} = load_global <global {}>",
+                        v.target_idx, v.global_idx
+                    )?;
+                }
+                Some(instr::Instr::StoreGlobal(v)) => {
+                    write!(f, "store_global <global {}>, {}", v.global_idx, v.value)?;
+                }
+                Some(instr::Instr::BinOp(op)) => {
+                    write!(
+                        f,
+                        "%{} = bin_op{} {}, {}",
+                        op.target_idx,
+                        match op.op() {
+                            BinOpType::Add => "+",
+                            BinOpType::Sub => "-",
+                            BinOpType::Mod => "%",
+                            BinOpType::Mul => "*",
+                            BinOpType::Div => "/",
+                            BinOpType::Pow => "**",
+                        },
+                        op.left,
+                        op.right
+                    )?;
+                }
+                Some(instr::Instr::FnCall(call)) => {
+                    write!(f, "%{} = fn_call <func {}>", call.target_idx, call.func_idx,)?;
+                    for arg in &call.args {
+                        write!(f, ", {}", arg)?;
+                    }
+                }
                 Some(instr::Instr::FnReturn(ret)) => {
-                    write!(f, "return {}", ret)
+                    write!(f, "return {}", ret)?;
                 }
-                Some(instr::Instr::BodyReturn(ret)) => {
-                    write!(f, "{}", ret)
-                }
-                None => Ok(()),
+                None => {}
             }
+            Ok(())
         }
     }
 
     impl Display for Value {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             match &self.value {
-                Some(value::Value::Num(num)) => {
-                    write!(f, "{}", num)?;
+                Some(value::Value::Local(idx)) => {
+                    write!(f, "%{}", idx)?;
                 }
-                Some(value::Value::Ident(ident)) => {
-                    write!(f, "{}", ident)?;
+                Some(value::Value::Param(idx)) => {
+                    write!(f, "<param {}>", idx)?;
                 }
                 None => {}
             }
@@ -167,43 +178,36 @@ pub mod m_ir {
     impl Display for Type {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             match self.r#type.as_ref() {
-                Some(r#type::Type::Unknown(_)) => write!(f, "unknown"),
+                Some(r#type::Type::Unknown(_)) => {
+                    write!(f, "unknown")?;
+                }
                 Some(r#type::Type::Primitive(prim)) => {
-                    write!(f, "{}", PrimType::try_from(*prim).unwrap())
+                    write!(f, "{}", PrimType::try_from(*prim).unwrap())?;
                 }
                 Some(r#type::Type::Fn(fn_type)) => {
-                    write!(f, "fn(")?;
+                    write!(f, "(func (params")?;
 
-                    for (i, arg) in fn_type.args.iter().enumerate() {
-                        if i > 0 {
-                            write!(f, ", ")?;
-                        }
-                        write!(f, "{}", arg)?;
+                    for arg in &fn_type.args {
+                        write!(f, " {}", arg)?;
                     }
 
-                    write!(f, "): (")?;
-
-                    for (i, ret) in fn_type.ret.iter().enumerate() {
-                        if i > 0 {
-                            write!(f, ", ")?;
-                        }
+                    write!(f, ") (returns")?;
+                    for ret in &fn_type.ret {
                         write!(f, "{}", ret)?;
                     }
 
-                    write!(f, ")")
+                    write!(f, "))")?;
                 }
                 Some(r#type::Type::Ambig(ambig)) => {
-                    write!(f, "(any of ")?;
-                    for (i, t) in ambig.types.iter().enumerate() {
-                        if i > 0 {
-                            write!(f, ", ")?;
-                        }
-                        write!(f, "{}", t)?;
+                    write!(f, "(ambig")?;
+                    for t in &ambig.types {
+                        write!(f, " {}", t)?;
                     }
-                    write!(f, ")")
+                    write!(f, ")")?;
                 }
-                None => Ok(()),
+                None => {}
             }
+            Ok(())
         }
     }
 

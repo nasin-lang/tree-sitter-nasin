@@ -13,6 +13,13 @@ macro_rules! primitive {
 use itertools::Itertools;
 pub(crate) use primitive;
 
+/// Returns a instance of the unknown type.
+pub fn unknown_type() -> m_ir::Type {
+    m_ir::Type {
+        r#type: Some(m_ir::r#type::Type::Unknown(true)),
+    }
+}
+
 /// Returns an ambiguous type with the given types. If there is only one type, returns that type
 /// instead. If no types are given, returns an unknown type.
 pub fn ambig<I>(types: I) -> m_ir::Type
@@ -26,9 +33,7 @@ where
     }
 
     if types.is_empty() {
-        return m_ir::Type {
-            r#type: Some(m_ir::r#type::Type::Unknown(true)),
-        };
+        return unknown_type();
     }
 
     m_ir::Type {
@@ -112,14 +117,12 @@ where
     merge_types(types).is_some()
 }
 
-/// Returns an iterator over all the possible types of a type. If the type is not ambiguous, returns
-/// an iterator with only the type itself.
-pub fn types_iter<'a>(ty: &'a m_ir::Type) -> std::vec::IntoIter<&'a m_ir::Type> {
+/// Returns an vector listing all the possible types of a type. If the type is not
+/// ambiguous, returns an iterator with only the type itself.
+pub fn possible_types<'a>(ty: &'a m_ir::Type) -> Vec<&'a m_ir::Type> {
     match &ty.r#type {
-        Some(m_ir::r#type::Type::Ambig(ambig)) => {
-            ambig.types.iter().collect::<Vec<_>>().into_iter()
-        }
-        _ => vec![ty].into_iter(),
+        Some(m_ir::r#type::Type::Ambig(ambig)) => ambig.types.iter().collect::<Vec<_>>(),
+        _ => vec![ty],
     }
 }
 
@@ -135,13 +138,11 @@ pub fn merge_types<'a, I>(types: I) -> Option<m_ir::Type>
 where
     I: IntoIterator<Item = &'a m_ir::Type>,
 {
-    let types = types.into_iter().map(types_iter);
+    let types = types.into_iter().map(possible_types);
     let ambig_types: Vec<_> = types
         .multi_cartesian_product()
         .filter_map(|types| {
-            let mut result = vec![m_ir::Type {
-                r#type: Some(m_ir::r#type::Type::Unknown(true)),
-            }];
+            let mut result = vec![unknown_type()];
 
             for a in types {
                 result = result
@@ -219,8 +220,8 @@ pub fn eq_types(a: &m_ir::Type, b: &m_ir::Type) -> bool {
         return false;
     }
 
-    let a_types: HashSet<_, RandomState> = types_iter(a).collect();
-    let b_types: HashSet<_, RandomState> = types_iter(b).collect();
+    let a_types: HashSet<_, RandomState> = possible_types(a).into_iter().collect();
+    let b_types: HashSet<_, RandomState> = possible_types(b).into_iter().collect();
 
     a_types == b_types
 }

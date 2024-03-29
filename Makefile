@@ -10,7 +10,7 @@ clean:
 
 .PHONY: proto
 proto: proto/m_ir.proto
-	cargo clean && cargo build
+	cargo clean -p torvo && cargo build
 
 RUST_SRC = $(shell find src/ -type f -name '*.rs')
 bin/torvo: Cargo.toml build.rs $(RUST_SRC) proto/m_ir.proto tree-sitter-torvo/src/parser.c

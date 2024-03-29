@@ -3,52 +3,81 @@ syntax = "proto2";
 package torvo.m_ir;
 
 message Module {
-    required string name    = 1;
-    repeated Symbol symbols = 10;
-}
-
-message Symbol {
-    oneof symbol {
-        FnDecl fn_decl     = 10;
-        DataDecl data_decl = 11;
-    }
+    required string   name   = 1;
+    repeated DataDecl data   = 2;
+    repeated FnDecl   funcs  = 3;
+    optional ModuleInit init = 4;
 }
 
 message FnDecl {
-    required string name = 1;
-    required FnType type = 2;
-    repeated string args = 10;
-    repeated Instr body  = 20;
+    optional Export export = 1;
+    repeated Param  params = 2;
+    repeated Local  locals = 3;
+    repeated Type   ret    = 4;
+    repeated Instr  body   = 5;
 }
 
 message DataDecl {
+    optional Export export = 1;
+    required Type   type   = 2;
+}
+
+message ModuleInit {
+    repeated Local locals = 1;
+    repeated Instr body   = 2;
+}
+
+message Export {
     required string name = 1;
-    required Type type   = 2;
-    repeated Instr body  = 10;
+}
+
+message Param {
+    required Type type = 1;
+}
+
+message Local {
+    required Type type = 1;
 }
 
 message Instr {
     oneof instr {
-        Assign assign     = 10;
-        BinOp bin_op      = 11;
-        FnCall fn_call    = 12;
-        Value fn_return   = 13;
-        Value body_return = 14;
+        LoadGlobal  load_global  = 1;
+        StoreGlobal store_global = 2;
+        Const       const        = 3;
+        BinOp       bin_op       = 4;
+        FnCall      fn_call      = 5;
+        Value       fn_return    = 6;
     }
 }
 
-message Assign {
-    required string name = 1;
-    required Type type   = 2;
-    required Value value = 3;
+message LoadGlobal {
+    /** The index of the local variable to store the result */
+    required uint32 target_idx = 2;
+    required uint32 global_idx = 1;
+}
+
+message StoreGlobal {
+    required uint32 global_idx = 1;
+    required Value  value      = 2;
+}
+
+message Const {
+    /** The index of the local variable to store the result */
+    required uint32 target_idx = 1;
+    oneof value {
+        /** Any number value. At type checking, it should fail if the number is
+          * not representable in the type.
+          */
+        string number = 2;
+    }
 }
 
 message BinOp {
-    required string name  = 1;
-    required Type type    = 2;
-    required BinOpType op = 3;
-    required Value left   = 10;
-    required Value right  = 11;
+    /** The index of the local variable to store the result */
+    required uint32    target_idx = 1;
+    required BinOpType op         = 2;
+    required Value     left       = 3;
+    required Value     right      = 4;
 }
 
 enum BinOpType {
@@ -65,10 +94,10 @@ message FnReturn {
 }
 
 message FnCall {
-    required string name   = 1;
-    required Type type     = 2;
-    required string callee = 3;
-    repeated Value args    = 10;
+    /** The index of the local variable to store the result */
+    required uint32 target_idx = 1;
+    required uint32 func_idx   = 3;
+    repeated Value  args       = 4;
 }
 
 // Type
@@ -77,13 +106,14 @@ message Type {
         /* Unknown type must only be used for the lexer before resolving to the correct type. No
          * code can be generated with an unknown type. It's value is never read.
          */
-        bool unknown = 10;
-        PrimType primitive = 11;
-        FnType fn          = 15;
+        // FIXME: merge this and AmbigType into a InferType
+        bool      unknown   = 1;
+        PrimType  primitive = 2;
+        FnType    fn        = 3;
         /* Ambiguous type are a union of possible type, but only one will be used. In may targets,
          * it needs to be resolved to a single type before any code generation.
          */
-        AmbigType ambig = 20;
+        AmbigType ambig     = 4;
     }
 }
 
@@ -105,7 +135,7 @@ enum PrimType {
 
 message FnType {
     repeated Type ret  = 1;
-    repeated Type args = 10;
+    repeated Type args = 2;
 }
 
 message AmbigType {
@@ -115,7 +145,7 @@ message AmbigType {
 // Values
 message Value {
     oneof value {
-        string ident = 10;
-        string num   = 11;
+        uint32 local  = 1;
+        uint32 param  = 2;
     }
 }
