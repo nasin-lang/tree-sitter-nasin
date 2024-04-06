@@ -7,21 +7,17 @@ pub trait TypeGen {
     fn poiter_type(&self) -> types::Type;
     fn get_type(&self, ty: &mir::Type) -> types::Type {
         match &ty {
-            mir::Type::Primitive(prim) => match mir::PrimType::try_from(prim.clone()).unwrap() {
-                mir::PrimType::I8 => types::I8,
-                mir::PrimType::I16 => types::I16,
-                mir::PrimType::I32 => types::I32,
-                mir::PrimType::I64 => types::I64,
-                mir::PrimType::U8 => types::I8,
-                mir::PrimType::U16 => types::I16,
-                mir::PrimType::U32 => types::I32,
-                mir::PrimType::U64 => types::I64,
-                mir::PrimType::USize => self.poiter_type(),
-                mir::PrimType::F32 => types::F32,
-                mir::PrimType::F64 => types::F64,
-                mir::PrimType::Bool => types::I8,
-                mir::PrimType::Char => types::I8,
-            },
+            mir::Type::I8 => types::I8,
+            mir::Type::I16 => types::I16,
+            mir::Type::I32 => types::I32,
+            mir::Type::I64 => types::I64,
+            mir::Type::U8 => types::I8,
+            mir::Type::U16 => types::I16,
+            mir::Type::U32 => types::I32,
+            mir::Type::U64 => types::I64,
+            mir::Type::USize => self.poiter_type(),
+            mir::Type::F32 => types::F32,
+            mir::Type::F64 => types::F64,
             mir::Type::Ambig(_) | mir::Type::Unknown => {
                 panic!("Type must be resolved before codegen")
             }

@@ -239,17 +239,17 @@ where
         match node.kind() {
             "ident" => {
                 match node.get_text(self.source) {
-                    "i8" => mir::Type::Primitive(mir::PrimType::I8),
-                    "i16" => mir::Type::Primitive(mir::PrimType::I16),
-                    "i32" => mir::Type::Primitive(mir::PrimType::I32),
-                    "i64" => mir::Type::Primitive(mir::PrimType::I64),
-                    "u8" => mir::Type::Primitive(mir::PrimType::U8),
-                    "u16" => mir::Type::Primitive(mir::PrimType::U16),
-                    "u32" => mir::Type::Primitive(mir::PrimType::U32),
-                    "u64" => mir::Type::Primitive(mir::PrimType::U64),
-                    "usize" => mir::Type::Primitive(mir::PrimType::USize),
-                    "f32" => mir::Type::Primitive(mir::PrimType::F32),
-                    "f64" => mir::Type::Primitive(mir::PrimType::F64),
+                    "i8" => mir::Type::I8,
+                    "i16" => mir::Type::I16,
+                    "i32" => mir::Type::I32,
+                    "i64" => mir::Type::I64,
+                    "u8" => mir::Type::U8,
+                    "u16" => mir::Type::U16,
+                    "u32" => mir::Type::U32,
+                    "u64" => mir::Type::U64,
+                    "usize" => mir::Type::USize,
+                    "f32" => mir::Type::F32,
+                    "f64" => mir::Type::F64,
                     _ => {
                         // TODO: improve error handling
                         panic!("{} is not a type, dummy", node.to_sexp());

@@ -246,7 +246,17 @@ impl Display for Value {
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub enum Type {
     Unknown,
-    Primitive(PrimType),
+    I8,
+    I16,
+    I32,
+    I64,
+    U8,
+    U16,
+    U32,
+    U64,
+    USize,
+    F32,
+    F64,
     Func(FuncType),
     Ambig(AmbigType),
 }
@@ -254,44 +264,36 @@ pub enum Type {
 impl Type {
     /// Returns the type of a number literal. Most of the time, this will be a ambiguous
     /// type, including all possible types that the number can be parsed as.
-    pub fn num_type(_num: &str) -> Self {
-        // Simplified for testing
-        Self::Ambig(AmbigType::new([
-            Self::Primitive(PrimType::I8),
-            Self::Primitive(PrimType::I32),
-        ]))
-        // let is_float = num.contains('.');
-        // let is_negative = num.starts_with('-');
+    pub fn num_type(num: &str) -> Self {
+        let is_float = num.contains('.');
+        let is_negative = num.starts_with('-');
 
-        // if is_float {
-        //     ambig([
-        //         Self::f32_type(),
-        //         Self::f64_type()
-        //     ])
-        // } else if is_negative {
-        //     ambig([
-        //         Self::i8_type(),
-        //         Self::i16_type(),
-        //         Self::i32_type(),
-        //         Self::i64_type(),
-        //         Self::f32_type(),
-        //         Self::f64_type(),
-        //     ])
-        // } else {
-        //     ambig([
-        //         Self::u8_type(),
-        //         Self::u16_type(),
-        //         Self::u32_type(),
-        //         Self::u64_type(),
-        //         Self::usize_type(),
-        //         Self::i8_type(),
-        //         Self::i16_type(),
-        //         Self::i32_type(),
-        //         Self::i64_type(),
-        //         Self::f32_type(),
-        //         Self::f64_type(),
-        //     ])
-        // }
+        if is_float {
+            Type::ambig([Self::F32, Self::F64])
+        } else if is_negative {
+            Type::ambig([
+                Self::I8,
+                Self::I16,
+                Self::I32,
+                Self::I64,
+                Self::F32,
+                Self::F64,
+            ])
+        } else {
+            Type::ambig([
+                Self::U8,
+                Self::U16,
+                Self::U32,
+                Self::U64,
+                Self::USize,
+                Self::I8,
+                Self::I16,
+                Self::I32,
+                Self::I64,
+                Self::F32,
+                Self::F64,
+            ])
+        }
     }
 
     /// Returns an ambiguous type with the given types. If there is only one type, returns
@@ -438,27 +440,18 @@ impl Type {
 impl Display for Type {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self {
-            Type::Unknown => {
-                write!(f, "unknown")?;
-            }
-            Type::Primitive(prim) => {
-                let prim_name = match prim {
-                    PrimType::I8 => "i8",
-                    PrimType::I16 => "i16",
-                    PrimType::I32 => "i32",
-                    PrimType::I64 => "i64",
-                    PrimType::U8 => "u8",
-                    PrimType::U16 => "u16",
-                    PrimType::U32 => "u32",
-                    PrimType::U64 => "u64",
-                    PrimType::USize => "usize",
-                    PrimType::F32 => "f32",
-                    PrimType::F64 => "f64",
-                    PrimType::Char => "char",
-                    PrimType::Bool => "bool",
-                };
-                write!(f, "{}", prim_name)?;
-            }
+            Type::Unknown => write!(f, "unknown"),
+            Type::I8 => write!(f, "i8"),
+            Type::I16 => write!(f, "i16"),
+            Type::I32 => write!(f, "i32"),
+            Type::I64 => write!(f, "i64"),
+            Type::U8 => write!(f, "u8"),
+            Type::U16 => write!(f, "u16"),
+            Type::U32 => write!(f, "u32"),
+            Type::U64 => write!(f, "u64"),
+            Type::USize => write!(f, "usize"),
+            Type::F32 => write!(f, "f32"),
+            Type::F64 => write!(f, "f64"),
             Type::Func(fn_type) => {
                 write!(f, "(func (params")?;
 
@@ -471,35 +464,17 @@ impl Display for Type {
                     write!(f, "{}", ret)?;
                 }
 
-                write!(f, "))")?;
+                write!(f, "))")
             }
             Type::Ambig(ambig) => {
                 write!(f, "(ambig")?;
                 for t in &ambig.types {
                     write!(f, " {}", t)?;
                 }
-                write!(f, ")")?;
+                write!(f, ")")
             }
         }
-        Ok(())
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum PrimType {
-    I8,
-    I16,
-    I32,
-    I64,
-    U8,
-    U16,
-    U32,
-    U64,
-    USize,
-    F32,
-    F64,
-    Bool,
-    Char,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
