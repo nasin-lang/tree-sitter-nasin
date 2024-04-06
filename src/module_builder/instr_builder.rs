@@ -5,9 +5,7 @@ use tree_sitter as ts;
 use super::registry::Registry;
 use super::registry::ValueRef;
 use super::registry::ValueTypeDeps;
-use super::types::num_type;
-use super::types::{ambig, binop_sig, merge_types, possible_types, primitive};
-use crate::proto::mir;
+use crate::mir;
 use crate::tree_sitter_utils::TreeSitterUtils;
 
 #[derive(Debug)]
@@ -56,26 +54,22 @@ where
         }
     }
 
-    pub fn add_expr(&mut self, node: &ts::Node) -> (mir::Value, mir::Ty) {
+    pub fn add_expr(&mut self, node: &ts::Node) -> (mir::Value, mir::Type) {
         match node.kind() {
             "number" => {
                 let number = node.get_text(self.source);
-                let ty = num_type(number);
+                let ty = mir::Type::num_type(number);
 
                 let target_idx =
                     self.registry
                         .register_local("", ty.clone(), ValueTypeDeps::default());
 
-                self.body.push(mir::Instr {
-                    instr: Some(mir::instr::Instr::Cons(mir::Cons {
-                        target_idx,
-                        value: Some(mir::cons::Value::Number(number.to_string())),
-                    })),
-                });
+                self.body.push(mir::Instr::Const(mir::ConstInstr {
+                    target_idx,
+                    value: mir::ConstValue::Number(number.to_string()),
+                }));
 
-                let value = mir::Value {
-                    value: Some(mir::value::Value::Local(target_idx)),
-                };
+                let value = mir::Value::Local(target_idx);
 
                 (value, ty)
             }
@@ -86,9 +80,12 @@ where
                 // This will be implemented with typeclasses and generics so will be
                 // like `for T: Sum fn(T, T): T` but none of this is implemented yet so we
                 // will use the number types instead, with one signature for each type
-                let num_ty = num_type("0");
-                let ty = merge_types([&num_ty, &left_ty, &right_ty]).unwrap();
-                let sigs = possible_types(&ty).into_iter().map(binop_sig);
+                let num_ty = mir::Type::num_type("0");
+                let ty = mir::Type::merge([&num_ty, &left_ty, &right_ty]).unwrap();
+                let sigs = ty
+                    .possible_types()
+                    .into_iter()
+                    .map(mir::FuncType::binop_sig);
 
                 let target_idx = self.registry.register_local(
                     "",
@@ -101,29 +98,23 @@ where
 
                 let op_node = node.required_field("op");
 
-                self.body.push(mir::Instr {
-                    instr: Some(mir::instr::Instr::BinOp(mir::BinOp {
-                        target_idx,
-                        op: match op_node.get_text(self.source) {
-                            "+" => mir::BinOpType::Add,
-                            "-" => mir::BinOpType::Sub,
-                            "%" => mir::BinOpType::Mod,
-                            "*" => mir::BinOpType::Mul,
-                            "/" => mir::BinOpType::Div,
-                            "**" => mir::BinOpType::Pow,
-                            _ => unreachable!(),
-                        }
-                        .into(),
-                        left,
-                        right,
-                    })),
-                });
+                self.body.push(mir::Instr::BinOp(mir::BinOpInstr {
+                    target_idx,
+                    op: match op_node.get_text(self.source) {
+                        "+" => mir::BinOpType::Add,
+                        "-" => mir::BinOpType::Sub,
+                        "%" => mir::BinOpType::Mod,
+                        "*" => mir::BinOpType::Mul,
+                        "/" => mir::BinOpType::Div,
+                        "**" => mir::BinOpType::Pow,
+                        _ => unreachable!(),
+                    }
+                    .into(),
+                    left,
+                    right,
+                }));
 
-                let value = mir::Value {
-                    value: Some(mir::value::Value::Local(target_idx)),
-                };
-
-                (value, ty)
+                (mir::Value::Local(target_idx), ty)
             }
             "ident" => {
                 let ident = node.get_text(self.source);
@@ -138,36 +129,27 @@ where
                     .value_type(&ident_ref)
                     .expect(&format!("Type for identifier `{}` not found", ident));
 
-                let value_inner = match &ident_ref {
-                    ValueRef::Local(idx) => mir::value::Value::Local(*idx),
-                    ValueRef::Param(idx) => mir::value::Value::Param(*idx),
+                let value = match &ident_ref {
+                    ValueRef::Local(idx) => mir::Value::Local(*idx),
+                    ValueRef::Param(idx) => mir::Value::Param(*idx),
                     ValueRef::Global(idx) => {
                         let local_idx = self.registry.register_local(
                             "",
                             ty.clone(),
                             ValueTypeDeps {
-                                sig: vec![mir::FuncType {
-                                    args: vec![ty.clone()],
-                                    ret: vec![ty.clone()],
-                                }],
+                                sig: vec![mir::FuncType::new(vec![ty.clone()], vec![ty.clone()])],
                                 refs: vec![ident_ref.clone()],
                             },
                         );
 
-                        self.body.push(mir::Instr {
-                            instr: Some(mir::instr::Instr::LoadGlobal(mir::LoadGlobal {
-                                target_idx: local_idx,
-                                global_idx: *idx,
-                            })),
-                        });
+                        self.body.push(mir::Instr::LoadGlobal(mir::LoadGlobalInstr {
+                            target_idx: local_idx,
+                            global_idx: *idx,
+                        }));
 
-                        mir::value::Value::Local(local_idx)
+                        mir::Value::Local(local_idx)
                     }
                     ValueRef::Func(_) => todo!(),
-                };
-
-                let value = mir::Value {
-                    value: Some(value_inner),
                 };
 
                 (value, ty)
@@ -201,18 +183,16 @@ where
                     _ => todo!(),
                 };
 
-                let fn_sigs: Vec<_> = possible_types(&func_ty)
+                let fn_sigs: Vec<_> = func_ty
+                    .possible_types()
                     .into_iter()
-                    .filter_map(|ty| {
-                        if let Some(mir::ty::Ty::Func(func_ty)) = ty.ty.as_ref() {
-                            Some(func_ty.clone())
-                        } else {
-                            None
-                        }
+                    .filter_map(|ty| match &ty {
+                        mir::Type::Func(func_ty) => Some(func_ty.clone()),
+                        _ => None,
                     })
                     .collect();
 
-                let ret_ty = ambig(
+                let ret_ty = mir::Type::ambig(
                     fn_sigs
                         .clone()
                         .into_iter()
@@ -229,19 +209,13 @@ where
                     },
                 );
 
-                self.body.push(mir::Instr {
-                    instr: Some(mir::instr::Instr::Call(mir::Call {
-                        target_idx,
-                        func_idx,
-                        args,
-                    })),
-                });
+                self.body.push(mir::Instr::Call(mir::CallInstr {
+                    target_idx,
+                    func_idx,
+                    args,
+                }));
 
-                let value = mir::Value {
-                    value: Some(mir::value::Value::Local(target_idx)),
-                };
-
-                (value, ret_ty.clone())
+                (mir::Value::Local(target_idx), ret_ty.clone())
             }
             "block" => {
                 for stmt_node in node.iter_field("body") {
@@ -261,21 +235,21 @@ where
         }
     }
 
-    pub fn parse_type(&mut self, node: &ts::Node<'_>) -> mir::Ty {
+    pub fn parse_type(&mut self, node: &ts::Node<'_>) -> mir::Type {
         match node.kind() {
             "ident" => {
                 match node.get_text(self.source) {
-                    "i8" => primitive!(I8),
-                    "i16" => primitive!(I16),
-                    "i32" => primitive!(I32),
-                    "i64" => primitive!(I64),
-                    "u8" => primitive!(U8),
-                    "u16" => primitive!(U16),
-                    "u32" => primitive!(U32),
-                    "u64" => primitive!(U64),
-                    "usize" => primitive!(USize),
-                    "f32" => primitive!(F32),
-                    "f64" => primitive!(F64),
+                    "i8" => mir::Type::Primitive(mir::PrimType::I8),
+                    "i16" => mir::Type::Primitive(mir::PrimType::I16),
+                    "i32" => mir::Type::Primitive(mir::PrimType::I32),
+                    "i64" => mir::Type::Primitive(mir::PrimType::I64),
+                    "u8" => mir::Type::Primitive(mir::PrimType::U8),
+                    "u16" => mir::Type::Primitive(mir::PrimType::U16),
+                    "u32" => mir::Type::Primitive(mir::PrimType::U32),
+                    "u64" => mir::Type::Primitive(mir::PrimType::U64),
+                    "usize" => mir::Type::Primitive(mir::PrimType::USize),
+                    "f32" => mir::Type::Primitive(mir::PrimType::F32),
+                    "f64" => mir::Type::Primitive(mir::PrimType::F64),
                     _ => {
                         // TODO: improve error handling
                         panic!("{} is not a type, dummy", node.to_sexp());

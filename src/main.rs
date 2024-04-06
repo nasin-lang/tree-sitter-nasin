@@ -1,6 +1,6 @@
 pub mod codegen;
+pub mod mir;
 pub mod module_builder;
-pub mod proto;
 pub mod tree_sitter_utils;
 
 use std::fs;

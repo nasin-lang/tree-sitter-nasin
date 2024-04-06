@@ -15,7 +15,7 @@ use target_lexicon::Triple;
 use self::func::{FnCodegen, FuncBinding, GlobalBinding};
 use self::type_gen::TypeGen;
 use super::traits::Codegen;
-use crate::proto::mir;
+use crate::mir;
 
 const EXIT_FUNC_IDX: usize = 0;
 
@@ -136,9 +136,7 @@ impl Codegen for BinaryCodegen {
         );
 
         for instr in decl.body.iter() {
-            if let Some(instr) = instr.instr.as_ref() {
-                fn_codegen.instr(instr);
-            }
+            fn_codegen.instr(instr);
         }
 
         println!(
@@ -210,9 +208,7 @@ impl Codegen for BinaryCodegen {
         );
 
         for instr in &init.body {
-            if let Some(instr) = instr.instr.as_ref() {
-                fn_codegen.instr(instr);
-            }
+            fn_codegen.instr(instr);
         }
 
         // We're using the return of main as exit status only because strings and printing are

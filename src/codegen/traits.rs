@@ -1,4 +1,4 @@
-use crate::proto::mir;
+use crate::mir;
 
 pub trait Codegen {
     fn declare_function(&mut self, idx: usize, decl: &mir::Func);

@@ -1,7 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use super::types::{ambig, eq_types, fn_type, match_types, merge_types, unknown_type};
-use crate::proto::mir;
+use crate::mir;
 
 #[derive(Debug, Clone, Copy, Hash, Eq, PartialEq)]
 pub enum ValueRef {
@@ -13,17 +12,16 @@ pub enum ValueRef {
 
 impl From<mir::Value> for ValueRef {
     fn from(value: mir::Value) -> Self {
-        match value.value {
-            Some(mir::value::Value::Local(idx)) => ValueRef::Local(idx),
-            Some(mir::value::Value::Param(idx)) => ValueRef::Param(idx),
-            None => unreachable!(),
+        match value {
+            mir::Value::Local(idx) => ValueRef::Local(idx),
+            mir::Value::Param(idx) => ValueRef::Param(idx),
         }
     }
 }
 
 #[derive(Debug, Clone)]
 struct ValueType {
-    ty: mir::Ty,
+    ty: mir::Type,
     produced_by: ValueTypeDeps,
     consumed_by: HashSet<ValueRef>,
 }
@@ -31,7 +29,7 @@ struct ValueType {
 impl Default for ValueType {
     fn default() -> Self {
         Self {
-            ty: unknown_type(),
+            ty: mir::Type::Unknown,
             produced_by: ValueTypeDeps::default(),
             consumed_by: HashSet::new(),
         }
@@ -49,14 +47,14 @@ pub struct ValueTypeDeps {
 #[derive(Debug, PartialEq, Eq)]
 enum TypeConstraintArgs {
     Direct {
-        ty: mir::Ty,
+        ty: mir::Type,
     },
     TopDown {
         produced_by: ValueRef,
-        producer_ty: mir::Ty,
+        producer_ty: mir::Type,
     },
     BottomUp {
-        ty: mir::Ty,
+        ty: mir::Type,
         consumed_by: ValueRef,
     },
 }
@@ -95,10 +93,10 @@ impl IdentMap {
 pub trait Registry {
     fn idents(&self) -> &IdentMap;
     fn idents_mut(&mut self) -> &mut IdentMap;
-    fn register_local(&mut self, ident: &str, ty: mir::Ty, produced_by: ValueTypeDeps) -> u32;
+    fn register_local(&mut self, ident: &str, ty: mir::Type, produced_by: ValueTypeDeps) -> u32;
     fn get_locals(&self) -> impl Iterator<Item = mir::Local>;
-    fn value_type(&self, value_ref: &ValueRef) -> Option<mir::Ty>;
-    fn set_value_type(&mut self, value_ref: ValueRef, ty: mir::Ty, consumed_by: Option<ValueRef>);
+    fn value_type(&self, value_ref: &ValueRef) -> Option<mir::Type>;
+    fn set_value_type(&mut self, value_ref: ValueRef, ty: mir::Type, consumed_by: Option<ValueRef>);
 }
 
 trait RegistryExt: Registry {
@@ -128,7 +126,7 @@ trait RegistryExt: Registry {
                     // constrain the types of the references, like `insert_value_type`
                     // does.
 
-                    value_type.ty = merge_types([&value_type.ty, &ty]).expect(&format!(
+                    value_type.ty = value_type.ty.merge_with(&ty).expect(&format!(
                         "Failed to merge types {} and {}",
                         value_type.ty, ty
                     ));
@@ -136,7 +134,7 @@ trait RegistryExt: Registry {
                     value_type
                         .produced_by
                         .sig
-                        .retain(|sig| match_types([&sig.ret[0], &ty]));
+                        .retain(|sig| mir::Type::matches([&sig.ret[0], &ty]));
 
                     None
                 }
@@ -159,7 +157,7 @@ trait RegistryExt: Registry {
                     value_type
                         .produced_by
                         .sig
-                        .retain(|sig| match_types([&producer_ty, &sig.args[arg_idx]]));
+                        .retain(|sig| mir::Type::matches([&producer_ty, &sig.params[arg_idx]]));
 
                     // Since the new type is a merge of the returned types of the
                     // producing signatures, if it didn't change, we know that nothing
@@ -168,10 +166,11 @@ trait RegistryExt: Registry {
                         continue;
                     }
 
-                    let ty = merge_types(value_type.produced_by.sig.iter().map(|sig| &sig.ret[0]))
-                        .expect("Failed to merge types");
+                    let ty =
+                        mir::Type::merge(value_type.produced_by.sig.iter().map(|sig| &sig.ret[0]))
+                            .expect("Failed to merge types");
 
-                    if eq_types(&value_type.ty, &ty) {
+                    if value_type.ty == ty {
                         continue;
                     }
 
@@ -182,11 +181,11 @@ trait RegistryExt: Registry {
                 Some(TypeConstraintArgs::BottomUp { ty, consumed_by }) => {
                     value_type.consumed_by.insert(consumed_by.clone());
 
-                    if eq_types(&value_type.ty, &ty) {
+                    if value_type.ty == ty {
                         continue;
                     }
 
-                    value_type.ty = merge_types([&value_type.ty, &ty]).expect(&format!(
+                    value_type.ty = value_type.ty.merge_with(&ty).expect(&format!(
                         "Failed to merge types {} and {}",
                         value_type.ty, ty
                     ));
@@ -194,7 +193,7 @@ trait RegistryExt: Registry {
                     value_type
                         .produced_by
                         .sig
-                        .retain(|sig| match_types([&sig.ret[0], &ty]));
+                        .retain(|sig| mir::Type::matches([&sig.ret[0], &ty]));
 
                     Some(consumed_by)
                 }
@@ -209,12 +208,12 @@ trait RegistryExt: Registry {
                     continue;
                 }
 
-                let ty = ambig(
+                let ty = mir::Type::ambig(
                     value_type
                         .produced_by
                         .sig
                         .iter()
-                        .map(|item| item.args[i].clone()),
+                        .map(|item| item.params[i].clone()),
                 );
 
                 stack.push((
@@ -247,7 +246,7 @@ trait RegistryExt: Registry {
 #[derive(Debug)]
 pub struct ModuleRegistry {
     idents: IdentMap,
-    funcs: Vec<mir::Ty>,
+    funcs: Vec<mir::Type>,
     globals: Vec<ValueType>,
     init_locals: Vec<ValueType>,
 }
@@ -264,19 +263,19 @@ impl ModuleRegistry {
 
     pub fn register_func<P>(&mut self, ident: &str, params: P) -> u32
     where
-        P: IntoIterator<Item = mir::Ty>,
+        P: IntoIterator<Item = mir::Type>,
     {
         let idx = self.funcs.len();
-        self.funcs.push(fn_type(
+        self.funcs.push(mir::Type::func_type(
             params,
             // Multiple return values are not supported yet
-            [unknown_type()],
+            [mir::Type::Unknown],
         ));
         self.idents.insert(ident, ValueRef::Func(idx as u32));
         idx as u32
     }
 
-    pub fn register_global(&mut self, ident: &str, ty: mir::Ty) -> u32 {
+    pub fn register_global(&mut self, ident: &str, ty: mir::Type) -> u32 {
         let idx = self.globals.len();
         self.globals.push(ValueType {
             ty,
@@ -296,7 +295,7 @@ impl Registry for ModuleRegistry {
         &mut self.idents
     }
 
-    fn value_type(&self, value_ref: &ValueRef) -> Option<mir::Ty> {
+    fn value_type(&self, value_ref: &ValueRef) -> Option<mir::Type> {
         match &value_ref {
             ValueRef::Local(idx) => Some(self.init_locals.get(*idx as usize)?.ty.clone()),
             ValueRef::Func(idx) => Some(self.funcs.get(*idx as usize)?.clone()),
@@ -305,7 +304,12 @@ impl Registry for ModuleRegistry {
         }
     }
 
-    fn set_value_type(&mut self, value_ref: ValueRef, ty: mir::Ty, consumed_by: Option<ValueRef>) {
+    fn set_value_type(
+        &mut self,
+        value_ref: ValueRef,
+        ty: mir::Type,
+        consumed_by: Option<ValueRef>,
+    ) {
         if let ValueRef::Func(idx) = &value_ref {
             let idx = *idx as usize;
 
@@ -317,7 +321,7 @@ impl Registry for ModuleRegistry {
                 panic!("Cannot set type of a function indirectly");
             }
 
-            self.funcs[idx] = merge_types([&self.funcs[idx], &ty]).expect(&format!(
+            self.funcs[idx] = self.funcs[idx].merge_with(&ty).expect(&format!(
                 "Failed to merge types {} and {}",
                 self.funcs[idx], ty
             ));
@@ -335,7 +339,7 @@ impl Registry for ModuleRegistry {
         );
     }
 
-    fn register_local(&mut self, ident: &str, ty: mir::Ty, produced_by: ValueTypeDeps) -> u32 {
+    fn register_local(&mut self, ident: &str, ty: mir::Type, produced_by: ValueTypeDeps) -> u32 {
         let idx = self.init_locals.len();
         self.init_locals.push(ValueType {
             ty,
@@ -385,7 +389,7 @@ impl<'a> FuncRegistry<'a> {
         }
     }
 
-    pub fn register_param(&mut self, ident: &str, ty: mir::Ty) -> u32 {
+    pub fn register_param(&mut self, ident: &str, ty: mir::Type) -> u32 {
         let idx = self.params.len();
         self.params.push(ValueType {
             ty,
@@ -412,7 +416,7 @@ impl Registry for FuncRegistry<'_> {
         &mut self.idents
     }
 
-    fn value_type(&self, value_ref: &ValueRef) -> Option<mir::Ty> {
+    fn value_type(&self, value_ref: &ValueRef) -> Option<mir::Type> {
         match value_ref {
             ValueRef::Param(idx) => Some(self.params.get(*idx as usize)?.ty.clone()),
             ValueRef::Local(idx) => Some(self.locals.get(*idx as usize)?.ty.clone()),
@@ -420,7 +424,12 @@ impl Registry for FuncRegistry<'_> {
         }
     }
 
-    fn set_value_type(&mut self, value_ref: ValueRef, ty: mir::Ty, consumed_by: Option<ValueRef>) {
+    fn set_value_type(
+        &mut self,
+        value_ref: ValueRef,
+        ty: mir::Type,
+        consumed_by: Option<ValueRef>,
+    ) {
         if let ValueRef::Func(_) = &value_ref {
             self.module_registry
                 .set_value_type(value_ref, ty, consumed_by);
@@ -437,7 +446,7 @@ impl Registry for FuncRegistry<'_> {
         );
     }
 
-    fn register_local(&mut self, ident: &str, ty: mir::Ty, produced_by: ValueTypeDeps) -> u32 {
+    fn register_local(&mut self, ident: &str, ty: mir::Type, produced_by: ValueTypeDeps) -> u32 {
         let idx = self.locals.len();
         self.locals.push(ValueType {
             ty,

@@ -8,7 +8,7 @@ use cranelift_object::ObjectModule;
 use itertools::izip;
 
 use super::type_gen::TypeGen;
-use crate::proto::mir;
+use crate::mir;
 
 // Cranelift's variables are for mutable primitives, immutable primitive can just use values.
 // Aggregate values can be either stack slots, if they have known length and are never moved, or
@@ -17,7 +17,7 @@ use crate::proto::mir;
 pub struct GlobalBinding {
     pub symbol_name: String,
     pub data_id: DataId,
-    pub ty: mir::Ty,
+    pub ty: mir::Type,
     pub native_ty: types::Type,
 }
 
@@ -25,12 +25,12 @@ pub struct FuncBinding {
     pub symbol_name: String,
     pub func_id: FuncId,
     pub params: Vec<mir::Param>,
-    pub ret: Vec<mir::Ty>,
+    pub ret: Vec<mir::Type>,
 }
 
 pub struct LocalBinding {
     pub value: Option<Value>,
-    pub ty: mir::Ty,
+    pub ty: mir::Type,
     pub native_ty: types::Type,
 }
 
@@ -95,37 +95,33 @@ impl<'a> FnCodegen<'a> {
     }
 
     pub fn get_value(&self, mir_value: &mir::Value) -> Value {
-        let local = match mir_value.value.as_ref() {
-            Some(mir::value::Value::Local(idx)) => self.locals.get(*idx as usize),
-            Some(mir::value::Value::Param(idx)) => self.params.get(*idx as usize),
-            None => {
-                unreachable!();
-            }
+        let local = match &mir_value {
+            mir::Value::Local(idx) => self.locals.get(*idx as usize),
+            mir::Value::Param(idx) => self.params.get(*idx as usize),
         }
         .expect(&format!("{:?} not found", mir_value));
 
         local.value.as_ref().expect("Value not defined").clone()
     }
 
-    pub fn instr(&mut self, instr: &mir::instr::Instr) {
+    pub fn instr(&mut self, instr: &mir::Instr) {
         match instr {
-            mir::instr::Instr::Cons(v) => {
+            mir::Instr::Const(v) => {
                 let local = self
                     .locals
                     .get_mut(v.target_idx as usize)
                     .expect("Local not found");
 
                 let value = match &v.value {
-                    Some(mir::cons::Value::Number(num)) => self
+                    mir::ConstValue::Number(num) => self
                         .builder
                         .ins()
                         .iconst(local.native_ty, num.parse::<i64>().expect("Invalid number")),
-                    None => unreachable!(),
                 };
 
                 local.value = Some(value);
             }
-            mir::instr::Instr::LoadGlobal(v) => {
+            mir::Instr::LoadGlobal(v) => {
                 let global = self
                     .globals
                     .get(v.global_idx as usize)
@@ -141,14 +137,14 @@ impl<'a> FnCodegen<'a> {
                 let local = self.locals.get_mut(v.target_idx as usize).unwrap();
                 local.value = Some(value);
             }
-            mir::instr::Instr::StoreGlobal(v) => {
+            mir::Instr::StoreGlobal(v) => {
                 let ptr = self.get_global_ptr(v.global_idx);
 
                 let value = self.get_value(&v.value);
 
                 self.builder.ins().store(MemFlags::new(), value, ptr, 0);
             }
-            mir::instr::Instr::BinOp(v) => {
+            mir::Instr::BinOp(v) => {
                 // Different instructions for different types, might want to use some kind of
                 // abstraction for this
                 let left = self.get_value(&v.left);
@@ -161,7 +157,7 @@ impl<'a> FnCodegen<'a> {
 
                 let value = match local.native_ty {
                     // FIXME: unsigned types
-                    types::I8 | types::I16 | types::I32 | types::I64 => match v.op() {
+                    types::I8 | types::I16 | types::I32 | types::I64 => match v.op {
                         mir::BinOpType::Add => self.builder.ins().iadd(left, right),
                         mir::BinOpType::Sub => self.builder.ins().isub(left, right),
                         mir::BinOpType::Mul => self.builder.ins().imul(left, right),
@@ -173,7 +169,7 @@ impl<'a> FnCodegen<'a> {
                             self.builder.ins().imul(left, right)
                         }
                     },
-                    types::F32 | types::F64 => match v.op() {
+                    types::F32 | types::F64 => match v.op {
                         mir::BinOpType::Add => self.builder.ins().fadd(left, right),
                         mir::BinOpType::Sub => self.builder.ins().fsub(left, right),
                         mir::BinOpType::Mul => self.builder.ins().fmul(left, right),
@@ -192,7 +188,7 @@ impl<'a> FnCodegen<'a> {
 
                 local.value = Some(value);
             }
-            mir::instr::Instr::Call(v) => {
+            mir::Instr::Call(v) => {
                 let func_ref = match self.func_refs.get(&v.func_idx) {
                     Some(func_ref) => *func_ref,
                     None => {
@@ -222,12 +218,15 @@ impl<'a> FnCodegen<'a> {
                     local.value = Some(value);
                 }
             }
-            mir::instr::Instr::Return(fn_return) => {
-                if fn_return.value.is_none() {
+            mir::Instr::Return(v) => {
+                if v.value.is_none() {
                     self.builder.ins().return_(&[]);
                 } else {
-                    let value = self.get_value(&fn_return);
-                    self.builder.ins().return_(&[value]);
+                    let values = v
+                        .value
+                        .as_ref()
+                        .map_or(vec![], |value| vec![self.get_value(value)]);
+                    self.builder.ins().return_(&values);
                 }
             }
         }

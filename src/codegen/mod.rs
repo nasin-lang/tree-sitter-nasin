@@ -4,7 +4,7 @@ mod traits;
 use target_lexicon::Triple;
 use traits::Codegen;
 
-use crate::proto::mir;
+use crate::mir;
 
 pub fn compile_program(program: &mir::Module) {
     // TODO: get the target from some kind of configuration

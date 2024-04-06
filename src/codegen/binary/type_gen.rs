@@ -1,13 +1,13 @@
 use cranelift_codegen::ir::types;
 use cranelift_module::Module;
 
-use crate::proto::mir;
+use crate::mir;
 
 pub trait TypeGen {
     fn poiter_type(&self) -> types::Type;
-    fn get_type(&self, ty: &mir::Ty) -> types::Type {
-        match ty.ty.as_ref().unwrap() {
-            mir::ty::Ty::Primitive(prim) => match mir::PrimType::try_from(prim.clone()).unwrap() {
+    fn get_type(&self, ty: &mir::Type) -> types::Type {
+        match &ty {
+            mir::Type::Primitive(prim) => match mir::PrimType::try_from(prim.clone()).unwrap() {
                 mir::PrimType::I8 => types::I8,
                 mir::PrimType::I16 => types::I16,
                 mir::PrimType::I32 => types::I32,
@@ -22,7 +22,7 @@ pub trait TypeGen {
                 mir::PrimType::Bool => types::I8,
                 mir::PrimType::Char => types::I8,
             },
-            mir::ty::Ty::Ambig(_) | mir::ty::Ty::Unknown(_) => {
+            mir::Type::Ambig(_) | mir::Type::Unknown => {
                 panic!("Type must be resolved before codegen")
             }
             _ => {

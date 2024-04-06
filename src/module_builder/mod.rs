@@ -1,15 +1,12 @@
 mod instr_builder;
 mod registry;
-mod types;
 
 use tree_sitter as ts;
 
 use self::instr_builder::InstrBuilder;
 use self::registry::ModuleRegistry;
-use self::types::fn_type;
+use crate::mir;
 use crate::module_builder::registry::{FuncRegistry, Registry, ValueRef};
-use crate::module_builder::types::unknown_type;
-use crate::proto::mir;
 use crate::tree_sitter_utils::TreeSitterUtils;
 
 pub struct ModuleBuilder<'a> {
@@ -65,7 +62,9 @@ impl<'a> ModuleBuilder<'a> {
             let ty = param_node
                 .field("type")
                 .as_ref()
-                .map_or(unknown_type(), |ty_node| local_builder.parse_type(ty_node));
+                .map_or(mir::Type::Unknown, |ty_node| {
+                    local_builder.parse_type(ty_node)
+                });
 
             local_builder.registry.register_param(param_name, ty);
         }
@@ -79,14 +78,18 @@ impl<'a> ModuleBuilder<'a> {
         let ret = node
             .field("ret_type")
             .as_ref()
-            .map_or(unknown_type(), |ty_node| local_builder.parse_type(ty_node));
+            .map_or(mir::Type::Unknown, |ty_node| {
+                local_builder.parse_type(ty_node)
+            });
 
         let (ret_value, _) = local_builder.add_expr(&node.required_field("return"));
         let ret_ref: ValueRef = ret_value.clone().into();
 
-        local_builder.body.push(mir::Instr {
-            instr: Some(mir::instr::Instr::Return(ret_value.clone())),
-        });
+        local_builder
+            .body
+            .push(mir::Instr::Return(mir::ReturnInstr {
+                value: Some(ret_value.clone()),
+            }));
 
         local_builder
             .registry
@@ -96,7 +99,7 @@ impl<'a> ModuleBuilder<'a> {
         let params: Vec<_> = local_builder.registry.get_params().collect();
         let ret = local_builder.registry.value_type(&ret_ref).unwrap();
 
-        let ty = fn_type(params.iter().map(|p| p.ty.clone()), [ret.clone()]);
+        let ty = mir::Type::func_type(params.iter().map(|p| p.ty.clone()), [ret.clone()]);
 
         local_builder
             .registry
@@ -121,7 +124,7 @@ impl<'a> ModuleBuilder<'a> {
 
         let ty = node
             .field("type")
-            .map_or(unknown_type(), |ty| local_builder.parse_type(&ty));
+            .map_or(mir::Type::Unknown, |ty| local_builder.parse_type(&ty));
 
         let global_idx = local_builder.registry.register_global(&name, ty.clone());
         let global_ref = ValueRef::Global(global_idx);
@@ -136,12 +139,12 @@ impl<'a> ModuleBuilder<'a> {
             .idents_mut()
             .insert(&name, value_ref.clone());
 
-        local_builder.body.push(mir::Instr {
-            instr: Some(mir::instr::Instr::StoreGlobal(mir::StoreGlobal {
+        local_builder
+            .body
+            .push(mir::Instr::StoreGlobal(mir::StoreGlobalInstr {
                 global_idx,
                 value,
-            })),
-        });
+            }));
 
         local_builder
             .registry
