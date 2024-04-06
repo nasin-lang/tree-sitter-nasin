@@ -16,29 +16,29 @@ fn indented<T: Display, I: IntoIterator<Item = T>>(n: usize, items: I) -> String
     s
 }
 
-pub mod m_ir {
+pub mod mir {
     use super::*;
 
-    include!(concat!(env!("OUT_DIR"), "/torvo.m_ir.rs"));
+    include!(concat!(env!("OUT_DIR"), "/torvo.mir.rs"));
 
-    impl Eq for Type {}
+    impl Eq for Ty {}
 
-    impl Hash for Type {
+    impl Hash for Ty {
         fn hash<H: Hasher>(&self, state: &mut H) {
-            match &self.r#type {
-                Some(r#type::Type::Unknown(_)) => {
+            match &self.ty {
+                Some(ty::Ty::Unknown(_)) => {
                     "Unknown".hash(state);
                 }
-                Some(r#type::Type::Primitive(prim)) => {
+                Some(ty::Ty::Primitive(prim)) => {
                     "Primitive".hash(state);
                     prim.hash(state);
                 }
-                Some(r#type::Type::Fn(fn_type)) => {
-                    "Fn".hash(state);
+                Some(ty::Ty::Func(fn_type)) => {
+                    "Func".hash(state);
                     fn_type.args.hash(state);
                     fn_type.ret.hash(state);
                 }
-                Some(r#type::Type::Ambig(ambig)) => {
+                Some(ty::Ty::Ambig(ambig)) => {
                     "Ambig".hash(state);
                     ambig.types.hash(state);
                 }
@@ -53,14 +53,14 @@ pub mod m_ir {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             write!(f, "module \"{}\":", self.name,)?;
 
-            for (i, global) in self.data.iter().enumerate() {
+            for (i, global) in self.globals.iter().enumerate() {
                 write!(f, "\n  global {}:", i)?;
 
                 if let Some(Export { name }) = &global.export {
                     write!(f, " (export \"{}\")", name)?;
                 }
 
-                write!(f, " {}", global.r#type)?;
+                write!(f, " {}", global.ty)?;
             }
 
             for (i, func) in self.funcs.iter().enumerate() {
@@ -72,7 +72,7 @@ pub mod m_ir {
 
                 write!(f, " (params")?;
                 for param in &func.params {
-                    write!(f, " {}", param.r#type)?;
+                    write!(f, " {}", param.ty)?;
                 }
                 write!(f, ")")?;
 
@@ -83,7 +83,7 @@ pub mod m_ir {
                 write!(f, ")")?;
 
                 for (i, local) in func.locals.iter().enumerate() {
-                    write!(f, "\n       %{}: {}", i, local.r#type)?;
+                    write!(f, "\n       %{}: {}", i, local.ty)?;
                 }
 
                 write!(f, "\n{}", indented(4, &func.body))?;
@@ -96,7 +96,7 @@ pub mod m_ir {
                     if i > 0 {
                         write!(f, "\n        ")?;
                     }
-                    write!(f, "%{}: {}", i, local.r#type)?;
+                    write!(f, "%{}: {}", i, local.ty)?;
                 }
 
                 write!(f, "\n{}", indented(4, &init.body))?;
@@ -109,10 +109,10 @@ pub mod m_ir {
     impl Display for Instr {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             match &self.instr {
-                Some(instr::Instr::Const(v)) => {
-                    write!(f, "%{} = const ", v.target_idx)?;
+                Some(instr::Instr::Cons(v)) => {
+                    write!(f, "%{} = cons ", v.target_idx)?;
                     match &v.value {
-                        Some(r#const::Value::Number(num)) => {
+                        Some(cons::Value::Number(num)) => {
                             write!(f, "{}", num)?;
                         }
                         None => {}
@@ -145,13 +145,13 @@ pub mod m_ir {
                         op.right
                     )?;
                 }
-                Some(instr::Instr::FnCall(call)) => {
-                    write!(f, "%{} = fn_call <func {}>", call.target_idx, call.func_idx,)?;
+                Some(instr::Instr::Call(call)) => {
+                    write!(f, "%{} = call <func {}>", call.target_idx, call.func_idx,)?;
                     for arg in &call.args {
                         write!(f, ", {}", arg)?;
                     }
                 }
-                Some(instr::Instr::FnReturn(ret)) => {
+                Some(instr::Instr::Return(ret)) => {
                     write!(f, "return {}", ret)?;
                 }
                 None => {}
@@ -175,16 +175,16 @@ pub mod m_ir {
         }
     }
 
-    impl Display for Type {
+    impl Display for Ty {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            match self.r#type.as_ref() {
-                Some(r#type::Type::Unknown(_)) => {
+            match self.ty.as_ref() {
+                Some(ty::Ty::Unknown(_)) => {
                     write!(f, "unknown")?;
                 }
-                Some(r#type::Type::Primitive(prim)) => {
+                Some(ty::Ty::Primitive(prim)) => {
                     write!(f, "{}", PrimType::try_from(*prim).unwrap())?;
                 }
-                Some(r#type::Type::Fn(fn_type)) => {
+                Some(ty::Ty::Func(fn_type)) => {
                     write!(f, "(func (params")?;
 
                     for arg in &fn_type.args {
@@ -198,7 +198,7 @@ pub mod m_ir {
 
                     write!(f, "))")?;
                 }
-                Some(r#type::Type::Ambig(ambig)) => {
+                Some(ty::Ty::Ambig(ambig)) => {
                     write!(f, "(ambig")?;
                     for t in &ambig.types {
                         write!(f, " {}", t)?;

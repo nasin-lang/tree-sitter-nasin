@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use super::types::{ambig, eq_types, fn_type, match_types, merge_types, unknown_type};
-use crate::proto::m_ir;
+use crate::proto::mir;
 
 #[derive(Debug, Clone, Copy, Hash, Eq, PartialEq)]
 pub enum ValueRef {
@@ -11,11 +11,11 @@ pub enum ValueRef {
     Param(u32),
 }
 
-impl From<m_ir::Value> for ValueRef {
-    fn from(value: m_ir::Value) -> Self {
+impl From<mir::Value> for ValueRef {
+    fn from(value: mir::Value) -> Self {
         match value.value {
-            Some(m_ir::value::Value::Local(idx)) => ValueRef::Local(idx),
-            Some(m_ir::value::Value::Param(idx)) => ValueRef::Param(idx),
+            Some(mir::value::Value::Local(idx)) => ValueRef::Local(idx),
+            Some(mir::value::Value::Param(idx)) => ValueRef::Param(idx),
             None => unreachable!(),
         }
     }
@@ -23,7 +23,7 @@ impl From<m_ir::Value> for ValueRef {
 
 #[derive(Debug, Clone)]
 struct ValueType {
-    ty: m_ir::Type,
+    ty: mir::Ty,
     produced_by: ValueTypeDeps,
     consumed_by: HashSet<ValueRef>,
 }
@@ -40,7 +40,7 @@ impl Default for ValueType {
 
 #[derive(Debug, Clone, Default)]
 pub struct ValueTypeDeps {
-    pub sig: Vec<m_ir::FnType>,
+    pub sig: Vec<mir::FuncType>,
     pub refs: Vec<ValueRef>,
 }
 
@@ -49,14 +49,14 @@ pub struct ValueTypeDeps {
 #[derive(Debug, PartialEq, Eq)]
 enum TypeConstraintArgs {
     Direct {
-        ty: m_ir::Type,
+        ty: mir::Ty,
     },
     TopDown {
         produced_by: ValueRef,
-        producer_ty: m_ir::Type,
+        producer_ty: mir::Ty,
     },
     BottomUp {
-        ty: m_ir::Type,
+        ty: mir::Ty,
         consumed_by: ValueRef,
     },
 }
@@ -95,15 +95,10 @@ impl IdentMap {
 pub trait Registry {
     fn idents(&self) -> &IdentMap;
     fn idents_mut(&mut self) -> &mut IdentMap;
-    fn register_local(&mut self, ident: &str, ty: m_ir::Type, produced_by: ValueTypeDeps) -> u32;
-    fn get_locals(&self) -> impl Iterator<Item = m_ir::Local>;
-    fn value_type(&self, value_ref: &ValueRef) -> Option<m_ir::Type>;
-    fn set_value_type(
-        &mut self,
-        value_ref: ValueRef,
-        ty: m_ir::Type,
-        consumed_by: Option<ValueRef>,
-    );
+    fn register_local(&mut self, ident: &str, ty: mir::Ty, produced_by: ValueTypeDeps) -> u32;
+    fn get_locals(&self) -> impl Iterator<Item = mir::Local>;
+    fn value_type(&self, value_ref: &ValueRef) -> Option<mir::Ty>;
+    fn set_value_type(&mut self, value_ref: ValueRef, ty: mir::Ty, consumed_by: Option<ValueRef>);
 }
 
 trait RegistryExt: Registry {
@@ -121,7 +116,7 @@ trait RegistryExt: Registry {
 
             let Some(value_type) = self.get_mut_value_type(&value_ref) else {
                 panic!(
-                    "Type of {:?} cannot be refined because it does not exist in the registry or is not mutable",
+                    "Ty of {:?} cannot be refined because it does not exist in the registry or is not mutable",
                     value_ref
                 );
             };
@@ -252,7 +247,7 @@ trait RegistryExt: Registry {
 #[derive(Debug)]
 pub struct ModuleRegistry {
     idents: IdentMap,
-    funcs: Vec<m_ir::Type>,
+    funcs: Vec<mir::Ty>,
     globals: Vec<ValueType>,
     init_locals: Vec<ValueType>,
 }
@@ -269,7 +264,7 @@ impl ModuleRegistry {
 
     pub fn register_func<P>(&mut self, ident: &str, params: P) -> u32
     where
-        P: IntoIterator<Item = m_ir::Type>,
+        P: IntoIterator<Item = mir::Ty>,
     {
         let idx = self.funcs.len();
         self.funcs.push(fn_type(
@@ -281,7 +276,7 @@ impl ModuleRegistry {
         idx as u32
     }
 
-    pub fn register_global(&mut self, ident: &str, ty: m_ir::Type) -> u32 {
+    pub fn register_global(&mut self, ident: &str, ty: mir::Ty) -> u32 {
         let idx = self.globals.len();
         self.globals.push(ValueType {
             ty,
@@ -301,7 +296,7 @@ impl Registry for ModuleRegistry {
         &mut self.idents
     }
 
-    fn value_type(&self, value_ref: &ValueRef) -> Option<m_ir::Type> {
+    fn value_type(&self, value_ref: &ValueRef) -> Option<mir::Ty> {
         match &value_ref {
             ValueRef::Local(idx) => Some(self.init_locals.get(*idx as usize)?.ty.clone()),
             ValueRef::Func(idx) => Some(self.funcs.get(*idx as usize)?.clone()),
@@ -310,12 +305,7 @@ impl Registry for ModuleRegistry {
         }
     }
 
-    fn set_value_type(
-        &mut self,
-        value_ref: ValueRef,
-        ty: m_ir::Type,
-        consumed_by: Option<ValueRef>,
-    ) {
+    fn set_value_type(&mut self, value_ref: ValueRef, ty: mir::Ty, consumed_by: Option<ValueRef>) {
         if let ValueRef::Func(idx) = &value_ref {
             let idx = *idx as usize;
 
@@ -345,7 +335,7 @@ impl Registry for ModuleRegistry {
         );
     }
 
-    fn register_local(&mut self, ident: &str, ty: m_ir::Type, produced_by: ValueTypeDeps) -> u32 {
+    fn register_local(&mut self, ident: &str, ty: mir::Ty, produced_by: ValueTypeDeps) -> u32 {
         let idx = self.init_locals.len();
         self.init_locals.push(ValueType {
             ty,
@@ -359,9 +349,9 @@ impl Registry for ModuleRegistry {
         idx as u32
     }
 
-    fn get_locals(&self) -> impl Iterator<Item = m_ir::Local> {
-        self.init_locals.iter().map(|value_type| m_ir::Local {
-            r#type: value_type.ty.clone(),
+    fn get_locals(&self) -> impl Iterator<Item = mir::Local> {
+        self.init_locals.iter().map(|value_type| mir::Local {
+            ty: value_type.ty.clone(),
         })
     }
 }
@@ -395,7 +385,7 @@ impl<'a> FuncRegistry<'a> {
         }
     }
 
-    pub fn register_param(&mut self, ident: &str, ty: m_ir::Type) -> u32 {
+    pub fn register_param(&mut self, ident: &str, ty: mir::Ty) -> u32 {
         let idx = self.params.len();
         self.params.push(ValueType {
             ty,
@@ -405,13 +395,11 @@ impl<'a> FuncRegistry<'a> {
         idx as u32
     }
 
-    pub fn get_params(&self) -> impl Iterator<Item = m_ir::Param> {
+    pub fn get_params(&self) -> impl Iterator<Item = mir::Param> {
         self.params
             .clone()
             .into_iter()
-            .map(|value_type| m_ir::Param {
-                r#type: value_type.ty,
-            })
+            .map(|value_type| mir::Param { ty: value_type.ty })
     }
 }
 
@@ -424,7 +412,7 @@ impl Registry for FuncRegistry<'_> {
         &mut self.idents
     }
 
-    fn value_type(&self, value_ref: &ValueRef) -> Option<m_ir::Type> {
+    fn value_type(&self, value_ref: &ValueRef) -> Option<mir::Ty> {
         match value_ref {
             ValueRef::Param(idx) => Some(self.params.get(*idx as usize)?.ty.clone()),
             ValueRef::Local(idx) => Some(self.locals.get(*idx as usize)?.ty.clone()),
@@ -432,12 +420,7 @@ impl Registry for FuncRegistry<'_> {
         }
     }
 
-    fn set_value_type(
-        &mut self,
-        value_ref: ValueRef,
-        ty: m_ir::Type,
-        consumed_by: Option<ValueRef>,
-    ) {
+    fn set_value_type(&mut self, value_ref: ValueRef, ty: mir::Ty, consumed_by: Option<ValueRef>) {
         if let ValueRef::Func(_) = &value_ref {
             self.module_registry
                 .set_value_type(value_ref, ty, consumed_by);
@@ -454,7 +437,7 @@ impl Registry for FuncRegistry<'_> {
         );
     }
 
-    fn register_local(&mut self, ident: &str, ty: m_ir::Type, produced_by: ValueTypeDeps) -> u32 {
+    fn register_local(&mut self, ident: &str, ty: mir::Ty, produced_by: ValueTypeDeps) -> u32 {
         let idx = self.locals.len();
         self.locals.push(ValueType {
             ty,
@@ -470,9 +453,9 @@ impl Registry for FuncRegistry<'_> {
         idx as u32
     }
 
-    fn get_locals(&self) -> impl Iterator<Item = m_ir::Local> {
-        self.locals.iter().map(|value_type| m_ir::Local {
-            r#type: value_type.ty.clone(),
+    fn get_locals(&self) -> impl Iterator<Item = mir::Local> {
+        self.locals.iter().map(|value_type| mir::Local {
+            ty: value_type.ty.clone(),
         })
     }
 }

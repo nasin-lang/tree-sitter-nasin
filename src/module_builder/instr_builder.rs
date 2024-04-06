@@ -7,7 +7,7 @@ use super::registry::ValueRef;
 use super::registry::ValueTypeDeps;
 use super::types::num_type;
 use super::types::{ambig, binop_sig, merge_types, possible_types, primitive};
-use crate::proto::m_ir;
+use crate::proto::mir;
 use crate::tree_sitter_utils::TreeSitterUtils;
 
 #[derive(Debug)]
@@ -16,7 +16,7 @@ where
     R: Registry + Debug,
 {
     pub registry: &'a mut R,
-    pub body: Vec<m_ir::Instr>,
+    pub body: Vec<mir::Instr>,
     source: &'a str,
 }
 
@@ -32,7 +32,7 @@ where
         }
     }
 
-    pub fn finish(self) -> Vec<m_ir::Instr> {
+    pub fn finish(self) -> Vec<mir::Instr> {
         self.body
     }
 
@@ -56,7 +56,7 @@ where
         }
     }
 
-    pub fn add_expr(&mut self, node: &ts::Node) -> (m_ir::Value, m_ir::Type) {
+    pub fn add_expr(&mut self, node: &ts::Node) -> (mir::Value, mir::Ty) {
         match node.kind() {
             "number" => {
                 let number = node.get_text(self.source);
@@ -66,15 +66,15 @@ where
                     self.registry
                         .register_local("", ty.clone(), ValueTypeDeps::default());
 
-                self.body.push(m_ir::Instr {
-                    instr: Some(m_ir::instr::Instr::Const(m_ir::Const {
+                self.body.push(mir::Instr {
+                    instr: Some(mir::instr::Instr::Cons(mir::Cons {
                         target_idx,
-                        value: Some(m_ir::r#const::Value::Number(number.to_string())),
+                        value: Some(mir::cons::Value::Number(number.to_string())),
                     })),
                 });
 
-                let value = m_ir::Value {
-                    value: Some(m_ir::value::Value::Local(target_idx)),
+                let value = mir::Value {
+                    value: Some(mir::value::Value::Local(target_idx)),
                 };
 
                 (value, ty)
@@ -101,16 +101,16 @@ where
 
                 let op_node = node.required_field("op");
 
-                self.body.push(m_ir::Instr {
-                    instr: Some(m_ir::instr::Instr::BinOp(m_ir::BinOp {
+                self.body.push(mir::Instr {
+                    instr: Some(mir::instr::Instr::BinOp(mir::BinOp {
                         target_idx,
                         op: match op_node.get_text(self.source) {
-                            "+" => m_ir::BinOpType::Add,
-                            "-" => m_ir::BinOpType::Sub,
-                            "%" => m_ir::BinOpType::Mod,
-                            "*" => m_ir::BinOpType::Mul,
-                            "/" => m_ir::BinOpType::Div,
-                            "**" => m_ir::BinOpType::Pow,
+                            "+" => mir::BinOpType::Add,
+                            "-" => mir::BinOpType::Sub,
+                            "%" => mir::BinOpType::Mod,
+                            "*" => mir::BinOpType::Mul,
+                            "/" => mir::BinOpType::Div,
+                            "**" => mir::BinOpType::Pow,
                             _ => unreachable!(),
                         }
                         .into(),
@@ -119,8 +119,8 @@ where
                     })),
                 });
 
-                let value = m_ir::Value {
-                    value: Some(m_ir::value::Value::Local(target_idx)),
+                let value = mir::Value {
+                    value: Some(mir::value::Value::Local(target_idx)),
                 };
 
                 (value, ty)
@@ -139,14 +139,14 @@ where
                     .expect(&format!("Type for identifier `{}` not found", ident));
 
                 let value_inner = match &ident_ref {
-                    ValueRef::Local(idx) => m_ir::value::Value::Local(*idx),
-                    ValueRef::Param(idx) => m_ir::value::Value::Param(*idx),
+                    ValueRef::Local(idx) => mir::value::Value::Local(*idx),
+                    ValueRef::Param(idx) => mir::value::Value::Param(*idx),
                     ValueRef::Global(idx) => {
                         let local_idx = self.registry.register_local(
                             "",
                             ty.clone(),
                             ValueTypeDeps {
-                                sig: vec![m_ir::FnType {
+                                sig: vec![mir::FuncType {
                                     args: vec![ty.clone()],
                                     ret: vec![ty.clone()],
                                 }],
@@ -154,19 +154,19 @@ where
                             },
                         );
 
-                        self.body.push(m_ir::Instr {
-                            instr: Some(m_ir::instr::Instr::LoadGlobal(m_ir::LoadGlobal {
+                        self.body.push(mir::Instr {
+                            instr: Some(mir::instr::Instr::LoadGlobal(mir::LoadGlobal {
                                 target_idx: local_idx,
                                 global_idx: *idx,
                             })),
                         });
 
-                        m_ir::value::Value::Local(local_idx)
+                        mir::value::Value::Local(local_idx)
                     }
                     ValueRef::Func(_) => todo!(),
                 };
 
-                let value = m_ir::Value {
+                let value = mir::Value {
                     value: Some(value_inner),
                 };
 
@@ -204,8 +204,8 @@ where
                 let fn_sigs: Vec<_> = possible_types(&func_ty)
                     .into_iter()
                     .filter_map(|ty| {
-                        if let Some(m_ir::r#type::Type::Fn(fn_ty)) = ty.r#type.as_ref() {
-                            Some(fn_ty.clone())
+                        if let Some(mir::ty::Ty::Func(func_ty)) = ty.ty.as_ref() {
+                            Some(func_ty.clone())
                         } else {
                             None
                         }
@@ -229,16 +229,16 @@ where
                     },
                 );
 
-                self.body.push(m_ir::Instr {
-                    instr: Some(m_ir::instr::Instr::FnCall(m_ir::FnCall {
+                self.body.push(mir::Instr {
+                    instr: Some(mir::instr::Instr::Call(mir::Call {
                         target_idx,
                         func_idx,
                         args,
                     })),
                 });
 
-                let value = m_ir::Value {
-                    value: Some(m_ir::value::Value::Local(target_idx)),
+                let value = mir::Value {
+                    value: Some(mir::value::Value::Local(target_idx)),
                 };
 
                 (value, ret_ty.clone())
@@ -261,7 +261,7 @@ where
         }
     }
 
-    pub fn parse_type(&mut self, node: &ts::Node<'_>) -> m_ir::Type {
+    pub fn parse_type(&mut self, node: &ts::Node<'_>) -> mir::Ty {
         match node.kind() {
             "ident" => {
                 match node.get_text(self.source) {

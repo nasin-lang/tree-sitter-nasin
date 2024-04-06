@@ -15,7 +15,7 @@ use target_lexicon::Triple;
 use self::func::{FnCodegen, FuncBinding, GlobalBinding};
 use self::type_gen::TypeGen;
 use super::traits::Codegen;
-use crate::proto::m_ir;
+use crate::proto::mir;
 
 const EXIT_FUNC_IDX: usize = 0;
 
@@ -73,12 +73,12 @@ impl BinaryCodegen {
 }
 
 impl Codegen for BinaryCodegen {
-    fn declare_function(&mut self, idx: usize, decl: &m_ir::FnDecl) {
+    fn declare_function(&mut self, idx: usize, decl: &mir::Func) {
         let mut sig = self.module.make_signature();
 
         for param in &decl.params {
             sig.params
-                .push(AbiParam::new(self.module.get_type(&param.r#type)));
+                .push(AbiParam::new(self.module.get_type(&param.ty)));
         }
         for ret in &decl.ret {
             sig.returns.push(AbiParam::new(self.module.get_type(ret)));
@@ -92,7 +92,7 @@ impl Codegen for BinaryCodegen {
 
         let func = Function::with_name_signature(user_func_name, sig);
 
-        let symbol_name = if let Some(m_ir::Export { name }) = &decl.export {
+        let symbol_name = if let Some(mir::Export { name }) = &decl.export {
             name.clone()
         } else {
             format!("$func{}", idx)
@@ -118,7 +118,7 @@ impl Codegen for BinaryCodegen {
         self.declared_funcs.push((func_id, func));
     }
 
-    fn build_function(&mut self, idx: usize, decl: &m_ir::FnDecl) {
+    fn build_function(&mut self, idx: usize, decl: &mir::Func) {
         let func = &self.funcs[idx];
         let (_, native_func) = &mut self.declared_funcs[idx];
 
@@ -149,10 +149,10 @@ impl Codegen for BinaryCodegen {
         fn_codegen.finalize();
     }
 
-    fn declare_global(&mut self, idx: usize, decl: &m_ir::DataDecl) {
-        let native_ty = self.module.get_type(&decl.r#type);
+    fn declare_global(&mut self, idx: usize, decl: &mir::Global) {
+        let native_ty = self.module.get_type(&decl.ty);
 
-        let symbol_name = if let Some(m_ir::Export { name }) = &decl.export {
+        let symbol_name = if let Some(mir::Export { name }) = &decl.export {
             name.clone()
         } else {
             format!("$global{}", idx)
@@ -177,7 +177,7 @@ impl Codegen for BinaryCodegen {
         self.globals.push(GlobalBinding {
             symbol_name: symbol_name.clone(),
             data_id,
-            ty: decl.r#type.clone(),
+            ty: decl.ty.clone(),
             native_ty,
         });
 
@@ -189,7 +189,7 @@ impl Codegen for BinaryCodegen {
         );
     }
 
-    fn build_module_init(&mut self, init: &m_ir::ModuleInit) {
+    fn build_module_init(&mut self, init: &mir::ModuleInit) {
         let sig = self.module.make_signature();
         let mut func = Function::with_name_signature(UserFuncName::user(2, 0), sig);
         let func_id = self

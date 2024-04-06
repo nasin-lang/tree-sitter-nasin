@@ -9,16 +9,16 @@ use self::registry::ModuleRegistry;
 use self::types::fn_type;
 use crate::module_builder::registry::{FuncRegistry, Registry, ValueRef};
 use crate::module_builder::types::unknown_type;
-use crate::proto::m_ir;
+use crate::proto::mir;
 use crate::tree_sitter_utils::TreeSitterUtils;
 
 pub struct ModuleBuilder<'a> {
     pub name: String,
     pub source: &'a str,
     registry: ModuleRegistry,
-    data: Vec<m_ir::DataDecl>,
-    funcs: Vec<m_ir::FnDecl>,
-    init_body: Vec<m_ir::Instr>,
+    globals: Vec<mir::Global>,
+    funcs: Vec<mir::Func>,
+    init_body: Vec<mir::Instr>,
 }
 
 impl<'a> ModuleBuilder<'a> {
@@ -26,14 +26,14 @@ impl<'a> ModuleBuilder<'a> {
         ModuleBuilder {
             name,
             source,
-            data: Vec::new(),
+            globals: Vec::new(),
             funcs: Vec::new(),
             registry: ModuleRegistry::new(),
             init_body: Vec::new(),
         }
     }
 
-    pub fn parse(name: String, source: &'a str, node: &'a ts::Node<'a>) -> m_ir::Module {
+    pub fn parse(name: String, source: &'a str, node: &'a ts::Node<'a>) -> mir::Module {
         node.of_kind("root");
 
         let mut this = ModuleBuilder::new(name, source);
@@ -73,7 +73,7 @@ impl<'a> ModuleBuilder<'a> {
         let func_idx = local_builder
             .registry
             .module_registry
-            .register_func(&name, local_builder.registry.get_params().map(|p| p.r#type));
+            .register_func(&name, local_builder.registry.get_params().map(|p| p.ty));
         let func_ref = ValueRef::Func(func_idx);
 
         let ret = node
@@ -84,8 +84,8 @@ impl<'a> ModuleBuilder<'a> {
         let (ret_value, _) = local_builder.add_expr(&node.required_field("return"));
         let ret_ref: ValueRef = ret_value.clone().into();
 
-        local_builder.body.push(m_ir::Instr {
-            instr: Some(m_ir::instr::Instr::FnReturn(ret_value.clone())),
+        local_builder.body.push(mir::Instr {
+            instr: Some(mir::instr::Instr::Return(ret_value.clone())),
         });
 
         local_builder
@@ -96,7 +96,7 @@ impl<'a> ModuleBuilder<'a> {
         let params: Vec<_> = local_builder.registry.get_params().collect();
         let ret = local_builder.registry.value_type(&ret_ref).unwrap();
 
-        let ty = fn_type(params.iter().map(|p| p.r#type.clone()), [ret.clone()]);
+        let ty = fn_type(params.iter().map(|p| p.ty.clone()), [ret.clone()]);
 
         local_builder
             .registry
@@ -105,8 +105,8 @@ impl<'a> ModuleBuilder<'a> {
 
         let body = local_builder.finish();
 
-        self.funcs.push(m_ir::FnDecl {
-            export: Some(m_ir::Export { name }),
+        self.funcs.push(mir::Func {
+            export: Some(mir::Export { name }),
             locals,
             params,
             ret: vec![ret],
@@ -136,8 +136,8 @@ impl<'a> ModuleBuilder<'a> {
             .idents_mut()
             .insert(&name, value_ref.clone());
 
-        local_builder.body.push(m_ir::Instr {
-            instr: Some(m_ir::instr::Instr::StoreGlobal(m_ir::StoreGlobal {
+        local_builder.body.push(mir::Instr {
+            instr: Some(mir::instr::Instr::StoreGlobal(mir::StoreGlobal {
                 global_idx,
                 value,
             })),
@@ -149,26 +149,26 @@ impl<'a> ModuleBuilder<'a> {
 
         let ty = local_builder.registry.value_type(&value_ref).unwrap();
 
-        self.data.push(m_ir::DataDecl {
+        self.globals.push(mir::Global {
             // FIXME: read export info from the source
             export: if name == "main" {
-                Some(m_ir::Export { name })
+                Some(mir::Export { name })
             } else {
                 None
             },
-            r#type: ty,
+            ty,
         });
 
         self.init_body.extend(local_builder.finish());
     }
 
-    pub fn finish(self) -> m_ir::Module {
-        m_ir::Module {
+    pub fn finish(self) -> mir::Module {
+        mir::Module {
             name: self.name,
-            data: self.data,
+            globals: self.globals,
             funcs: self.funcs,
             init: if self.init_body.len() > 0 {
-                Some(m_ir::ModuleInit {
+                Some(mir::ModuleInit {
                     locals: self.registry.get_locals().collect(),
                     body: self.init_body,
                 })

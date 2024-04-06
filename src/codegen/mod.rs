@@ -4,15 +4,15 @@ mod traits;
 use target_lexicon::Triple;
 use traits::Codegen;
 
-use crate::proto::m_ir;
+use crate::proto::mir;
 
-pub fn compile_program(program: &m_ir::Module) {
+pub fn compile_program(program: &mir::Module) {
     // TODO: get the target from some kind of configuration
     let triple = Triple::host();
     let mut codegen = binary::BinaryCodegen::new(triple, program.name.clone());
 
-    for (i, data) in program.data.iter().enumerate() {
-        codegen.declare_global(i, data);
+    for (i, global) in program.globals.iter().enumerate() {
+        codegen.declare_global(i, global);
     }
 
     for (i, func) in program.funcs.iter().enumerate() {
