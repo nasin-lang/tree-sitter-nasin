@@ -144,7 +144,7 @@ impl<'a> FnCodegen<'a> {
 
                 self.builder.ins().store(MemFlags::new(), value, ptr, 0);
             }
-            mir::Instr::BinOp(v) => {
+            mir::Instr::Add(v) => {
                 // Different instructions for different types, might want to use some kind of
                 // abstraction for this
                 let left = self.get_value(&v.left);
@@ -157,30 +157,136 @@ impl<'a> FnCodegen<'a> {
 
                 let value = match local.native_ty {
                     // FIXME: unsigned types
-                    types::I8 | types::I16 | types::I32 | types::I64 => match v.op {
-                        mir::BinOpType::Add => self.builder.ins().iadd(left, right),
-                        mir::BinOpType::Sub => self.builder.ins().isub(left, right),
-                        mir::BinOpType::Mul => self.builder.ins().imul(left, right),
-                        mir::BinOpType::Div => self.builder.ins().sdiv(left, right),
-                        mir::BinOpType::Mod => self.builder.ins().srem(left, right),
-                        mir::BinOpType::Pow => {
-                            // TODO: exponentiation by squaring
-                            // https://stackoverflow.com/a/101613
-                            self.builder.ins().imul(left, right)
-                        }
-                    },
-                    types::F32 | types::F64 => match v.op {
-                        mir::BinOpType::Add => self.builder.ins().fadd(left, right),
-                        mir::BinOpType::Sub => self.builder.ins().fsub(left, right),
-                        mir::BinOpType::Mul => self.builder.ins().fmul(left, right),
-                        mir::BinOpType::Div => self.builder.ins().fdiv(left, right),
-                        mir::BinOpType::Mod => {
-                            panic!("Modulo is not defined for floating point numbers")
-                        }
-                        mir::BinOpType::Pow => {
-                            todo!()
-                        }
-                    },
+                    types::I8 | types::I16 | types::I32 | types::I64 => {
+                        self.builder.ins().iadd(left, right)
+                    }
+                    types::F32 | types::F64 => self.builder.ins().fadd(left, right),
+                    _ => {
+                        panic!("Type {} not supported", &local.ty);
+                    }
+                };
+
+                local.value = Some(value);
+            }
+            mir::Instr::Sub(v) => {
+                // Different instructions for different types, might want to use some kind of
+                // abstraction for this
+                let left = self.get_value(&v.left);
+                let right = self.get_value(&v.right);
+
+                let local = self
+                    .locals
+                    .get_mut(v.target_idx as usize)
+                    .expect("Local not found");
+
+                let value = match local.native_ty {
+                    // FIXME: unsigned types
+                    types::I8 | types::I16 | types::I32 | types::I64 => {
+                        self.builder.ins().isub(left, right)
+                    }
+                    types::F32 | types::F64 => self.builder.ins().fsub(left, right),
+                    _ => {
+                        panic!("Type {} not supported", &local.ty);
+                    }
+                };
+
+                local.value = Some(value);
+            }
+            mir::Instr::Mul(v) => {
+                // Different instructions for different types, might want to use some kind of
+                // abstraction for this
+                let left = self.get_value(&v.left);
+                let right = self.get_value(&v.right);
+
+                let local = self
+                    .locals
+                    .get_mut(v.target_idx as usize)
+                    .expect("Local not found");
+
+                let value = match local.native_ty {
+                    // FIXME: unsigned types
+                    types::I8 | types::I16 | types::I32 | types::I64 => {
+                        self.builder.ins().imul(left, right)
+                    }
+                    types::F32 | types::F64 => self.builder.ins().fmul(left, right),
+                    _ => {
+                        panic!("Type {} not supported", &local.ty);
+                    }
+                };
+
+                local.value = Some(value);
+            }
+            mir::Instr::Div(v) => {
+                // Different instructions for different types, might want to use some kind of
+                // abstraction for this
+                let left = self.get_value(&v.left);
+                let right = self.get_value(&v.right);
+
+                let local = self
+                    .locals
+                    .get_mut(v.target_idx as usize)
+                    .expect("Local not found");
+
+                let value = match local.native_ty {
+                    // FIXME: unsigned types
+                    types::I8 | types::I16 | types::I32 | types::I64 => {
+                        self.builder.ins().sdiv(left, right)
+                    }
+                    types::F32 | types::F64 => self.builder.ins().fdiv(left, right),
+                    _ => {
+                        panic!("Type {} not supported", &local.ty);
+                    }
+                };
+
+                local.value = Some(value);
+            }
+            mir::Instr::Mod(v) => {
+                // Different instructions for different types, might want to use some kind of
+                // abstraction for this
+                let left = self.get_value(&v.left);
+                let right = self.get_value(&v.right);
+
+                let local = self
+                    .locals
+                    .get_mut(v.target_idx as usize)
+                    .expect("Local not found");
+
+                let value = match local.native_ty {
+                    // FIXME: unsigned types
+                    types::I8 | types::I16 | types::I32 | types::I64 => {
+                        self.builder.ins().srem(left, right)
+                    }
+                    types::F32 | types::F64 => {
+                        panic!("Modulo is not defined for floating point numbers")
+                    }
+                    _ => {
+                        panic!("Type {} not supported", &local.ty);
+                    }
+                };
+
+                local.value = Some(value);
+            }
+            mir::Instr::Pow(v) => {
+                // Different instructions for different types, might want to use some kind of
+                // abstraction for this
+                let left = self.get_value(&v.left);
+                let right = self.get_value(&v.right);
+
+                let local = self
+                    .locals
+                    .get_mut(v.target_idx as usize)
+                    .expect("Local not found");
+
+                let value = match local.native_ty {
+                    // FIXME: unsigned types
+                    types::I8 | types::I16 | types::I32 | types::I64 => {
+                        // TODO: exponentiation by squaring
+                        // https://stackoverflow.com/a/101613
+                        self.builder.ins().imul(left, right)
+                    }
+                    types::F32 | types::F64 => {
+                        todo!()
+                    }
                     _ => {
                         panic!("Type {} not supported", &local.ty);
                     }

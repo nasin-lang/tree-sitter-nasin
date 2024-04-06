@@ -98,21 +98,21 @@ where
 
                 let op_node = node.required_field("op");
 
-                self.body.push(mir::Instr::BinOp(mir::BinOpInstr {
+                let bin_op_instr = mir::BinOpInstr {
                     target_idx,
-                    op: match op_node.get_text(self.source) {
-                        "+" => mir::BinOpType::Add,
-                        "-" => mir::BinOpType::Sub,
-                        "%" => mir::BinOpType::Mod,
-                        "*" => mir::BinOpType::Mul,
-                        "/" => mir::BinOpType::Div,
-                        "**" => mir::BinOpType::Pow,
-                        _ => unreachable!(),
-                    }
-                    .into(),
                     left,
                     right,
-                }));
+                };
+
+                self.body.push(match op_node.get_text(self.source) {
+                    "+" => mir::Instr::Add(bin_op_instr),
+                    "-" => mir::Instr::Sub(bin_op_instr),
+                    "%" => mir::Instr::Mod(bin_op_instr),
+                    "*" => mir::Instr::Mul(bin_op_instr),
+                    "/" => mir::Instr::Div(bin_op_instr),
+                    "**" => mir::Instr::Pow(bin_op_instr),
+                    _ => unreachable!(),
+                });
 
                 (mir::Value::Local(target_idx), ty)
             }

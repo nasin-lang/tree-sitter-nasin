@@ -110,7 +110,12 @@ pub enum Instr {
     LoadGlobal(LoadGlobalInstr),
     StoreGlobal(StoreGlobalInstr),
     Const(ConstInstr),
-    BinOp(BinOpInstr),
+    Add(BinOpInstr),
+    Sub(BinOpInstr),
+    Mul(BinOpInstr),
+    Div(BinOpInstr),
+    Mod(BinOpInstr),
+    Pow(BinOpInstr),
     Call(CallInstr),
     Return(ReturnInstr),
 }
@@ -138,7 +143,6 @@ pub struct BinOpInstr {
     pub target_idx: u32,
     pub left: Value,
     pub right: Value,
-    pub op: BinOpType,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -174,22 +178,23 @@ impl Display for Instr {
             Instr::StoreGlobal(v) => {
                 write!(f, "store_global <global {}>, {}", v.global_idx, v.value)?;
             }
-            Instr::BinOp(v) => {
-                write!(
-                    f,
-                    "%{} = bin_op{} {}, {}",
-                    v.target_idx,
-                    match v.op {
-                        BinOpType::Add => "+",
-                        BinOpType::Sub => "-",
-                        BinOpType::Mod => "%",
-                        BinOpType::Mul => "*",
-                        BinOpType::Div => "/",
-                        BinOpType::Pow => "**",
-                    },
-                    v.left,
-                    v.right
-                )?;
+            Instr::Add(v) => {
+                write!(f, "%{} = add {}, {}", v.target_idx, v.left, v.right)?;
+            }
+            Instr::Sub(v) => {
+                write!(f, "%{} = sub {}, {}", v.target_idx, v.left, v.right)?;
+            }
+            Instr::Mul(v) => {
+                write!(f, "%{} = mul {}, {}", v.target_idx, v.left, v.right)?;
+            }
+            Instr::Div(v) => {
+                write!(f, "%{} = div {}, {}", v.target_idx, v.left, v.right)?;
+            }
+            Instr::Mod(v) => {
+                write!(f, "%{} = mod {}, {}", v.target_idx, v.left, v.right)?;
+            }
+            Instr::Pow(v) => {
+                write!(f, "%{} = pow {}, {}", v.target_idx, v.left, v.right)?;
             }
             Instr::Call(v) => {
                 write!(f, "%{} = call <func {}>", v.target_idx, v.func_idx,)?;
@@ -211,16 +216,6 @@ impl Display for Instr {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ConstValue {
     Number(String),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum BinOpType {
-    Add,
-    Sub,
-    Mod,
-    Mul,
-    Div,
-    Pow,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
