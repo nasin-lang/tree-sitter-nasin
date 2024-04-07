@@ -5,11 +5,12 @@ use std::env;
 use std::fs::File;
 use std::io::BufWriter;
 
-use cranelift_codegen::ir::{types, AbiParam, Function, InstBuilder, TrapCode, UserFuncName};
+use cranelift_codegen::ir::{AbiParam, Function, InstBuilder, TrapCode, UserFuncName};
 use cranelift_codegen::{isa, settings, Context};
 use cranelift_frontend::FunctionBuilderContext;
-use cranelift_module::{default_libcall_names, DataDescription, FuncId, Linkage, Module};
+use cranelift_module::{default_libcall_names, DataDescription, Linkage, Module};
 use cranelift_object::{ObjectBuilder, ObjectModule};
+use itertools::izip;
 use target_lexicon::Triple;
 
 use self::func::{FnCodegen, FuncBinding, GlobalBinding};
@@ -24,8 +25,7 @@ pub struct BinaryCodegen {
     module_ctx: Context,
     globals: Vec<GlobalBinding>,
     funcs: Vec<FuncBinding>,
-    intrinsic_funcs: Vec<FuncId>,
-    declared_funcs: Vec<(FuncId, Function)>,
+    declared_funcs: Vec<Function>,
 }
 
 impl BinaryCodegen {
@@ -40,35 +40,13 @@ impl BinaryCodegen {
 
         let module_ctx = module.make_context();
 
-        let mut this = BinaryCodegen {
+        BinaryCodegen {
             module,
             module_ctx,
             globals: Vec::new(),
             funcs: Vec::new(),
-            intrinsic_funcs: Vec::new(),
             declared_funcs: Vec::new(),
-        };
-
-        // Declare libc functions
-        // TODO: detect which libc functions are needed and declare only those
-        // TODO: use syscalls instead of libc functions, maybe we will have to
-        //       implement a wrapper around syscall in C to be able to call it
-        //       from Cranelift
-        // void exit(int status);
-        {
-            let mut sig = this.module.make_signature();
-            sig.params.push(AbiParam::new(types::I32));
-            let func =
-                Function::with_name_signature(UserFuncName::user(0, EXIT_FUNC_IDX as u32), sig);
-            let func_id = this
-                .module
-                .declare_function("exit", Linkage::Import, &func.signature)
-                .unwrap();
-
-            this.intrinsic_funcs.push(func_id);
         }
-
-        this
     }
 }
 
@@ -84,21 +62,21 @@ impl Codegen for BinaryCodegen {
             sig.returns.push(AbiParam::new(self.module.get_type(ret)));
         }
 
-        let user_func_name = {
-            // namespace is 1 because 0 is being used for reserved functions. This number is
-            // completely arbitary and may be changed to be more involved in the future
-            UserFuncName::user(1, idx as u32)
-        };
+        let user_func_name = UserFuncName::user(0, idx as u32);
 
         let func = Function::with_name_signature(user_func_name, sig);
 
-        let symbol_name = if let Some(mir::Export { name }) = &decl.export {
+        let symbol_name = if let Some(mir::Extern { name }) = &decl.extern_ {
+            name.clone()
+        } else if let Some(mir::Export { name }) = &decl.export {
             name.clone()
         } else {
             format!("$func{}", idx)
         };
 
-        let linkage = if decl.export.is_some() {
+        let linkage = if decl.extern_.is_some() {
+            Linkage::Import
+        } else if decl.export.is_some() {
             Linkage::Export
         } else {
             Linkage::Local
@@ -111,16 +89,17 @@ impl Codegen for BinaryCodegen {
 
         self.funcs.push(FuncBinding {
             symbol_name,
+            is_extern: decl.extern_.is_some(),
             func_id,
             params: decl.params.clone(),
             ret: decl.ret.clone(),
         });
-        self.declared_funcs.push((func_id, func));
+        self.declared_funcs.push(func);
     }
 
     fn build_function(&mut self, idx: usize, decl: &mir::Func) {
         let func = &self.funcs[idx];
-        let (_, native_func) = &mut self.declared_funcs[idx];
+        let native_func = &mut self.declared_funcs[idx];
 
         let mut func_ctx = FunctionBuilderContext::new();
 
@@ -219,7 +198,7 @@ impl Codegen for BinaryCodegen {
         let exit_code = fn_codegen.locals.last().unwrap().value.unwrap();
 
         let exit_func_ref = fn_codegen.module.declare_func_in_func(
-            self.intrinsic_funcs[EXIT_FUNC_IDX].clone(),
+            self.funcs[EXIT_FUNC_IDX].func_id.clone(),
             &mut fn_codegen.builder.func,
         );
         fn_codegen.builder.ins().call(exit_func_ref, &[exit_code]);
@@ -240,10 +219,14 @@ impl Codegen for BinaryCodegen {
     }
 
     fn write_to_file(mut self, file: &str) {
-        for (func_id, func) in self.declared_funcs {
+        for (func_binding, func) in izip!(self.funcs, self.declared_funcs) {
+            if func_binding.is_extern {
+                continue;
+            }
+
             self.module_ctx.func = func;
             self.module
-                .define_function(func_id, &mut self.module_ctx)
+                .define_function(func_binding.func_id, &mut self.module_ctx)
                 .unwrap();
         }
 

@@ -18,11 +18,12 @@ pub trait TypeGen {
             mir::Type::USize => self.poiter_type(),
             mir::Type::F32 => types::F32,
             mir::Type::F64 => types::F64,
+            mir::Type::Array(_) => self.poiter_type(),
             mir::Type::Ambig(_) | mir::Type::Unknown => {
                 panic!("Type must be resolved before codegen")
             }
             _ => {
-                unimplemented!()
+                panic!("Type {} is not implemented", &ty);
             }
         }
     }

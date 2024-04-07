@@ -59,6 +59,7 @@ module.exports = grammar({
                 prec(PREC.ATOM, seq("(", $._expr, ")")),
                 $.ident,
                 $.number,
+                $.array_lit,
                 $.call,
                 $.bin_op,
                 $.block,
@@ -82,6 +83,12 @@ module.exports = grammar({
         _call_args_list: ($) =>
             prec(PREC.CALL, repeat1(seq(field("args", $._expr), optional(",")))),
 
+        array_lit: ($) =>
+            prec(
+                PREC.ATOM,
+                seq("[", repeat(seq(field("items", $._expr), optional(","))), "]"),
+            ),
+
         block: ($) => prec(PREC.BLOCK, $._block),
         _block: ($) => prec.left($._block_clause),
         _block_clause: ($) =>
@@ -95,7 +102,10 @@ module.exports = grammar({
             ),
         _block_stmt: ($) => choice($.var_decl),
 
-        _type_expr: ($) => choice($.ident),
+        _type_expr: ($) => choice($.ident, $.array_type),
+
+        array_type: ($) =>
+            prec(PREC.ATOM, seq("[", field("item_type", $._type_expr), "]")),
 
         _pat: ($) => choice($.ident),
 

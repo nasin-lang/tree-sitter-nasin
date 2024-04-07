@@ -20,6 +20,9 @@ pub fn compile_program(program: &mir::Module) {
     }
 
     for (i, func) in program.funcs.iter().enumerate() {
+        if func.extern_.is_some() {
+            continue;
+        }
         codegen.build_function(i, func);
     }
 

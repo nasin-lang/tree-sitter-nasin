@@ -73,6 +73,37 @@ where
 
                 (value, ty)
             }
+            "array_lit" => {
+                let (items, items_types): (Vec<_>, Vec<_>) =
+                    node.iter_field("items").map(|n| self.add_expr(&n)).unzip();
+
+                let item_ty =
+                    mir::Type::merge(&items_types).expect("Array items must have same type");
+                let ty = mir::Type::array_type(item_ty.clone());
+
+                let target_idx = self.registry.register_local(
+                    "",
+                    ty.clone(),
+                    ValueTypeDeps {
+                        refs: items.iter().cloned().map(ValueRef::from).collect(),
+                        sig: item_ty
+                            .possible_types()
+                            .into_iter()
+                            .map(|t| mir::FuncType::array_sig(&t, items.len()))
+                            .collect(),
+                    },
+                );
+
+                self.body
+                    .push(mir::Instr::CreateArray(mir::CreateArrayInstr {
+                        target_idx,
+                        items,
+                    }));
+
+                let value = mir::Value::Local(target_idx);
+
+                (value, ty)
+            }
             "bin_op" => {
                 let (left, left_ty) = self.add_expr(&node.required_field("left"));
                 let (right, right_ty) = self.add_expr(&node.required_field("right"));
@@ -165,11 +196,12 @@ where
 
                 let (func_idx, func_ty) = match func_node.kind() {
                     "ident" => {
+                        let func_name = func_node.get_text(self.source);
                         let func_ref = self
                             .registry
                             .idents()
-                            .get(func_node.get_text(self.source))
-                            .unwrap();
+                            .get(func_name)
+                            .expect(&format!("Function `{}` not found", func_name));
 
                         let ty = self.registry.value_type(&func_ref).unwrap();
 
@@ -183,7 +215,7 @@ where
                     _ => todo!(),
                 };
 
-                let fn_sigs: Vec<_> = func_ty
+                let func_sigs: Vec<_> = func_ty
                     .possible_types()
                     .into_iter()
                     .filter_map(|ty| match &ty {
@@ -193,7 +225,7 @@ where
                     .collect();
 
                 let ret_ty = mir::Type::ambig(
-                    fn_sigs
+                    func_sigs
                         .clone()
                         .into_iter()
                         // TODO: many return values
@@ -205,7 +237,7 @@ where
                     ret_ty.clone(),
                     ValueTypeDeps {
                         refs: args.iter().map(|a| a.clone().into()).collect(),
-                        sig: fn_sigs,
+                        sig: func_sigs,
                     },
                 );
 
@@ -255,6 +287,10 @@ where
                         panic!("{} is not a type, dummy", node.to_sexp());
                     }
                 }
+            }
+            "array_type" => {
+                let item_ty = self.parse_type(&node.required_field("item_type"));
+                mir::Type::Array(Box::new(item_ty))
             }
             k => panic!("Found unexpected type `{}`", k),
         }

@@ -33,23 +33,33 @@ impl Display for Module {
                 write!(f, " (export \"{}\")", name)?;
             }
 
-            write!(f, " (params")?;
-            for param in &func.params {
-                write!(f, " {}", param.ty)?;
+            if let Some(Extern { name }) = &func.extern_ {
+                write!(f, " (extern \"{}\")", name)?;
             }
-            write!(f, ")")?;
 
-            write!(f, " (returns")?;
-            for ret in &func.ret {
-                write!(f, " {}", ret)?;
+            if func.params.len() > 0 {
+                write!(f, " (params")?;
+                for param in &func.params {
+                    write!(f, " {}", param.ty)?;
+                }
+                write!(f, ")")?;
             }
-            write!(f, ")")?;
+
+            if func.ret.len() > 0 {
+                write!(f, " (returns")?;
+                for ret in &func.ret {
+                    write!(f, " {}", ret)?;
+                }
+                write!(f, ")")?;
+            }
 
             for (i, local) in func.locals.iter().enumerate() {
                 write!(f, "\n       %{}: {}", i, local.ty)?;
             }
 
-            write!(f, "\n{}", indented(4, &func.body))?;
+            if func.body.len() > 0 {
+                write!(f, "\n{}", indented(4, &func.body))?;
+            }
         }
 
         if let Some(init) = &self.init {
@@ -75,13 +85,14 @@ pub struct Global {
     pub export: Option<Export>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub struct Func {
     pub params: Vec<Param>,
     pub ret: Vec<Type>,
     pub locals: Vec<Local>,
     pub body: Vec<Instr>,
     pub export: Option<Export>,
+    pub extern_: Option<Extern>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -106,10 +117,16 @@ pub struct Export {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Extern {
+    pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Instr {
     LoadGlobal(LoadGlobalInstr),
     StoreGlobal(StoreGlobalInstr),
     Const(ConstInstr),
+    CreateArray(CreateArrayInstr),
     Add(BinOpInstr),
     Sub(BinOpInstr),
     Mul(BinOpInstr),
@@ -139,6 +156,12 @@ pub struct ConstInstr {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CreateArrayInstr {
+    pub target_idx: u32,
+    pub items: Vec<Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct BinOpInstr {
     pub target_idx: u32,
     pub left: Value,
@@ -161,12 +184,7 @@ impl Display for Instr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self {
             Instr::Const(v) => {
-                write!(f, "%{} = const ", v.target_idx)?;
-                match &v.value {
-                    ConstValue::Number(num) => {
-                        write!(f, "{}", num)?;
-                    }
-                }
+                write!(f, "%{} = const {}", v.target_idx, &v.value)?;
             }
             Instr::LoadGlobal(v) => {
                 write!(
@@ -177,6 +195,12 @@ impl Display for Instr {
             }
             Instr::StoreGlobal(v) => {
                 write!(f, "store_global <global {}>, {}", v.global_idx, v.value)?;
+            }
+            Instr::CreateArray(v) => {
+                write!(f, "%{} = create_array", v.target_idx)?;
+                for item in &v.items {
+                    write!(f, ", {}", item)?;
+                }
             }
             Instr::Add(v) => {
                 write!(f, "%{} = add {}, {}", v.target_idx, v.left, v.right)?;
@@ -218,6 +242,16 @@ pub enum ConstValue {
     Number(String),
 }
 
+impl Display for ConstValue {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self {
+            ConstValue::Number(num) => {
+                write!(f, "{}", num)
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Value {
     Local(u32),
@@ -254,6 +288,7 @@ pub enum Type {
     F64,
     Func(FuncType),
     Ambig(AmbigType),
+    Array(Box<Type>),
 }
 
 impl Type {
@@ -311,7 +346,7 @@ impl Type {
     }
 
     /// Returns a type for a function. If any of the arguments or the return type is
-    /// ambiguous, returns an ambigous type for all combinations of the function
+    /// ambiguous, returns an ambiguous type for all combinations of the function
     /// signature.
     pub fn func_type<A, R>(args: A, ret: R) -> Self
     where
@@ -331,6 +366,17 @@ impl Type {
             args.cartesian_product(ret)
                 .map(|(args, ret)| Type::Func(FuncType::new(args, ret))),
         )
+    }
+
+    /// Returns a type for a array. If the item type is ambiguous, returns an ambiguous
+    /// type where the item type is concrete.
+    pub fn array_type(item_type: Type) -> Self {
+        match item_type {
+            Type::Ambig(ambig) => {
+                Type::ambig(ambig.types.into_iter().map(|ty| Type::Array(Box::new(ty))))
+            }
+            _ => Type::Array(Box::new(item_type)),
+        }
     }
 
     /// Returns true if all the types are the same or are supertype/subtype of each other.
@@ -378,8 +424,6 @@ impl Type {
     /// Merges with other type into single type. If the types are incompatible, returns
     /// None.
     pub fn merge_with(&self, other: &Self) -> Option<Self> {
-        dbg!(&self, &other);
-
         if self == other || other.is_unknown() {
             return Some(self.clone());
         }
@@ -388,7 +432,7 @@ impl Type {
             return Some(other.clone());
         }
 
-        if matches!(self, Type::Ambig(_)) || matches!(other, Type::Ambig(_)) {
+        if self.is_ambig() || other.is_ambig() {
             let a_types = self.possible_types();
             let b_types = other.possible_types();
 
@@ -430,6 +474,10 @@ impl Type {
     pub fn is_unknown(&self) -> bool {
         matches!(self, Type::Unknown)
     }
+
+    pub fn is_ambig(&self) -> bool {
+        matches!(self, Type::Ambig(_))
+    }
 }
 
 impl Display for Type {
@@ -447,27 +495,37 @@ impl Display for Type {
             Type::USize => write!(f, "usize"),
             Type::F32 => write!(f, "f32"),
             Type::F64 => write!(f, "f64"),
-            Type::Func(fn_type) => {
-                write!(f, "(func (params")?;
+            Type::Func(v) => {
+                write!(f, "(func")?;
 
-                for arg in &fn_type.params {
-                    write!(f, " {}", arg)?;
+                if v.params.len() > 0 {
+                    write!(f, " (params")?;
+                    for arg in &v.params {
+                        write!(f, " {}", arg)?;
+                    }
+                    write!(f, ")")?;
                 }
 
-                write!(f, ") (returns")?;
-                for ret in &fn_type.ret {
-                    write!(f, "{}", ret)?;
+                if v.ret.len() > 0 {
+                    write!(f, " (returns")?;
+                    for ret in &v.ret {
+                        write!(f, " {}", ret)?;
+                    }
+                    write!(f, ")")?;
                 }
 
-                write!(f, "))")
+                write!(f, ")")?;
+
+                Ok(())
             }
-            Type::Ambig(ambig) => {
+            Type::Ambig(v) => {
                 write!(f, "(ambig")?;
-                for t in &ambig.types {
+                for t in &v.types {
                     write!(f, " {}", t)?;
                 }
                 write!(f, ")")
             }
+            Type::Array(ty) => write!(f, "[{}]", ty),
         }
     }
 }
@@ -486,9 +544,22 @@ impl FuncType {
     /// Returns a function type for a binary operation with the given type. For this to
     /// work, the type must be a absolute type, not a ambiguous or unknown type.
     pub fn binop_sig(ty: &Type) -> FuncType {
+        assert!(!ty.is_unknown());
+        assert!(!ty.is_ambig());
         FuncType {
             params: vec![ty.clone(), ty.clone()],
             ret: vec![ty.clone()],
+        }
+    }
+
+    /// Returns a function type for a array const operation with the given type. For this to
+    /// work, the type must be a absolute type, not a ambiguous or unknown type.
+    pub fn array_sig(ty: &Type, len: usize) -> FuncType {
+        assert!(!ty.is_unknown());
+        assert!(!ty.is_ambig());
+        FuncType {
+            params: (0..len).map(|_| ty.clone()).collect(),
+            ret: vec![Type::Array(Box::new(ty.clone()))],
         }
     }
 }

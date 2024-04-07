@@ -1,5 +1,69 @@
 [
   {
+    "type": "array_lit",
+    "named": true,
+    "fields": {
+      "items": {
+        "multiple": true,
+        "required": false,
+        "types": [
+          {
+            "type": "(",
+            "named": false
+          },
+          {
+            "type": ")",
+            "named": false
+          },
+          {
+            "type": "array_lit",
+            "named": true
+          },
+          {
+            "type": "bin_op",
+            "named": true
+          },
+          {
+            "type": "block",
+            "named": true
+          },
+          {
+            "type": "call",
+            "named": true
+          },
+          {
+            "type": "ident",
+            "named": true
+          },
+          {
+            "type": "number",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "array_type",
+    "named": true,
+    "fields": {
+      "item_type": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "array_type",
+            "named": true
+          },
+          {
+            "type": "ident",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
     "type": "bin_op",
     "named": true,
     "fields": {
@@ -14,6 +78,10 @@
           {
             "type": ")",
             "named": false
+          },
+          {
+            "type": "array_lit",
+            "named": true
           },
           {
             "type": "bin_op",
@@ -80,6 +148,10 @@
             "named": false
           },
           {
+            "type": "array_lit",
+            "named": true
+          },
+          {
             "type": "bin_op",
             "named": true
           },
@@ -130,6 +202,10 @@
             "named": false
           },
           {
+            "type": "array_lit",
+            "named": true
+          },
+          {
             "type": "bin_op",
             "named": true
           },
@@ -170,6 +246,10 @@
             "named": false
           },
           {
+            "type": "array_lit",
+            "named": true
+          },
+          {
             "type": "bin_op",
             "named": true
           },
@@ -202,6 +282,10 @@
           {
             "type": ")",
             "named": false
+          },
+          {
+            "type": "array_lit",
+            "named": true
           },
           {
             "type": "bin_op",
@@ -256,6 +340,10 @@
         "required": false,
         "types": [
           {
+            "type": "array_type",
+            "named": true
+          },
+          {
             "type": "ident",
             "named": true
           }
@@ -272,6 +360,10 @@
           {
             "type": ")",
             "named": false
+          },
+          {
+            "type": "array_lit",
+            "named": true
           },
           {
             "type": "bin_op",
@@ -316,6 +408,10 @@
         "required": false,
         "types": [
           {
+            "type": "array_type",
+            "named": true
+          },
+          {
             "type": "ident",
             "named": true
           }
@@ -342,6 +438,10 @@
         "required": false,
         "types": [
           {
+            "type": "array_type",
+            "named": true
+          },
+          {
             "type": "ident",
             "named": true
           }
@@ -358,6 +458,10 @@
           {
             "type": ")",
             "named": false
+          },
+          {
+            "type": "array_lit",
+            "named": true
           },
           {
             "type": "bin_op",
@@ -431,6 +535,10 @@
         "required": false,
         "types": [
           {
+            "type": "array_type",
+            "named": true
+          },
+          {
             "type": "ident",
             "named": true
           }
@@ -447,6 +555,10 @@
           {
             "type": ")",
             "named": false
+          },
+          {
+            "type": "array_lit",
+            "named": true
           },
           {
             "type": "bin_op",
@@ -494,6 +606,14 @@
   },
   {
     "type": "=",
+    "named": false
+  },
+  {
+    "type": "[",
+    "named": false
+  },
+  {
+    "type": "]",
     "named": false
   },
   {

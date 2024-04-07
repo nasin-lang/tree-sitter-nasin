@@ -20,12 +20,62 @@ pub struct ModuleBuilder<'a> {
 
 impl<'a> ModuleBuilder<'a> {
     pub fn new(name: String, source: &'a str) -> Self {
+        let mut registry = ModuleRegistry::new();
+
+        // TODO: detect which intrinsic functions are needed and declare only those
+        // TODO: use syscalls instead of libc functions, maybe we will have to implement a
+        //       wrapper around syscall in C to be able to call it from Cranelift
+
+        // void exit(int status);
+        let exit_func = {
+            let params = vec![mir::Type::I32];
+            let ret = vec![];
+            registry.register_func("exit", params.clone());
+            registry.set_value_type(
+                ValueRef::Func(0),
+                mir::Type::func_type(params.clone(), ret.clone()),
+                None,
+            );
+            mir::Func {
+                extern_: Some(mir::Extern {
+                    name: "exit".to_string(),
+                }),
+                params: params.into_iter().map(|ty| mir::Param { ty }).collect(),
+                ret,
+                ..Default::default()
+            }
+        };
+
+        // ssize_t write(int fildes, const void *buf, size_t nbyte)
+        let write_func = {
+            let params = vec![
+                mir::Type::I32,
+                mir::Type::array_type(mir::Type::U8),
+                mir::Type::USize,
+            ];
+            let ret = vec![mir::Type::USize];
+            registry.register_func("write", params.clone());
+            registry.set_value_type(
+                ValueRef::Func(1),
+                mir::Type::func_type(params.clone(), ret.clone()),
+                None,
+            );
+            mir::Func {
+                extern_: Some(mir::Extern {
+                    name: "write".to_string(),
+                }),
+                params: params.into_iter().map(|ty| mir::Param { ty }).collect(),
+                ret: vec![mir::Type::USize],
+                ..Default::default()
+            }
+        };
+
         ModuleBuilder {
             name,
             source,
             globals: Vec::new(),
-            funcs: Vec::new(),
-            registry: ModuleRegistry::new(),
+            funcs: vec![exit_func, write_func],
+            registry,
             init_body: Vec::new(),
         }
     }
@@ -114,6 +164,7 @@ impl<'a> ModuleBuilder<'a> {
             params,
             ret: vec![ret],
             body,
+            ..Default::default()
         });
     }
 

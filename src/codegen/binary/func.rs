@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use cranelift_codegen::ir::types;
+use cranelift_codegen::ir::{types, StackSlotData, StackSlotKind};
 use cranelift_codegen::ir::{FuncRef, Function, InstBuilder, MemFlags, Value};
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
 use cranelift_module::{DataId, FuncId, Module};
@@ -22,6 +22,7 @@ pub struct GlobalBinding {
 }
 
 pub struct FuncBinding {
+    pub is_extern: bool,
     pub symbol_name: String,
     pub func_id: FuncId,
     pub params: Vec<mir::Param>,
@@ -101,7 +102,11 @@ impl<'a> FnCodegen<'a> {
         }
         .expect(&format!("{:?} not found", mir_value));
 
-        local.value.as_ref().expect("Value not defined").clone()
+        if let Some(value) = &local.value {
+            return value.clone();
+        }
+
+        panic!("Value {:?} not defined", mir_value);
     }
 
     pub fn instr(&mut self, instr: &mir::Instr) {
@@ -113,13 +118,47 @@ impl<'a> FnCodegen<'a> {
                     .expect("Local not found");
 
                 let value = match &v.value {
-                    mir::ConstValue::Number(num) => self
-                        .builder
-                        .ins()
-                        .iconst(local.native_ty, num.parse::<i64>().expect("Invalid number")),
+                    mir::ConstValue::Number(num) => {
+                        let value = self
+                            .builder
+                            .ins()
+                            .iconst(local.native_ty, num.parse::<i64>().expect("Invalid number"));
+
+                        value
+                    }
                 };
 
                 local.value = Some(value);
+            }
+            mir::Instr::CreateArray(v) => {
+                let local = self
+                    .locals
+                    .get(v.target_idx as usize)
+                    .expect("Local not found");
+
+                let mir::Type::Array(item_ty) = &local.ty else {
+                    panic!("Invalid type for array")
+                };
+                let item_native_ty = self.module.get_type(item_ty);
+
+                let ss = self.builder.create_sized_stack_slot(StackSlotData::new(
+                    StackSlotKind::ExplicitSlot,
+                    item_native_ty.bytes() * v.items.len() as u32,
+                ));
+                let ptr = self.builder.ins().stack_addr(local.native_ty, ss, 0);
+
+                for (i, item) in v.items.iter().enumerate() {
+                    let value = self.get_value(item);
+                    self.builder.ins().store(
+                        MemFlags::new(),
+                        value,
+                        ptr,
+                        (i as u32 * item_native_ty.bytes()) as i32,
+                    );
+                }
+
+                let local = self.locals.get_mut(v.target_idx as usize).unwrap();
+                local.value = Some(ptr);
             }
             mir::Instr::LoadGlobal(v) => {
                 let global = self

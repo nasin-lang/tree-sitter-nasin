@@ -64,6 +64,7 @@ fn main() {
             );
 
             println!("{}", module);
+            println!();
 
             compile_program(&module);
         }
