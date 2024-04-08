@@ -171,37 +171,37 @@ impl<'a> ModuleBuilder<'a> {
     pub fn add_global(&mut self, name: String, node: ts::Node<'a>) {
         assert_eq!(node.kind(), "global_var_decl");
 
-        let mut local_builder = InstrBuilder::new(&mut self.registry, self.source);
+        let mut instr_builder = InstrBuilder::new(&mut self.registry, self.source);
 
         let ty = node
             .field("type")
-            .map_or(mir::Type::Unknown, |ty| local_builder.parse_type(&ty));
+            .map_or(mir::Type::Unknown, |ty| instr_builder.parse_type(&ty));
 
-        let global_idx = local_builder.registry.register_global(&name, ty.clone());
+        let global_idx = instr_builder.registry.register_global(&name, ty.clone());
         let global_ref = ValueRef::Global(global_idx);
 
-        let (value, _) = local_builder.add_expr(&node.required_field("value"));
+        let (value, _) = instr_builder.add_expr(&node.required_field("value"));
         let value_ref: ValueRef = value.clone().into();
 
         // Shadow the global value with the local result so next time we use the global we
         // get the local value instead of loading the global again.
-        local_builder
+        instr_builder
             .registry
-            .idents_mut()
+            .init_idents
             .insert(&name, value_ref.clone());
 
-        local_builder
+        instr_builder
             .body
             .push(mir::Instr::StoreGlobal(mir::StoreGlobalInstr {
                 global_idx,
                 value,
             }));
 
-        local_builder
+        instr_builder
             .registry
             .set_value_type(value_ref.clone(), ty, Some(global_ref.clone()));
 
-        let ty = local_builder.registry.value_type(&value_ref).unwrap();
+        let ty = instr_builder.registry.value_type(&value_ref).unwrap();
 
         self.globals.push(mir::Global {
             // FIXME: read export info from the source
@@ -213,7 +213,7 @@ impl<'a> ModuleBuilder<'a> {
             ty,
         });
 
-        self.init_body.extend(local_builder.finish());
+        self.init_body.extend(instr_builder.finish());
     }
 
     pub fn finish(self) -> mir::Module {

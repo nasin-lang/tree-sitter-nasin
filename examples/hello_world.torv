@@ -1,7 +1,9 @@
 msg: [u8]  = [72 101 108 108 111 32 87 111 114 108 100 10]
 len: usize = 12
 
-main: u32 =
-    _ = write(0 msg len)
-    0
+fn hello(_: u8) =
+    write(0 msg len)
 
+main: u32 =
+    _ = hello(0)
+    0

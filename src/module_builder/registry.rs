@@ -245,7 +245,8 @@ trait RegistryExt: Registry {
 
 #[derive(Debug)]
 pub struct ModuleRegistry {
-    idents: IdentMap,
+    pub global_idents: IdentMap,
+    pub init_idents: IdentMap,
     funcs: Vec<mir::Type>,
     globals: Vec<ValueType>,
     init_locals: Vec<ValueType>,
@@ -254,10 +255,11 @@ pub struct ModuleRegistry {
 impl ModuleRegistry {
     pub fn new() -> Self {
         Self {
-            idents: IdentMap::new(),
+            global_idents: IdentMap::new(),
+            init_idents: IdentMap::new(),
+            init_locals: Vec::new(),
             funcs: Vec::new(),
             globals: Vec::new(),
-            init_locals: Vec::new(),
         }
     }
 
@@ -266,33 +268,36 @@ impl ModuleRegistry {
         P: IntoIterator<Item = mir::Type>,
     {
         let idx = self.funcs.len();
+        let value_ref = ValueRef::Func(idx as u32);
         self.funcs.push(mir::Type::func_type(
             params,
             // Multiple return values are not supported yet
             [mir::Type::Unknown],
         ));
-        self.idents.insert(ident, ValueRef::Func(idx as u32));
+        self.global_idents.insert(ident, value_ref);
+        self.init_idents.insert(ident, value_ref);
         idx as u32
     }
 
     pub fn register_global(&mut self, ident: &str, ty: mir::Type) -> u32 {
         let idx = self.globals.len();
+        let value_ref = ValueRef::Global(idx as u32);
         self.globals.push(ValueType {
             ty,
             ..Default::default()
         });
-        self.idents.insert(ident, ValueRef::Global(idx as u32));
+        self.global_idents.insert(ident, value_ref);
         idx as u32
     }
 }
 
 impl Registry for ModuleRegistry {
     fn idents(&self) -> &IdentMap {
-        &self.idents
+        &self.init_idents
     }
 
     fn idents_mut(&mut self) -> &mut IdentMap {
-        &mut self.idents
+        &mut self.init_idents
     }
 
     fn value_type(&self, value_ref: &ValueRef) -> Option<mir::Type> {
@@ -341,14 +346,14 @@ impl Registry for ModuleRegistry {
 
     fn register_local(&mut self, ident: &str, ty: mir::Type, produced_by: ValueTypeDeps) -> u32 {
         let idx = self.init_locals.len();
+        let value_ref = ValueRef::Local(idx as u32);
         self.init_locals.push(ValueType {
             ty,
             produced_by,
             ..Default::default()
         });
-        self.idents.insert(ident, ValueRef::Local(idx as u32));
-
-        self.constrain_value_type_chain(ValueRef::Local(idx as u32), None);
+        self.init_idents.insert(ident, value_ref.clone());
+        self.constrain_value_type_chain(value_ref.clone(), None);
 
         idx as u32
     }
@@ -373,14 +378,14 @@ impl RegistryExt for ModuleRegistry {
 #[derive(Debug)]
 pub struct FuncRegistry<'a> {
     pub module_registry: &'a mut ModuleRegistry,
-    idents: IdentMap,
+    pub idents: IdentMap,
     params: Vec<ValueType>,
     locals: Vec<ValueType>,
 }
 
 impl<'a> FuncRegistry<'a> {
     pub fn new(module_registry: &'a mut ModuleRegistry) -> Self {
-        let idents = module_registry.idents.clone();
+        let idents = module_registry.global_idents.clone();
         Self {
             module_registry,
             idents,
@@ -430,7 +435,11 @@ impl Registry for FuncRegistry<'_> {
         ty: mir::Type,
         consumed_by: Option<ValueRef>,
     ) {
-        if let ValueRef::Func(_) = &value_ref {
+        if matches!(&value_ref, ValueRef::Func(_)) {
+            panic!("Cannot update the type of a function");
+        }
+
+        if matches!(&value_ref, ValueRef::Global(_)) {
             self.module_registry
                 .set_value_type(value_ref, ty, consumed_by);
             return;
@@ -453,10 +462,7 @@ impl Registry for FuncRegistry<'_> {
             produced_by,
             ..Default::default()
         });
-        self.module_registry
-            .idents
-            .insert(ident, ValueRef::Local(idx as u32));
-
+        self.idents.insert(ident, ValueRef::Local(idx as u32));
         self.constrain_value_type_chain(ValueRef::Local(idx as u32), None);
 
         idx as u32
