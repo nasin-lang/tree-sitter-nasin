@@ -128,6 +128,7 @@ impl Codegen for BinaryCodegen {
 
     fn declare_global(&mut self, idx: usize, decl: &mir::Global) {
         let native_ty = self.module.get_type(&decl.ty);
+        let size = self.module.get_size(&decl.ty);
 
         let symbol_name = if let Some(mir::Export { name }) = &decl.export {
             name.clone()
@@ -147,7 +148,7 @@ impl Codegen for BinaryCodegen {
             .unwrap();
 
         let mut desc = DataDescription::new();
-        desc.define_zeroinit(native_ty.bytes() as usize);
+        desc.define_zeroinit(size);
 
         self.module.define_data(data_id, &desc).unwrap();
 

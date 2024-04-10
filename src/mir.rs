@@ -146,6 +146,7 @@ pub struct LoadGlobalInstr {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct StoreGlobalInstr {
     pub global_idx: u32,
+    pub field_idx: Option<u32>,
     pub value: Value,
 }
 
@@ -194,7 +195,11 @@ impl Display for Instr {
                 )?;
             }
             Instr::StoreGlobal(v) => {
-                write!(f, "store_global <global {}>, {}", v.global_idx, v.value)?;
+                write!(f, "store_global <global {}", v.global_idx)?;
+                if let Some(field_idx) = v.field_idx {
+                    write!(f, ".{}", field_idx)?;
+                }
+                write!(f, ">, {}", v.value)?;
             }
             Instr::CreateArray(v) => {
                 write!(f, "%{} = create_array", v.target_idx)?;
@@ -288,7 +293,7 @@ pub enum Type {
     F64,
     Func(FuncType),
     Ambig(AmbigType),
-    Array(Box<Type>),
+    Array(ArrayType),
 }
 
 impl Type {
@@ -370,12 +375,15 @@ impl Type {
 
     /// Returns a type for a array. If the item type is ambiguous, returns an ambiguous
     /// type where the item type is concrete.
-    pub fn array_type(item_type: Type) -> Self {
+    pub fn array_type(item_type: Type, len: Option<usize>) -> Self {
         match item_type {
-            Type::Ambig(ambig) => {
-                Type::ambig(ambig.types.into_iter().map(|ty| Type::Array(Box::new(ty))))
-            }
-            _ => Type::Array(Box::new(item_type)),
+            Type::Ambig(ambig) => Type::ambig(
+                ambig
+                    .types
+                    .into_iter()
+                    .map(|ty| Type::Array(ArrayType::new(ty, len))),
+            ),
+            _ => Type::Array(ArrayType::new(item_type, len)),
         }
     }
 
@@ -449,6 +457,23 @@ impl Type {
             return Some(res_type);
         }
 
+        if let (Type::Array(a), Type::Array(b)) = (&self, &other) {
+            let len = match (a.len, b.len) {
+                (Some(a_len), Some(b_len)) => {
+                    if a_len != b_len {
+                        return None;
+                    }
+                    Some(a_len)
+                }
+                (Some(len), None) | (None, Some(len)) => Some(len),
+                (None, None) => None,
+            };
+
+            let item = a.item.merge_with(&b.item)?;
+
+            return Some(Self::array_type(item, len));
+        }
+
         if let (Type::Func(a), Type::Func(b)) = (&self, &other) {
             if a.params.len() != b.params.len() || a.ret.len() != b.ret.len() {
                 return None;
@@ -477,6 +502,14 @@ impl Type {
 
     pub fn is_ambig(&self) -> bool {
         matches!(self, Type::Ambig(_))
+    }
+
+    pub fn is_composite(&self) -> bool {
+        matches!(self, Type::Func(_) | Type::Array(_))
+    }
+
+    pub fn is_primitive(&self) -> bool {
+        !self.is_composite() && !self.is_unknown() && !self.is_ambig()
     }
 }
 
@@ -523,9 +556,17 @@ impl Display for Type {
                 for t in &v.types {
                     write!(f, " {}", t)?;
                 }
-                write!(f, ")")
+                write!(f, ")")?;
+                Ok(())
             }
-            Type::Array(ty) => write!(f, "[{}]", ty),
+            Type::Array(v) => {
+                write!(f, "(array {}", v.item)?;
+                if let Some(len) = v.len {
+                    write!(f, " {}", len)?;
+                }
+                write!(f, ")")?;
+                Ok(())
+            }
         }
     }
 }
@@ -559,7 +600,7 @@ impl FuncType {
         assert!(!ty.is_ambig());
         FuncType {
             params: (0..len).map(|_| ty.clone()).collect(),
-            ret: vec![Type::Array(Box::new(ty.clone()))],
+            ret: vec![Type::Array(ArrayType::new(ty.clone(), Some(len)))],
         }
     }
 }
@@ -594,6 +635,21 @@ impl PartialEq for AmbigType {
         let b_set: HashSet<_> = other.types.iter().collect();
 
         a_set == b_set
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ArrayType {
+    pub item: Box<Type>,
+    pub len: Option<usize>,
+}
+
+impl ArrayType {
+    pub fn new(item: Type, len: Option<usize>) -> Self {
+        Self {
+            item: Box::new(item),
+            len,
+        }
     }
 }
 

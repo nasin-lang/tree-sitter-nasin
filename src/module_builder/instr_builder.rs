@@ -1,10 +1,11 @@
+use std::collections::HashMap;
 use std::fmt::Debug;
 
 use tree_sitter as ts;
 
 use super::registry::Registry;
-use super::registry::ValueRef;
 use super::registry::ValueTypeDeps;
+use super::registry::VirtualValue;
 use crate::mir;
 use crate::tree_sitter_utils::TreeSitterUtils;
 
@@ -15,7 +16,8 @@ where
 {
     pub registry: &'a mut R,
     pub body: Vec<mir::Instr>,
-    source: &'a str,
+    pub source: &'a str,
+    loaded_globals: HashMap<u32, u32>,
 }
 
 impl<'a, R> InstrBuilder<'a, R>
@@ -27,6 +29,7 @@ where
             registry,
             body: Vec::new(),
             source,
+            loaded_globals: HashMap::new(),
         }
     }
 
@@ -41,20 +44,20 @@ where
                 let var_name = var_name_node.get_text(self.source);
 
                 let (value, _) = self.add_expr(&node.required_field("value"));
-                let value_ref = value.into();
+                let v_value: VirtualValue = value.into();
 
-                self.registry.idents_mut().insert(var_name, value_ref);
+                self.registry.idents_mut().insert(var_name, v_value.clone());
 
                 if let Some(ty_node) = node.field("type") {
                     let ty = self.parse_type(&ty_node);
-                    self.registry.set_value_type(value_ref, ty, None);
+                    self.registry.set_value_type(v_value, ty, None);
                 }
             }
             k => panic!("Found unexpected statement `{}`", k),
         }
     }
 
-    pub fn add_expr(&mut self, node: &ts::Node) -> (mir::Value, mir::Type) {
+    pub fn add_expr(&mut self, node: &ts::Node) -> (VirtualValue, mir::Type) {
         match node.kind() {
             "number" => {
                 let number = node.get_text(self.source);
@@ -69,9 +72,7 @@ where
                     value: mir::ConstValue::Number(number.to_string()),
                 }));
 
-                let value = mir::Value::Local(target_idx);
-
-                (value, ty)
+                (VirtualValue::Local(target_idx), ty)
             }
             "array_lit" => {
                 let (items, items_types): (Vec<_>, Vec<_>) =
@@ -79,30 +80,9 @@ where
 
                 let item_ty =
                     mir::Type::merge(&items_types).expect("Array items must have same type");
-                let ty = mir::Type::array_type(item_ty.clone());
+                let ty = mir::Type::array_type(item_ty.clone(), Some(items.len()));
 
-                let target_idx = self.registry.register_local(
-                    "",
-                    ty.clone(),
-                    ValueTypeDeps {
-                        refs: items.iter().cloned().map(ValueRef::from).collect(),
-                        sig: item_ty
-                            .possible_types()
-                            .into_iter()
-                            .map(|t| mir::FuncType::array_sig(&t, items.len()))
-                            .collect(),
-                    },
-                );
-
-                self.body
-                    .push(mir::Instr::CreateArray(mir::CreateArrayInstr {
-                        target_idx,
-                        items,
-                    }));
-
-                let value = mir::Value::Local(target_idx);
-
-                (value, ty)
+                (VirtualValue::Array(items), ty)
             }
             "bin_op" => {
                 let (left, left_ty) = self.add_expr(&node.required_field("left"));
@@ -131,8 +111,8 @@ where
 
                 let bin_op_instr = mir::BinOpInstr {
                     target_idx,
-                    left,
-                    right,
+                    left: self.use_virtual_value(&left),
+                    right: self.use_virtual_value(&right),
                 };
 
                 self.body.push(match op_node.get_text(self.source) {
@@ -145,50 +125,28 @@ where
                     _ => unreachable!(),
                 });
 
-                (mir::Value::Local(target_idx), ty)
+                (VirtualValue::Local(target_idx), ty)
             }
             "ident" => {
-                let ident = node.get_text(self.source);
-                let ident_ref = self
+                let ident_text = node.get_text(self.source);
+                let v_value = self
                     .registry
                     .idents()
-                    .get(ident)
-                    .expect(&format!("Identifier `{}` not found", ident));
+                    .get(ident_text)
+                    .expect(&format!("Identifier `{}` not found", ident_text));
 
                 let ty = self
                     .registry
-                    .value_type(&ident_ref)
-                    .expect(&format!("Type for identifier `{}` not found", ident));
+                    .value_type(&v_value)
+                    .expect(&format!("Type for identifier `{}` not found", ident_text));
 
-                let value = match &ident_ref {
-                    ValueRef::Local(idx) => mir::Value::Local(*idx),
-                    ValueRef::Param(idx) => mir::Value::Param(*idx),
-                    ValueRef::Global(idx) => {
-                        let local_idx = self.registry.register_local(
-                            "",
-                            ty.clone(),
-                            ValueTypeDeps {
-                                sig: vec![mir::FuncType::new(vec![ty.clone()], vec![ty.clone()])],
-                                refs: vec![ident_ref.clone()],
-                            },
-                        );
-
-                        self.body.push(mir::Instr::LoadGlobal(mir::LoadGlobalInstr {
-                            target_idx: local_idx,
-                            global_idx: *idx,
-                        }));
-
-                        mir::Value::Local(local_idx)
-                    }
-                    ValueRef::Func(_) => todo!(),
-                };
-
-                (value, ty)
+                (v_value, ty)
             }
             "call" => {
                 let mut args = Vec::new();
                 for arg_node in node.iter_field("args") {
-                    let (value, _) = self.add_expr(&arg_node);
+                    let (v_value, _) = self.add_expr(&arg_node);
+                    let value = self.use_virtual_value(&v_value);
                     args.push(value);
                 }
 
@@ -197,15 +155,15 @@ where
                 let (func_idx, func_ty) = match func_node.kind() {
                     "ident" => {
                         let func_name = func_node.get_text(self.source);
-                        let func_ref = self
+                        let func_v_value = self
                             .registry
                             .idents()
                             .get(func_name)
                             .expect(&format!("Function `{}` not found", func_name));
 
-                        let ty = self.registry.value_type(&func_ref).unwrap();
+                        let ty = self.registry.value_type(&func_v_value).unwrap();
 
-                        let ValueRef::Func(idx) = func_ref else {
+                        let VirtualValue::Func(idx) = func_v_value else {
                             // FIXME: improve error handling
                             unreachable!()
                         };
@@ -229,7 +187,7 @@ where
                         .clone()
                         .into_iter()
                         // TODO: many return values
-                        .map(|mut fn_ty| fn_ty.ret.remove(0)),
+                        .map(|mut f| f.ret.remove(0)),
                 );
 
                 let target_idx = self.registry.register_local(
@@ -247,7 +205,7 @@ where
                     args,
                 }));
 
-                (mir::Value::Local(target_idx), ret_ty.clone())
+                (VirtualValue::Local(target_idx), ret_ty)
             }
             "block" => {
                 for stmt_node in node.iter_field("body") {
@@ -264,6 +222,69 @@ where
                 (value, ty)
             }
             k => panic!("Found unexpected expression `{}`", k),
+        }
+    }
+
+    pub fn use_virtual_value(&mut self, v_value: &VirtualValue) -> mir::Value {
+        let ty = self.registry.value_type(v_value).unwrap();
+
+        match v_value {
+            VirtualValue::Local(idx) => mir::Value::Local(*idx),
+            VirtualValue::Param(idx) => mir::Value::Param(*idx),
+            VirtualValue::Global(idx) => {
+                if let Some(local_idx) = self.loaded_globals.get(idx) {
+                    return mir::Value::Local(*local_idx);
+                }
+
+                let local_idx = self.registry.register_local(
+                    "",
+                    ty.clone(),
+                    // FIXME: allow local to constrain the type of the global
+                    ValueTypeDeps {
+                        sig: vec![],
+                        refs: vec![],
+                    },
+                );
+
+                self.body.push(mir::Instr::LoadGlobal(mir::LoadGlobalInstr {
+                    target_idx: local_idx,
+                    global_idx: *idx,
+                }));
+
+                mir::Value::Local(local_idx)
+            }
+            VirtualValue::Func(_idx) => todo!(),
+            VirtualValue::Array(items) => {
+                let items_values: Vec<_> = items
+                    .iter()
+                    .map(|item| self.use_virtual_value(item))
+                    .collect();
+
+                let mir::Type::Array(mir::ArrayType { item: item_ty, .. }) = &ty else {
+                    unreachable!();
+                };
+
+                let target_idx = self.registry.register_local(
+                    "",
+                    ty.clone(),
+                    ValueTypeDeps {
+                        refs: items.clone(),
+                        sig: item_ty
+                            .possible_types()
+                            .into_iter()
+                            .map(|t| mir::FuncType::array_sig(&t, items.len()))
+                            .collect(),
+                    },
+                );
+
+                self.body
+                    .push(mir::Instr::CreateArray(mir::CreateArrayInstr {
+                        target_idx,
+                        items: items_values,
+                    }));
+
+                mir::Value::Local(target_idx)
+            }
         }
     }
 
@@ -290,7 +311,12 @@ where
             }
             "array_type" => {
                 let item_ty = self.parse_type(&node.required_field("item_type"));
-                mir::Type::Array(Box::new(item_ty))
+                let len = node.field("length").map(|n| {
+                    n.get_text(self.source)
+                        .parse::<usize>()
+                        .expect("Cannot cast length to integer")
+                });
+                mir::Type::array_type(item_ty, len)
             }
             k => panic!("Found unexpected type `{}`", k),
         }

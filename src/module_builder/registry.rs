@@ -1,20 +1,23 @@
 use std::collections::{HashMap, HashSet};
 
+use itertools::Itertools;
+
 use crate::mir;
 
-#[derive(Debug, Clone, Copy, Hash, Eq, PartialEq)]
-pub enum ValueRef {
+#[derive(Debug, Clone, Hash, Eq, PartialEq)]
+pub enum VirtualValue {
     Func(u32),
     Global(u32),
     Local(u32),
     Param(u32),
+    Array(Vec<VirtualValue>),
 }
 
-impl From<mir::Value> for ValueRef {
+impl From<mir::Value> for VirtualValue {
     fn from(value: mir::Value) -> Self {
         match value {
-            mir::Value::Local(idx) => ValueRef::Local(idx),
-            mir::Value::Param(idx) => ValueRef::Param(idx),
+            mir::Value::Local(idx) => VirtualValue::Local(idx),
+            mir::Value::Param(idx) => VirtualValue::Param(idx),
         }
     }
 }
@@ -23,7 +26,7 @@ impl From<mir::Value> for ValueRef {
 struct ValueType {
     ty: mir::Type,
     produced_by: ValueTypeDeps,
-    consumed_by: HashSet<ValueRef>,
+    consumed_by: HashSet<VirtualValue>,
 }
 
 impl Default for ValueType {
@@ -39,7 +42,7 @@ impl Default for ValueType {
 #[derive(Debug, Clone, Default)]
 pub struct ValueTypeDeps {
     pub sig: Vec<mir::FuncType>,
-    pub refs: Vec<ValueRef>,
+    pub refs: Vec<VirtualValue>,
 }
 
 /// Arguments used to constrain a type, is used to avoid deep recursion in the type
@@ -50,12 +53,12 @@ enum TypeConstraintArgs {
         ty: mir::Type,
     },
     TopDown {
-        produced_by: ValueRef,
+        produced_by: VirtualValue,
         producer_ty: mir::Type,
     },
     BottomUp {
         ty: mir::Type,
-        consumed_by: ValueRef,
+        consumed_by: VirtualValue,
     },
 }
 
@@ -63,7 +66,7 @@ enum TypeConstraintArgs {
 /// them. Whenever a identifier is shadowed, its id is updated
 #[derive(Debug, Clone)]
 pub struct IdentMap {
-    map: HashMap<String, ValueRef>,
+    map: HashMap<String, VirtualValue>,
 }
 
 impl IdentMap {
@@ -73,12 +76,12 @@ impl IdentMap {
         }
     }
 
-    pub fn insert(&mut self, ident: &str, value_ref: ValueRef) {
-        self.map.insert(ident.to_string(), value_ref);
+    pub fn insert(&mut self, ident: &str, v_value: VirtualValue) {
+        self.map.insert(ident.to_string(), v_value);
     }
 
-    pub fn get(&self, ident: &str) -> Option<ValueRef> {
-        self.map.get(ident).copied()
+    pub fn get(&self, ident: &str) -> Option<VirtualValue> {
+        self.map.get(ident).cloned()
     }
 
     pub fn clear(&mut self) {
@@ -95,27 +98,55 @@ pub trait Registry {
     fn idents_mut(&mut self) -> &mut IdentMap;
     fn register_local(&mut self, ident: &str, ty: mir::Type, produced_by: ValueTypeDeps) -> u32;
     fn get_locals(&self) -> impl Iterator<Item = mir::Local>;
-    fn value_type(&self, value_ref: &ValueRef) -> Option<mir::Type>;
-    fn set_value_type(&mut self, value_ref: ValueRef, ty: mir::Type, consumed_by: Option<ValueRef>);
+    fn global_type(&self, idx: u32) -> Option<mir::Type>;
+    fn func_type(&self, idx: u32) -> Option<mir::Type>;
+    fn param_type(&self, idx: u32) -> Option<mir::Type>;
+    fn local_type(&self, idx: u32) -> Option<mir::Type>;
+    fn set_value_type(
+        &mut self,
+        v_value: VirtualValue,
+        ty: mir::Type,
+        consumed_by: Option<VirtualValue>,
+    );
+
+    fn value_type(&self, v_value: &VirtualValue) -> Option<mir::Type> {
+        match v_value {
+            VirtualValue::Func(idx) => self.func_type(*idx),
+            VirtualValue::Global(idx) => self.global_type(*idx),
+            VirtualValue::Local(idx) => self.local_type(*idx),
+            VirtualValue::Param(idx) => self.param_type(*idx),
+            VirtualValue::Array(refs) => {
+                let item_types = refs
+                    .iter()
+                    .map(|v| self.value_type(v))
+                    .collect::<Option<Vec<_>>>()?;
+                let item_ty = mir::Type::merge(item_types.iter()).expect(&format!(
+                    "Failed to merge types of array items: {}",
+                    item_types.iter().map(|t| t.to_string()).join(", ")
+                ));
+                Some(mir::Type::array_type(item_ty, Some(refs.len())))
+            }
+        }
+    }
 }
 
 trait RegistryExt: Registry {
-    fn get_mut_value_type(&mut self, value_ref: &ValueRef) -> Option<&mut ValueType>;
+    fn get_mut_value_type(&mut self, v_value: &VirtualValue) -> Option<&mut ValueType>;
 
     fn constrain_value_type_chain(
         &mut self,
-        value_ref: ValueRef,
+        v_value: VirtualValue,
         args: Option<TypeConstraintArgs>,
     ) {
-        let mut stack = vec![(value_ref, args)];
+        let mut stack = vec![(v_value, args)];
 
         while stack.len() > 0 {
-            let (value_ref, args) = stack.pop().unwrap();
+            let (v_value, args) = stack.pop().unwrap();
 
-            let Some(value_type) = self.get_mut_value_type(&value_ref) else {
+            let Some(value_type) = self.get_mut_value_type(&v_value) else {
                 panic!(
-                    "Ty of {:?} cannot be refined because it does not exist in the registry or is not mutable",
-                    value_ref
+                    "Type of {:?} cannot be refined with {:?} because it does not exist in the registry or is not mutable",
+                    v_value, args
                 );
             };
 
@@ -149,7 +180,7 @@ trait RegistryExt: Registry {
                         .position(|r| r == &produced_by)
                         .expect(&format!(
                             "Failed to constrain type: {:?} does not depend on {:?}",
-                            &value_ref, &produced_by
+                            &v_value, &produced_by
                         ));
 
                     let sigs_len = value_type.produced_by.sig.len();
@@ -220,7 +251,7 @@ trait RegistryExt: Registry {
                     ref_value.clone(),
                     Some(TypeConstraintArgs::BottomUp {
                         ty: ty.clone(),
-                        consumed_by: value_ref,
+                        consumed_by: v_value.clone(),
                     }),
                 ))
             }
@@ -234,7 +265,7 @@ trait RegistryExt: Registry {
                 stack.push((
                     consumed_by.clone(),
                     Some(TypeConstraintArgs::TopDown {
-                        produced_by: value_ref,
+                        produced_by: v_value.clone(),
                         producer_ty: value_type.ty.clone(),
                     }),
                 ))
@@ -268,25 +299,33 @@ impl ModuleRegistry {
         P: IntoIterator<Item = mir::Type>,
     {
         let idx = self.funcs.len();
-        let value_ref = ValueRef::Func(idx as u32);
+        let v_value = VirtualValue::Func(idx as u32);
         self.funcs.push(mir::Type::func_type(
             params,
             // Multiple return values are not supported yet
             [mir::Type::Unknown],
         ));
-        self.global_idents.insert(ident, value_ref);
-        self.init_idents.insert(ident, value_ref);
+        self.global_idents.insert(ident, v_value.clone());
+        self.init_idents.insert(ident, v_value);
         idx as u32
     }
 
-    pub fn register_global(&mut self, ident: &str, ty: mir::Type) -> u32 {
+    pub fn register_global(
+        &mut self,
+        ident: &str,
+        ty: mir::Type,
+        produced_by: ValueTypeDeps,
+    ) -> u32 {
         let idx = self.globals.len();
-        let value_ref = ValueRef::Global(idx as u32);
+        let v_value = VirtualValue::Global(idx as u32);
         self.globals.push(ValueType {
             ty,
+            produced_by,
             ..Default::default()
         });
-        self.global_idents.insert(ident, value_ref);
+        self.global_idents.insert(ident, v_value.clone());
+        self.constrain_value_type_chain(v_value.clone(), None);
+
         idx as u32
     }
 }
@@ -300,22 +339,30 @@ impl Registry for ModuleRegistry {
         &mut self.init_idents
     }
 
-    fn value_type(&self, value_ref: &ValueRef) -> Option<mir::Type> {
-        match &value_ref {
-            ValueRef::Local(idx) => Some(self.init_locals.get(*idx as usize)?.ty.clone()),
-            ValueRef::Func(idx) => Some(self.funcs.get(*idx as usize)?.clone()),
-            ValueRef::Global(idx) => Some(self.globals.get(*idx as usize)?.ty.clone()),
-            _ => None,
-        }
+    fn global_type(&self, idx: u32) -> Option<mir::Type> {
+        self.globals
+            .get(idx as usize)
+            .map(|value_type| value_type.ty.clone())
+    }
+    fn func_type(&self, idx: u32) -> Option<mir::Type> {
+        self.funcs.get(idx as usize).cloned()
+    }
+    fn param_type(&self, _idx: u32) -> Option<mir::Type> {
+        None
+    }
+    fn local_type(&self, idx: u32) -> Option<mir::Type> {
+        self.init_locals
+            .get(idx as usize)
+            .map(|value_type| value_type.ty.clone())
     }
 
     fn set_value_type(
         &mut self,
-        value_ref: ValueRef,
+        v_value: VirtualValue,
         ty: mir::Type,
-        consumed_by: Option<ValueRef>,
+        consumed_by: Option<VirtualValue>,
     ) {
-        if let ValueRef::Func(idx) = &value_ref {
+        if let VirtualValue::Func(idx) = &v_value {
             let idx = *idx as usize;
 
             if idx >= self.funcs.len() {
@@ -335,7 +382,7 @@ impl Registry for ModuleRegistry {
         }
 
         self.constrain_value_type_chain(
-            value_ref,
+            v_value,
             if let Some(consumed_by) = consumed_by {
                 Some(TypeConstraintArgs::BottomUp { ty, consumed_by })
             } else {
@@ -346,14 +393,14 @@ impl Registry for ModuleRegistry {
 
     fn register_local(&mut self, ident: &str, ty: mir::Type, produced_by: ValueTypeDeps) -> u32 {
         let idx = self.init_locals.len();
-        let value_ref = ValueRef::Local(idx as u32);
+        let v_value = VirtualValue::Local(idx as u32);
         self.init_locals.push(ValueType {
             ty,
             produced_by,
             ..Default::default()
         });
-        self.init_idents.insert(ident, value_ref.clone());
-        self.constrain_value_type_chain(value_ref.clone(), None);
+        self.init_idents.insert(ident, v_value.clone());
+        self.constrain_value_type_chain(v_value.clone(), None);
 
         idx as u32
     }
@@ -366,10 +413,10 @@ impl Registry for ModuleRegistry {
 }
 
 impl RegistryExt for ModuleRegistry {
-    fn get_mut_value_type(&mut self, value_ref: &ValueRef) -> Option<&mut ValueType> {
-        match value_ref {
-            ValueRef::Global(idx) => self.globals.get_mut(*idx as usize),
-            ValueRef::Local(idx) => self.init_locals.get_mut(*idx as usize),
+    fn get_mut_value_type(&mut self, v_value: &VirtualValue) -> Option<&mut ValueType> {
+        match v_value {
+            VirtualValue::Global(idx) => self.globals.get_mut(*idx as usize),
+            VirtualValue::Local(idx) => self.init_locals.get_mut(*idx as usize),
             _ => None,
         }
     }
@@ -400,7 +447,7 @@ impl<'a> FuncRegistry<'a> {
             ty,
             ..Default::default()
         });
-        self.idents.insert(ident, ValueRef::Param(idx as u32));
+        self.idents.insert(ident, VirtualValue::Param(idx as u32));
         idx as u32
     }
 
@@ -421,32 +468,35 @@ impl Registry for FuncRegistry<'_> {
         &mut self.idents
     }
 
-    fn value_type(&self, value_ref: &ValueRef) -> Option<mir::Type> {
-        match value_ref {
-            ValueRef::Param(idx) => Some(self.params.get(*idx as usize)?.ty.clone()),
-            ValueRef::Local(idx) => Some(self.locals.get(*idx as usize)?.ty.clone()),
-            _ => self.module_registry.value_type(value_ref),
-        }
+    fn global_type(&self, idx: u32) -> Option<mir::Type> {
+        self.module_registry.global_type(idx)
+    }
+    fn func_type(&self, idx: u32) -> Option<mir::Type> {
+        self.module_registry.func_type(idx)
+    }
+    fn param_type(&self, idx: u32) -> Option<mir::Type> {
+        self.params
+            .get(idx as usize)
+            .map(|value_type| value_type.ty.clone())
+    }
+    fn local_type(&self, idx: u32) -> Option<mir::Type> {
+        self.locals
+            .get(idx as usize)
+            .map(|value_type| value_type.ty.clone())
     }
 
     fn set_value_type(
         &mut self,
-        value_ref: ValueRef,
+        v_value: VirtualValue,
         ty: mir::Type,
-        consumed_by: Option<ValueRef>,
+        consumed_by: Option<VirtualValue>,
     ) {
-        if matches!(&value_ref, ValueRef::Func(_)) {
-            panic!("Cannot update the type of a function");
-        }
-
-        if matches!(&value_ref, ValueRef::Global(_)) {
-            self.module_registry
-                .set_value_type(value_ref, ty, consumed_by);
-            return;
+        if matches!(&v_value, VirtualValue::Func(_) | VirtualValue::Global(_)) {
+            panic!("{:?} cannot be refined inside a function", v_value);
         }
 
         self.constrain_value_type_chain(
-            value_ref,
+            v_value,
             if let Some(consumed_by) = consumed_by {
                 Some(TypeConstraintArgs::BottomUp { ty, consumed_by })
             } else {
@@ -462,8 +512,8 @@ impl Registry for FuncRegistry<'_> {
             produced_by,
             ..Default::default()
         });
-        self.idents.insert(ident, ValueRef::Local(idx as u32));
-        self.constrain_value_type_chain(ValueRef::Local(idx as u32), None);
+        self.idents.insert(ident, VirtualValue::Local(idx as u32));
+        self.constrain_value_type_chain(VirtualValue::Local(idx as u32), None);
 
         idx as u32
     }
@@ -476,11 +526,11 @@ impl Registry for FuncRegistry<'_> {
 }
 
 impl<'a> RegistryExt for FuncRegistry<'a> {
-    fn get_mut_value_type(&mut self, value_ref: &ValueRef) -> Option<&mut ValueType> {
-        match value_ref {
-            ValueRef::Param(idx) => self.params.get_mut(*idx as usize),
-            ValueRef::Local(idx) => self.locals.get_mut(*idx as usize),
-            _ => self.module_registry.get_mut_value_type(value_ref),
+    fn get_mut_value_type(&mut self, v_value: &VirtualValue) -> Option<&mut ValueType> {
+        match v_value {
+            VirtualValue::Param(idx) => self.params.get_mut(*idx as usize),
+            VirtualValue::Local(idx) => self.locals.get_mut(*idx as usize),
+            _ => panic!("{:?} cannot be refined inside a function", v_value),
         }
     }
 }

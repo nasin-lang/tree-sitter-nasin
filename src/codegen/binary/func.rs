@@ -136,10 +136,10 @@ impl<'a> FnCodegen<'a> {
                     .get(v.target_idx as usize)
                     .expect("Local not found");
 
-                let mir::Type::Array(item_ty) = &local.ty else {
+                let mir::Type::Array(array_ty) = &local.ty else {
                     panic!("Invalid type for array")
                 };
-                let item_native_ty = self.module.get_type(item_ty);
+                let item_native_ty = self.module.get_type(&array_ty.item);
 
                 let ss = self.builder.create_sized_stack_slot(StackSlotData::new(
                     StackSlotKind::ExplicitSlot,
@@ -168,20 +168,41 @@ impl<'a> FnCodegen<'a> {
 
                 let ptr = self.get_global_ptr(v.global_idx);
 
-                let value = self
-                    .builder
-                    .ins()
-                    .load(global.native_ty, MemFlags::new(), ptr, 0);
+                let value = if global.ty.is_primitive() {
+                    self.builder
+                        .ins()
+                        .load(global.native_ty, MemFlags::new(), ptr, 0)
+                } else {
+                    ptr
+                };
 
                 let local = self.locals.get_mut(v.target_idx as usize).unwrap();
                 local.value = Some(value);
             }
             mir::Instr::StoreGlobal(v) => {
+                let global = self
+                    .globals
+                    .get(v.global_idx as usize)
+                    .expect("Global not found");
+
                 let ptr = self.get_global_ptr(v.global_idx);
 
                 let value = self.get_value(&v.value);
 
-                self.builder.ins().store(MemFlags::new(), value, ptr, 0);
+                let offset = match v.field_idx {
+                    Some(idx) => match &global.ty {
+                        mir::Type::Array(array_ty) => {
+                            let item_native_ty = self.module.get_type(&array_ty.item);
+                            (idx * item_native_ty.bytes()) as i32
+                        }
+                        _ => panic!("Cannot store field in type {}", &global.ty),
+                    },
+                    None => 0,
+                };
+
+                self.builder
+                    .ins()
+                    .store(MemFlags::new(), value, ptr, offset);
             }
             mir::Instr::Add(v) => {
                 // Different instructions for different types, might want to use some kind of

@@ -6,7 +6,7 @@ use tree_sitter as ts;
 use self::instr_builder::InstrBuilder;
 use self::registry::ModuleRegistry;
 use crate::mir;
-use crate::module_builder::registry::{FuncRegistry, Registry, ValueRef};
+use crate::module_builder::registry::{FuncRegistry, Registry, ValueTypeDeps, VirtualValue};
 use crate::tree_sitter_utils::TreeSitterUtils;
 
 pub struct ModuleBuilder<'a> {
@@ -32,7 +32,7 @@ impl<'a> ModuleBuilder<'a> {
             let ret = vec![];
             registry.register_func("exit", params.clone());
             registry.set_value_type(
-                ValueRef::Func(0),
+                VirtualValue::Func(0),
                 mir::Type::func_type(params.clone(), ret.clone()),
                 None,
             );
@@ -50,13 +50,13 @@ impl<'a> ModuleBuilder<'a> {
         let write_func = {
             let params = vec![
                 mir::Type::I32,
-                mir::Type::array_type(mir::Type::U8),
+                mir::Type::array_type(mir::Type::U8, None),
                 mir::Type::USize,
             ];
             let ret = vec![mir::Type::USize];
             registry.register_func("write", params.clone());
             registry.set_value_type(
-                ValueRef::Func(1),
+                VirtualValue::Func(1),
                 mir::Type::func_type(params.clone(), ret.clone()),
                 None,
             );
@@ -123,7 +123,7 @@ impl<'a> ModuleBuilder<'a> {
             .registry
             .module_registry
             .register_func(&name, local_builder.registry.get_params().map(|p| p.ty));
-        let func_ref = ValueRef::Func(func_idx);
+        let func_ref = VirtualValue::Func(func_idx);
 
         let ret = node
             .field("ret_type")
@@ -132,8 +132,9 @@ impl<'a> ModuleBuilder<'a> {
                 local_builder.parse_type(ty_node)
             });
 
-        let (ret_value, _) = local_builder.add_expr(&node.required_field("return"));
-        let ret_ref: ValueRef = ret_value.clone().into();
+        let (ret_v_value, _) = local_builder.add_expr(&node.required_field("return"));
+        let ret_value = local_builder.use_virtual_value(&ret_v_value);
+        let ret_ref: VirtualValue = ret_value.clone().into();
 
         local_builder
             .body
@@ -148,6 +149,10 @@ impl<'a> ModuleBuilder<'a> {
         let locals: Vec<_> = local_builder.registry.get_locals().collect();
         let params: Vec<_> = local_builder.registry.get_params().collect();
         let ret = local_builder.registry.value_type(&ret_ref).unwrap();
+
+        if ret.is_ambig() {
+            panic!("Type should be known for function return: {}", name);
+        }
 
         let ty = mir::Type::func_type(params.iter().map(|p| p.ty.clone()), [ret.clone()]);
 
@@ -173,35 +178,93 @@ impl<'a> ModuleBuilder<'a> {
 
         let mut instr_builder = InstrBuilder::new(&mut self.registry, self.source);
 
-        let ty = node
-            .field("type")
-            .map_or(mir::Type::Unknown, |ty| instr_builder.parse_type(&ty));
+        let (v_value, ty) = instr_builder.add_expr(&node.required_field("value"));
 
-        let global_idx = instr_builder.registry.register_global(&name, ty.clone());
-        let global_ref = ValueRef::Global(global_idx);
+        let ty = match &node.field("type") {
+            Some(ty_node) => {
+                let manual_ty = instr_builder.parse_type(ty_node);
+                manual_ty.merge_with(&ty).expect(&format!(
+                    "Type mismatch: expected {}, got {}",
+                    manual_ty, ty
+                ))
+            }
+            None => ty,
+        };
 
-        let (value, _) = instr_builder.add_expr(&node.required_field("value"));
-        let value_ref: ValueRef = value.clone().into();
+        if ty.is_ambig() {
+            // FIXME: allow local to constrain the type of the global
+            panic!("Type should be known for global value: {}", name);
+        }
 
-        // Shadow the global value with the local result so next time we use the global we
-        // get the local value instead of loading the global again.
-        instr_builder
+        let deps = match &v_value {
+            VirtualValue::Array(items) => {
+                let mir::Type::Array(array_ty) = &ty else {
+                    panic!("Expected array type, got {}", ty);
+                };
+
+                if array_ty.len.is_none() {
+                    panic!("Array length should be known for global array: {}", name);
+                }
+
+                if array_ty.len.unwrap() != items.len() {
+                    panic!(
+                        "Array length mismatch: expected {}, got {}",
+                        array_ty.len.unwrap(),
+                        items.len()
+                    );
+                }
+
+                ValueTypeDeps {
+                    refs: items.clone(),
+                    sig: array_ty
+                        .item
+                        .possible_types()
+                        .into_iter()
+                        .map(|t| mir::FuncType::array_sig(&t, items.len()))
+                        .collect(),
+                }
+            }
+            _ => ValueTypeDeps {
+                sig: vec![mir::FuncType::new(vec![ty.clone()], vec![ty.clone()])],
+                refs: vec![v_value.clone()],
+            },
+        };
+
+        let global_idx = instr_builder
             .registry
-            .init_idents
-            .insert(&name, value_ref.clone());
+            .register_global(&name, ty.clone(), deps);
 
-        instr_builder
-            .body
-            .push(mir::Instr::StoreGlobal(mir::StoreGlobalInstr {
-                global_idx,
-                value,
-            }));
+        match &v_value {
+            VirtualValue::Array(items) => {
+                for (i, item) in items.iter().enumerate() {
+                    let value = instr_builder.use_virtual_value(item);
+                    instr_builder
+                        .body
+                        .push(mir::Instr::StoreGlobal(mir::StoreGlobalInstr {
+                            global_idx,
+                            field_idx: Some(i as u32),
+                            value,
+                        }));
+                }
+            }
+            _ => {
+                let value = instr_builder.use_virtual_value(&v_value);
+                instr_builder
+                    .body
+                    .push(mir::Instr::StoreGlobal(mir::StoreGlobalInstr {
+                        global_idx,
+                        field_idx: None,
+                        value,
+                    }));
 
-        instr_builder
-            .registry
-            .set_value_type(value_ref.clone(), ty, Some(global_ref.clone()));
-
-        let ty = instr_builder.registry.value_type(&value_ref).unwrap();
+                // Shadow the global value with the local result so next time we use the
+                // global we get the local value instead of loading the global again.
+                instr_builder
+                    .registry
+                    .init_idents
+                    .insert(&name, v_value.clone());
+            }
+        }
 
         self.globals.push(mir::Global {
             // FIXME: read export info from the source

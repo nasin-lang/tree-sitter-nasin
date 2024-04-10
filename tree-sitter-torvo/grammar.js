@@ -105,7 +105,15 @@ module.exports = grammar({
         _type_expr: ($) => choice($.ident, $.array_type),
 
         array_type: ($) =>
-            prec(PREC.ATOM, seq("[", field("item_type", $._type_expr), "]")),
+            prec(
+                PREC.ATOM,
+                seq(
+                    "[",
+                    field("item_type", $._type_expr),
+                    optional(seq(";", field("length", $.number))),
+                    "]",
+                ),
+            ),
 
         _pat: ($) => choice($.ident),
 
