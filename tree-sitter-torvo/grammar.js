@@ -59,6 +59,7 @@ module.exports = grammar({
                 prec(PREC.ATOM, seq("(", $._expr, ")")),
                 $.ident,
                 $.number,
+                $.string_lit,
                 $.array_lit,
                 $.call,
                 $.bin_op,
@@ -82,6 +83,13 @@ module.exports = grammar({
             ),
         _call_args_list: ($) =>
             prec(PREC.CALL, repeat1(seq(field("args", $._expr), optional(",")))),
+
+        string_lit: ($) =>
+            prec(
+                PREC.ATOM,
+                seq('"', field("content", $.string_lit_content), token.immediate('"')),
+            ),
+        string_lit_content: () => token.immediate(/\\"|[^"]+/),
 
         array_lit: ($) =>
             prec(

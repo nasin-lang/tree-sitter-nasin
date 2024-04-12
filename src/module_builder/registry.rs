@@ -11,6 +11,7 @@ pub enum VirtualValue {
     Local(u32),
     Param(u32),
     Number(String),
+    String(String),
     Array(Vec<VirtualValue>),
 }
 
@@ -29,6 +30,7 @@ impl TryFrom<VirtualValue> for mir::ConstValue {
     fn try_from(value: VirtualValue) -> Result<Self, Self::Error> {
         match value {
             VirtualValue::Number(n) => Ok(mir::ConstValue::Number(n)),
+            VirtualValue::String(s) => Ok(mir::ConstValue::String(s)),
             VirtualValue::Array(ref values) => {
                 let values = values
                     .iter()
@@ -135,6 +137,9 @@ pub trait Registry {
             VirtualValue::Local(idx) => self.local_type(*idx),
             VirtualValue::Param(idx) => self.param_type(*idx),
             VirtualValue::Number(n) => Some(mir::Type::num_type(n)),
+            VirtualValue::String(s) => {
+                Some(mir::Type::String(mir::StringType { len: Some(s.len()) }))
+            }
             VirtualValue::Array(refs) => {
                 let item_types = refs
                     .iter()
@@ -163,7 +168,7 @@ trait RegistryExt: Registry {
         while stack.len() > 0 {
             let (v_value, args) = stack.pop().unwrap();
 
-            if matches!(&v_value, VirtualValue::Number(_)) {
+            if matches!(&v_value, VirtualValue::Number(_) | VirtualValue::String(_)) {
                 return;
             }
 

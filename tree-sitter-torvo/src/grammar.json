@@ -284,6 +284,10 @@
         },
         {
           "type": "SYMBOL",
+          "name": "string_lit"
+        },
+        {
+          "type": "SYMBOL",
           "name": "array_lit"
         },
         {
@@ -570,6 +574,41 @@
             }
           ]
         }
+      }
+    },
+    "string_lit": {
+      "type": "PREC",
+      "value": 5,
+      "content": {
+        "type": "SEQ",
+        "members": [
+          {
+            "type": "STRING",
+            "value": "\""
+          },
+          {
+            "type": "FIELD",
+            "name": "content",
+            "content": {
+              "type": "SYMBOL",
+              "name": "string_lit_content"
+            }
+          },
+          {
+            "type": "IMMEDIATE_TOKEN",
+            "content": {
+              "type": "STRING",
+              "value": "\""
+            }
+          }
+        ]
+      }
+    },
+    "string_lit_content": {
+      "type": "IMMEDIATE_TOKEN",
+      "content": {
+        "type": "PATTERN",
+        "value": "\\\\\"|[^\"]+"
       }
     },
     "array_lit": {

@@ -38,6 +38,10 @@
           {
             "type": "number",
             "named": true
+          },
+          {
+            "type": "string_lit",
+            "named": true
           }
         ]
       }
@@ -112,6 +116,10 @@
           {
             "type": "number",
             "named": true
+          },
+          {
+            "type": "string_lit",
+            "named": true
           }
         ]
       },
@@ -180,6 +188,10 @@
           {
             "type": "number",
             "named": true
+          },
+          {
+            "type": "string_lit",
+            "named": true
           }
         ]
       }
@@ -234,6 +246,10 @@
           {
             "type": "number",
             "named": true
+          },
+          {
+            "type": "string_lit",
+            "named": true
           }
         ]
       }
@@ -278,6 +294,10 @@
           {
             "type": "number",
             "named": true
+          },
+          {
+            "type": "string_lit",
+            "named": true
           }
         ]
       },
@@ -315,6 +335,10 @@
           },
           {
             "type": "number",
+            "named": true
+          },
+          {
+            "type": "string_lit",
             "named": true
           }
         ]
@@ -393,6 +417,10 @@
           },
           {
             "type": "number",
+            "named": true
+          },
+          {
+            "type": "string_lit",
             "named": true
           }
         ]
@@ -492,6 +520,10 @@
           {
             "type": "number",
             "named": true
+          },
+          {
+            "type": "string_lit",
+            "named": true
           }
         ]
       }
@@ -524,6 +556,22 @@
           "named": true
         }
       ]
+    }
+  },
+  {
+    "type": "string_lit",
+    "named": true,
+    "fields": {
+      "content": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "string_lit_content",
+            "named": true
+          }
+        ]
+      }
     }
   },
   {
@@ -589,10 +637,18 @@
           {
             "type": "number",
             "named": true
+          },
+          {
+            "type": "string_lit",
+            "named": true
           }
         ]
       }
     }
+  },
+  {
+    "type": "\"",
+    "named": false
   },
   {
     "type": "(",
@@ -652,6 +708,10 @@
   },
   {
     "type": "star",
+    "named": true
+  },
+  {
+    "type": "string_lit_content",
     "named": true
   }
 ]

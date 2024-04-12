@@ -65,6 +65,22 @@ where
 
                 (VirtualValue::Number(number.to_string()), ty)
             }
+            "string_lit" => {
+                let string = node
+                    .required_field("content")
+                    .get_text(self.source)
+                    .replace("\\\"", "\"")
+                    .replace("\\n", "\n")
+                    .replace("\\t", "\t")
+                    .replace("\\r", "\r")
+                    .replace("\\\\", "\\")
+                    .to_string();
+                let ty = mir::Type::String(mir::StringType {
+                    len: Some(string.len()),
+                });
+
+                (VirtualValue::String(string), ty)
+            }
             "array_lit" => {
                 let (items, items_types): (Vec<_>, Vec<_>) =
                     node.iter_field("items").map(|n| self.add_expr(&n)).unzip();
@@ -260,6 +276,21 @@ where
 
                 mir::Value::Local(target_idx)
             }
+            VirtualValue::String(s) => {
+                let ty = mir::Type::String(mir::StringType { len: Some(s.len()) });
+
+                let target_idx =
+                    self.registry
+                        .register_local("", ty.clone(), ValueTypeDeps::default());
+
+                self.body
+                    .push(mir::Instr::CreateString(mir::CreateStringInstr {
+                        target_idx,
+                        string: s.clone(),
+                    }));
+
+                mir::Value::Local(target_idx)
+            }
             VirtualValue::Array(items) => {
                 let items_values: Vec<_> = items
                     .iter()
@@ -308,9 +339,10 @@ where
                     "usize" => mir::Type::USize,
                     "f32" => mir::Type::F32,
                     "f64" => mir::Type::F64,
+                    "str" => mir::Type::String(mir::StringType { len: None }),
                     _ => {
                         // TODO: improve error handling
-                        panic!("{} is not a type, dummy", node.to_sexp());
+                        panic!("{} is not a type, dummy", node.get_text(self.source));
                     }
                 }
             }

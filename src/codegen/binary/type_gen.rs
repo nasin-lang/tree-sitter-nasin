@@ -44,6 +44,10 @@ pub trait TypeGen {
         }
 
         match &ty {
+            mir::Type::String(string_ty) => {
+                // Append a null terminator to avoid problems if used as a C string
+                return string_ty.len.expect("Type does not have a known length") + 1;
+            }
             mir::Type::Array(array_ty) => {
                 let item_size = self.get_size(&array_ty.item);
                 let len = array_ty.len.expect("Type does not have a known length");
@@ -95,6 +99,12 @@ pub trait TypeGen {
                     mir::Type::F64 => serialize_number!(f64),
                     _ => panic!("Number of type {} is not allowed", ty),
                 }
+            }
+            mir::ConstValue::String(s) => {
+                let mut bytes = s.as_bytes().to_vec();
+                // Append a null terminator to avoid problems if used as a C string
+                bytes.extend([0]);
+                bytes
             }
             mir::ConstValue::Array(values) => {
                 let mut bytes = Vec::with_capacity(size);

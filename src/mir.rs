@@ -131,6 +131,7 @@ pub enum Instr {
     LoadGlobal(LoadGlobalInstr),
     StoreGlobal(StoreGlobalInstr),
     CreateNumber(CreateNumberInstr),
+    CreateString(CreateStringInstr),
     CreateData(CreateDataInstr),
     Add(BinOpInstr),
     Sub(BinOpInstr),
@@ -159,6 +160,12 @@ pub struct StoreGlobalInstr {
 pub struct CreateNumberInstr {
     pub target_idx: u32,
     pub number: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CreateStringInstr {
+    pub target_idx: u32,
+    pub string: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -206,6 +213,19 @@ impl Display for Instr {
             Instr::CreateNumber(v) => {
                 write!(f, "%{} = create_number {}", v.target_idx, &v.number)?;
             }
+            Instr::CreateString(v) => {
+                write!(
+                    f,
+                    "%{} = create_string \"{}\"",
+                    v.target_idx,
+                    &v.string
+                        .replace("\"", "\\\"")
+                        .replace("\n", "\\n")
+                        .replace("\r", "\\r")
+                        .replace("\t", "\\t")
+                        .replace("\\", "\\\\")
+                )?;
+            }
             Instr::CreateData(v) => {
                 write!(f, "%{} = create_data", v.target_idx)?;
                 for item in &v.items {
@@ -250,6 +270,7 @@ impl Display for Instr {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ConstValue {
     Number(String),
+    String(String),
     Array(Vec<ConstValue>),
 }
 
@@ -258,6 +279,17 @@ impl Display for ConstValue {
         match &self {
             ConstValue::Number(num) => {
                 write!(f, "{}", num)?;
+            }
+            ConstValue::String(s) => {
+                write!(
+                    f,
+                    "\"{}\"",
+                    s.replace("\\", "\\\\")
+                        .replace("\"", "\\\"")
+                        .replace("\n", "\\n")
+                        .replace("\r", "\\r")
+                        .replace("\t", "\\t")
+                )?;
             }
             ConstValue::Array(items) => {
                 write!(f, "[")?;
@@ -310,6 +342,7 @@ pub enum Type {
     F64,
     Func(FuncType),
     Ambig(AmbigType),
+    String(StringType),
     Array(ArrayType),
 }
 
@@ -474,6 +507,21 @@ impl Type {
             return Some(res_type);
         }
 
+        if let (Type::String(a), Type::String(b)) = (&self, &other) {
+            let len = match (a.len, b.len) {
+                (Some(a_len), Some(b_len)) => {
+                    if a_len != b_len {
+                        return None;
+                    }
+                    Some(a_len)
+                }
+                (Some(len), None) | (None, Some(len)) => Some(len),
+                (None, None) => None,
+            };
+
+            return Some(Self::String(StringType { len }));
+        }
+
         if let (Type::Array(a), Type::Array(b)) = (&self, &other) {
             let len = match (a.len, b.len) {
                 (Some(a_len), Some(b_len)) => {
@@ -522,7 +570,7 @@ impl Type {
     }
 
     pub fn is_composite(&self) -> bool {
-        matches!(self, Type::Func(_) | Type::Array(_))
+        matches!(self, Type::Func(_) | Type::String(_) | Type::Array(_))
     }
 
     pub fn is_primitive(&self) -> bool {
@@ -572,6 +620,14 @@ impl Display for Type {
                 write!(f, "(ambig")?;
                 for t in &v.types {
                     write!(f, " {}", t)?;
+                }
+                write!(f, ")")?;
+                Ok(())
+            }
+            Type::String(v) => {
+                write!(f, "(string")?;
+                if let Some(len) = v.len {
+                    write!(f, " {}", len)?;
                 }
                 write!(f, ")")?;
                 Ok(())
@@ -653,6 +709,11 @@ impl PartialEq for AmbigType {
 
         a_set == b_set
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct StringType {
+    pub len: Option<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

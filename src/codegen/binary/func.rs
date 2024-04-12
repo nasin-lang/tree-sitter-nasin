@@ -124,6 +124,28 @@ impl<'a> FnCodegen<'a> {
 
                 local.value = Some(value);
             }
+            mir::Instr::CreateString(v) => {
+                let local = self
+                    .locals
+                    .get(v.target_idx as usize)
+                    .expect("Local not found");
+
+                let ss = self.builder.create_sized_stack_slot(StackSlotData::new(
+                    StackSlotKind::ExplicitSlot,
+                    v.string.len() as u32,
+                ));
+                let ptr = self.builder.ins().stack_addr(local.native_ty, ss, 0);
+
+                for (i, byte) in v.string.bytes().enumerate() {
+                    let value = self.builder.ins().iconst(types::I8, byte as i64);
+                    self.builder
+                        .ins()
+                        .store(MemFlags::new(), value, ptr, i as i32);
+                }
+
+                let local = self.locals.get_mut(v.target_idx as usize).unwrap();
+                local.value = Some(ptr);
+            }
             mir::Instr::CreateData(v) => {
                 let local = self
                     .locals

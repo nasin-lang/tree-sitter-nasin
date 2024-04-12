@@ -50,7 +50,7 @@ impl<'a> ModuleBuilder<'a> {
         let write_func = {
             let params = vec![
                 mir::Type::I32,
-                mir::Type::array_type(mir::Type::U8, None),
+                mir::Type::String(mir::StringType { len: None }),
                 mir::Type::USize,
             ];
             let ret = vec![mir::Type::USize];
@@ -247,6 +247,7 @@ impl<'a> ModuleBuilder<'a> {
                             value,
                         }));
                 }
+
                 None
             }
             (_, _) => {
