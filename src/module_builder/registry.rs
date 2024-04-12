@@ -23,18 +23,18 @@ impl From<mir::Value> for VirtualValue {
     }
 }
 
-impl TryFrom<VirtualValue> for mir::GlobalConstValue {
+impl TryFrom<VirtualValue> for mir::ConstValue {
     type Error = ();
 
     fn try_from(value: VirtualValue) -> Result<Self, Self::Error> {
         match value {
-            VirtualValue::Number(n) => Ok(mir::GlobalConstValue::Number(n)),
+            VirtualValue::Number(n) => Ok(mir::ConstValue::Number(n)),
             VirtualValue::Array(ref values) => {
                 let values = values
                     .iter()
                     .map(|v| v.clone().try_into())
                     .collect::<Result<Vec<_>, _>>()?;
-                Ok(mir::GlobalConstValue::Array(values))
+                Ok(mir::ConstValue::Array(values))
             }
             _ => Err(()),
         }

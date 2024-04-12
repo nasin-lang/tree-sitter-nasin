@@ -234,7 +234,7 @@ impl<'a> ModuleBuilder<'a> {
             .registry
             .register_global(&name, ty.clone(), deps);
 
-        let const_value = match (mir::GlobalConstValue::try_from(v_value.clone()), &v_value) {
+        let const_value = match (mir::ConstValue::try_from(v_value.clone()), &v_value) {
             (Ok(v), _) => Some(v),
             (_, VirtualValue::Array(items)) => {
                 for (i, item) in items.iter().enumerate() {

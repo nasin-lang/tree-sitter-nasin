@@ -111,22 +111,16 @@ impl<'a> FnCodegen<'a> {
 
     pub fn instr(&mut self, instr: &mir::Instr) {
         match instr {
-            mir::Instr::Const(v) => {
+            mir::Instr::CreateNumber(v) => {
                 let local = self
                     .locals
                     .get_mut(v.target_idx as usize)
                     .expect("Local not found");
 
-                let value = match &v.value {
-                    mir::ConstValue::Number(num) => {
-                        let value = self
-                            .builder
-                            .ins()
-                            .iconst(local.native_ty, num.parse::<i64>().expect("Invalid number"));
-
-                        value
-                    }
-                };
+                let value = self.builder.ins().iconst(
+                    local.native_ty,
+                    v.number.parse::<i64>().expect("Invalid number"),
+                );
 
                 local.value = Some(value);
             }

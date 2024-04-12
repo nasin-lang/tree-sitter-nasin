@@ -55,11 +55,11 @@ pub trait TypeGen {
         panic!("Type {} is not implemented", &ty);
     }
 
-    fn serialize(&self, ty: &mir::Type, value: &mir::GlobalConstValue) -> Vec<u8> {
+    fn serialize(&self, ty: &mir::Type, value: &mir::ConstValue) -> Vec<u8> {
         let size = self.get_size(ty);
 
         let bytes = match value {
-            mir::GlobalConstValue::Number(n) => {
+            mir::ConstValue::Number(n) => {
                 macro_rules! serialize_number {
                     ($ty:ty) => {{
                         let n = n.parse::<$ty>().expect(&format!(
@@ -96,7 +96,7 @@ pub trait TypeGen {
                     _ => panic!("Number of type {} is not allowed", ty),
                 }
             }
-            mir::GlobalConstValue::Array(values) => {
+            mir::ConstValue::Array(values) => {
                 let mut bytes = Vec::with_capacity(size);
 
                 let mir::Type::Array(array_type) = ty else {

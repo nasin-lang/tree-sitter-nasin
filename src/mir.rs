@@ -86,7 +86,7 @@ impl Display for Module {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Global {
     pub ty: Type,
-    pub value: Option<GlobalConstValue>,
+    pub value: Option<ConstValue>,
     pub export: Option<Export>,
 }
 
@@ -130,7 +130,7 @@ pub struct Extern {
 pub enum Instr {
     LoadGlobal(LoadGlobalInstr),
     StoreGlobal(StoreGlobalInstr),
-    Const(ConstInstr),
+    CreateNumber(CreateNumberInstr),
     CreateData(CreateDataInstr),
     Add(BinOpInstr),
     Sub(BinOpInstr),
@@ -156,9 +156,9 @@ pub struct StoreGlobalInstr {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ConstInstr {
+pub struct CreateNumberInstr {
     pub target_idx: u32,
-    pub value: ConstValue,
+    pub number: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -189,9 +189,6 @@ pub struct ReturnInstr {
 impl Display for Instr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self {
-            Instr::Const(v) => {
-                write!(f, "%{} = const {}", v.target_idx, &v.value)?;
-            }
             Instr::LoadGlobal(v) => {
                 write!(
                     f,
@@ -205,6 +202,9 @@ impl Display for Instr {
                     write!(f, ".{}", field_idx)?;
                 }
                 write!(f, ">, {}", v.value)?;
+            }
+            Instr::CreateNumber(v) => {
+                write!(f, "%{} = create_number {}", v.target_idx, &v.number)?;
             }
             Instr::CreateData(v) => {
                 write!(f, "%{} = create_data", v.target_idx)?;
@@ -250,6 +250,7 @@ impl Display for Instr {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ConstValue {
     Number(String),
+    Array(Vec<ConstValue>),
 }
 
 impl Display for ConstValue {
@@ -258,24 +259,7 @@ impl Display for ConstValue {
             ConstValue::Number(num) => {
                 write!(f, "{}", num)?;
             }
-        }
-        Ok(())
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum GlobalConstValue {
-    Number(String),
-    Array(Vec<GlobalConstValue>),
-}
-
-impl Display for GlobalConstValue {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match &self {
-            GlobalConstValue::Number(num) => {
-                write!(f, "{}", num)?;
-            }
-            GlobalConstValue::Array(items) => {
+            ConstValue::Array(items) => {
                 write!(f, "[")?;
                 for (i, item) in items.iter().enumerate() {
                     if i > 0 {

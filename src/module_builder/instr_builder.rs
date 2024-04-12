@@ -252,10 +252,11 @@ where
                     self.registry
                         .register_local("", ty.clone(), ValueTypeDeps::default());
 
-                self.body.push(mir::Instr::Const(mir::ConstInstr {
-                    target_idx,
-                    value: mir::ConstValue::Number(n.to_string()),
-                }));
+                self.body
+                    .push(mir::Instr::CreateNumber(mir::CreateNumberInstr {
+                        target_idx,
+                        number: n.to_string(),
+                    }));
 
                 mir::Value::Local(target_idx)
             }
