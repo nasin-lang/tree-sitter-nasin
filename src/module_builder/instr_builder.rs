@@ -63,16 +63,7 @@ where
                 let number = node.get_text(self.source);
                 let ty = mir::Type::num_type(number);
 
-                let target_idx =
-                    self.registry
-                        .register_local("", ty.clone(), ValueTypeDeps::default());
-
-                self.body.push(mir::Instr::Const(mir::ConstInstr {
-                    target_idx,
-                    value: mir::ConstValue::Number(number.to_string()),
-                }));
-
-                (VirtualValue::Local(target_idx), ty)
+                (VirtualValue::Number(number.to_string()), ty)
             }
             "array_lit" => {
                 let (items, items_types): (Vec<_>, Vec<_>) =
@@ -254,6 +245,20 @@ where
                 mir::Value::Local(local_idx)
             }
             VirtualValue::Func(_idx) => todo!(),
+            VirtualValue::Number(n) => {
+                let ty = mir::Type::num_type(n);
+
+                let target_idx =
+                    self.registry
+                        .register_local("", ty.clone(), ValueTypeDeps::default());
+
+                self.body.push(mir::Instr::Const(mir::ConstInstr {
+                    target_idx,
+                    value: mir::ConstValue::Number(n.to_string()),
+                }));
+
+                mir::Value::Local(target_idx)
+            }
             VirtualValue::Array(items) => {
                 let items_values: Vec<_> = items
                     .iter()
@@ -277,11 +282,10 @@ where
                     },
                 );
 
-                self.body
-                    .push(mir::Instr::CreateArray(mir::CreateArrayInstr {
-                        target_idx,
-                        items: items_values,
-                    }));
+                self.body.push(mir::Instr::CreateData(mir::CreateDataInstr {
+                    target_idx,
+                    items: items_values,
+                }));
 
                 mir::Value::Local(target_idx)
             }

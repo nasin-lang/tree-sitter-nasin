@@ -24,6 +24,10 @@ impl Display for Module {
             }
 
             write!(f, " {}", global.ty)?;
+
+            if let Some(value) = &global.value {
+                write!(f, " {}", value)?;
+            }
         }
 
         for (i, func) in self.funcs.iter().enumerate() {
@@ -82,6 +86,7 @@ impl Display for Module {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Global {
     pub ty: Type,
+    pub value: Option<GlobalConstValue>,
     pub export: Option<Export>,
 }
 
@@ -126,7 +131,7 @@ pub enum Instr {
     LoadGlobal(LoadGlobalInstr),
     StoreGlobal(StoreGlobalInstr),
     Const(ConstInstr),
-    CreateArray(CreateArrayInstr),
+    CreateData(CreateDataInstr),
     Add(BinOpInstr),
     Sub(BinOpInstr),
     Mul(BinOpInstr),
@@ -157,7 +162,7 @@ pub struct ConstInstr {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct CreateArrayInstr {
+pub struct CreateDataInstr {
     pub target_idx: u32,
     pub items: Vec<Value>,
 }
@@ -201,8 +206,8 @@ impl Display for Instr {
                 }
                 write!(f, ">, {}", v.value)?;
             }
-            Instr::CreateArray(v) => {
-                write!(f, "%{} = create_array", v.target_idx)?;
+            Instr::CreateData(v) => {
+                write!(f, "%{} = create_data", v.target_idx)?;
                 for item in &v.items {
                     write!(f, ", {}", item)?;
                 }
@@ -251,9 +256,37 @@ impl Display for ConstValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self {
             ConstValue::Number(num) => {
-                write!(f, "{}", num)
+                write!(f, "{}", num)?;
             }
         }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum GlobalConstValue {
+    Number(String),
+    Array(Vec<GlobalConstValue>),
+}
+
+impl Display for GlobalConstValue {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self {
+            GlobalConstValue::Number(num) => {
+                write!(f, "{}", num)?;
+            }
+            GlobalConstValue::Array(items) => {
+                write!(f, "[")?;
+                for (i, item) in items.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", item)?;
+                }
+                write!(f, "]")?;
+            }
+        }
+        Ok(())
     }
 }
 

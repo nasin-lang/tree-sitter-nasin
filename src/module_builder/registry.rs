@@ -10,6 +10,7 @@ pub enum VirtualValue {
     Global(u32),
     Local(u32),
     Param(u32),
+    Number(String),
     Array(Vec<VirtualValue>),
 }
 
@@ -18,6 +19,24 @@ impl From<mir::Value> for VirtualValue {
         match value {
             mir::Value::Local(idx) => VirtualValue::Local(idx),
             mir::Value::Param(idx) => VirtualValue::Param(idx),
+        }
+    }
+}
+
+impl TryFrom<VirtualValue> for mir::GlobalConstValue {
+    type Error = ();
+
+    fn try_from(value: VirtualValue) -> Result<Self, Self::Error> {
+        match value {
+            VirtualValue::Number(n) => Ok(mir::GlobalConstValue::Number(n)),
+            VirtualValue::Array(ref values) => {
+                let values = values
+                    .iter()
+                    .map(|v| v.clone().try_into())
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(mir::GlobalConstValue::Array(values))
+            }
+            _ => Err(()),
         }
     }
 }
@@ -115,6 +134,7 @@ pub trait Registry {
             VirtualValue::Global(idx) => self.global_type(*idx),
             VirtualValue::Local(idx) => self.local_type(*idx),
             VirtualValue::Param(idx) => self.param_type(*idx),
+            VirtualValue::Number(n) => Some(mir::Type::num_type(n)),
             VirtualValue::Array(refs) => {
                 let item_types = refs
                     .iter()
@@ -142,6 +162,10 @@ trait RegistryExt: Registry {
 
         while stack.len() > 0 {
             let (v_value, args) = stack.pop().unwrap();
+
+            if matches!(&v_value, VirtualValue::Number(_)) {
+                return;
+            }
 
             let Some(value_type) = self.get_mut_value_type(&v_value) else {
                 panic!(
@@ -362,6 +386,10 @@ impl Registry for ModuleRegistry {
         ty: mir::Type,
         consumed_by: Option<VirtualValue>,
     ) {
+        if matches!(&v_value, VirtualValue::Number(_)) {
+            panic!("{:?} cannot be refined", v_value);
+        }
+
         if let VirtualValue::Func(idx) = &v_value {
             let idx = *idx as usize;
 
@@ -491,6 +519,10 @@ impl Registry for FuncRegistry<'_> {
         ty: mir::Type,
         consumed_by: Option<VirtualValue>,
     ) {
+        if matches!(&v_value, VirtualValue::Number(_)) {
+            panic!("{:?} cannot be refined", v_value);
+        }
+
         if matches!(&v_value, VirtualValue::Func(_) | VirtualValue::Global(_)) {
             panic!("{:?} cannot be refined inside a function", v_value);
         }

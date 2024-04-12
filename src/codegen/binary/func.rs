@@ -130,7 +130,7 @@ impl<'a> FnCodegen<'a> {
 
                 local.value = Some(value);
             }
-            mir::Instr::CreateArray(v) => {
+            mir::Instr::CreateData(v) => {
                 let local = self
                     .locals
                     .get(v.target_idx as usize)

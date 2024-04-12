@@ -234,8 +234,9 @@ impl<'a> ModuleBuilder<'a> {
             .registry
             .register_global(&name, ty.clone(), deps);
 
-        match &v_value {
-            VirtualValue::Array(items) => {
+        let const_value = match (mir::GlobalConstValue::try_from(v_value.clone()), &v_value) {
+            (Ok(v), _) => Some(v),
+            (_, VirtualValue::Array(items)) => {
                 for (i, item) in items.iter().enumerate() {
                     let value = instr_builder.use_virtual_value(item);
                     instr_builder
@@ -246,8 +247,9 @@ impl<'a> ModuleBuilder<'a> {
                             value,
                         }));
                 }
+                None
             }
-            _ => {
+            (_, _) => {
                 let value = instr_builder.use_virtual_value(&v_value);
                 instr_builder
                     .body
@@ -263,8 +265,10 @@ impl<'a> ModuleBuilder<'a> {
                     .registry
                     .init_idents
                     .insert(&name, v_value.clone());
+
+                None
             }
-        }
+        };
 
         self.globals.push(mir::Global {
             // FIXME: read export info from the source
@@ -274,6 +278,7 @@ impl<'a> ModuleBuilder<'a> {
                 None
             },
             ty,
+            value: const_value,
         });
 
         self.init_body.extend(instr_builder.finish());

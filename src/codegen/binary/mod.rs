@@ -5,7 +5,7 @@ use std::env;
 use std::fs::File;
 use std::io::BufWriter;
 
-use cranelift_codegen::ir::{AbiParam, Function, InstBuilder, TrapCode, UserFuncName};
+use cranelift_codegen::ir::{types, AbiParam, Function, InstBuilder, TrapCode, UserFuncName};
 use cranelift_codegen::{isa, settings, Context};
 use cranelift_frontend::FunctionBuilderContext;
 use cranelift_module::{default_libcall_names, DataDescription, Linkage, Module};
@@ -148,7 +148,14 @@ impl Codegen for BinaryCodegen {
             .unwrap();
 
         let mut desc = DataDescription::new();
-        desc.define_zeroinit(size);
+        match &decl.value {
+            Some(v) => {
+                desc.define(self.module.serialize(&decl.ty, v).into());
+            }
+            _ => {
+                desc.define_zeroinit(size);
+            }
+        }
 
         self.module.define_data(data_id, &desc).unwrap();
 
@@ -191,12 +198,9 @@ impl Codegen for BinaryCodegen {
             fn_codegen.instr(instr);
         }
 
-        // We're using the return of main as exit status only because strings and printing are
-        // not implemented and I need some way to check if the program is working. When printing
-        // is implemented, this will be changed to a fixed success status, as it should be. In
-        // the future, main will evaluate in a Action monad that will be run in the entry
-        // function
-        let exit_code = fn_codegen.locals.last().unwrap().value.unwrap();
+        // In the future, main will evaluate in a Action monad that will be run in the
+        // entry function
+        let exit_code = fn_codegen.builder.ins().iconst(types::I32, 0);
 
         let exit_func_ref = fn_codegen.module.declare_func_in_func(
             self.funcs[EXIT_FUNC_IDX].func_id.clone(),
