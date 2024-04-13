@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use cranelift_codegen::ir::{types, StackSlotData, StackSlotKind};
 use cranelift_codegen::ir::{FuncRef, Function, InstBuilder, MemFlags, Value};
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
-use cranelift_module::{DataId, FuncId, Module};
+use cranelift_module::{DataDescription, DataId, FuncId, Module};
 use cranelift_object::ObjectModule;
 use itertools::izip;
 
@@ -17,6 +17,7 @@ use crate::mir;
 pub struct GlobalBinding {
     pub symbol_name: String,
     pub data_id: DataId,
+    pub data_desc: DataDescription,
     pub ty: mir::Type,
     pub native_ty: types::Type,
 }

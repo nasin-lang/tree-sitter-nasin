@@ -19,7 +19,7 @@ pub struct ModuleBuilder<'a> {
 }
 
 impl<'a> ModuleBuilder<'a> {
-    pub fn new(name: String, source: &'a str) -> Self {
+    pub fn new(name: &str, source: &'a str) -> Self {
         let mut registry = ModuleRegistry::new();
 
         // TODO: detect which intrinsic functions are needed and declare only those
@@ -71,7 +71,7 @@ impl<'a> ModuleBuilder<'a> {
         };
 
         ModuleBuilder {
-            name,
+            name: name.to_string(),
             source,
             globals: Vec::new(),
             funcs: vec![exit_func, write_func],
@@ -80,23 +80,21 @@ impl<'a> ModuleBuilder<'a> {
         }
     }
 
-    pub fn parse(name: String, source: &'a str, node: &'a ts::Node<'a>) -> mir::Module {
+    pub fn parse(mut self, node: &'a ts::Node<'a>) -> mir::Module {
         node.of_kind("root");
-
-        let mut this = ModuleBuilder::new(name, source);
 
         for sym_node in node.iter_children() {
             let ident_node = sym_node.required_field("name").of_kind("ident");
-            let ident = ident_node.get_text(this.source).to_string();
+            let ident = ident_node.get_text(self.source).to_string();
 
             match sym_node.kind() {
-                "fn_decl" => this.add_func(ident, sym_node),
-                "global_var_decl" => this.add_global(ident, sym_node),
+                "fn_decl" => self.add_func(ident, sym_node),
+                "global_var_decl" => self.add_global(ident, sym_node),
                 _ => panic!("Unexpected symbol kind: {}", sym_node.kind()),
             }
         }
 
-        this.finish()
+        self.finish()
     }
 
     pub fn add_func(&mut self, name: String, node: ts::Node<'a>) {

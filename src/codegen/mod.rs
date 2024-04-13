@@ -4,12 +4,13 @@ mod traits;
 use target_lexicon::Triple;
 use traits::Codegen;
 
+use crate::config::BuildConfig;
 use crate::mir;
 
-pub fn compile_program(program: &mir::Module) {
+pub fn compile_program(program: &mir::Module, cfg: &BuildConfig) {
     // TODO: get the target from some kind of configuration
     let triple = Triple::host();
-    let mut codegen = binary::BinaryCodegen::new(triple, program.name.clone());
+    let mut codegen = binary::BinaryCodegen::new(triple, program.name.clone(), cfg);
 
     for (i, global) in program.globals.iter().enumerate() {
         codegen.declare_global(i, global);
@@ -30,7 +31,9 @@ pub fn compile_program(program: &mir::Module) {
         codegen.build_module_init(init);
     }
 
-    codegen.write_to_file(&program.name);
+    codegen.write_to_file(&cfg.out);
 
-    println!("Compiled program to {}", &program.name);
+    if !cfg.silent {
+        println!("Compiled program to {}", &program.name);
+    }
 }

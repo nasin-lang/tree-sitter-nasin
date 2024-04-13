@@ -4,6 +4,7 @@ mod type_gen;
 use std::env;
 use std::fs::File;
 use std::io::BufWriter;
+use std::path::Path;
 
 use cranelift_codegen::ir::{types, AbiParam, Function, InstBuilder, TrapCode, UserFuncName};
 use cranelift_codegen::{isa, settings, Context};
@@ -16,6 +17,7 @@ use target_lexicon::Triple;
 use self::func::{FnCodegen, FuncBinding, GlobalBinding};
 use self::type_gen::TypeGen;
 use super::traits::Codegen;
+use crate::config::BuildConfig;
 use crate::mir;
 
 const EXIT_FUNC_IDX: usize = 0;
@@ -26,10 +28,11 @@ pub struct BinaryCodegen {
     globals: Vec<GlobalBinding>,
     funcs: Vec<FuncBinding>,
     declared_funcs: Vec<Function>,
+    dump_clif: bool,
 }
 
 impl BinaryCodegen {
-    pub fn new<V: Into<Vec<u8>>>(triple: Triple, name: V) -> Self {
+    pub fn new<V: Into<Vec<u8>>>(triple: Triple, name: V, cfg: &BuildConfig) -> Self {
         let settings_builder = settings::builder();
         let flags = settings::Flags::new(settings_builder);
         let isa_target = isa::lookup(triple).unwrap().finish(flags).unwrap();
@@ -46,6 +49,7 @@ impl BinaryCodegen {
             globals: Vec::new(),
             funcs: Vec::new(),
             declared_funcs: Vec::new(),
+            dump_clif: cfg.dump_clif,
         }
     }
 }
@@ -98,15 +102,15 @@ impl Codegen for BinaryCodegen {
     }
 
     fn build_function(&mut self, idx: usize, decl: &mir::Func) {
-        let func = &self.funcs[idx];
-        let native_func = &mut self.declared_funcs[idx];
+        let func_binding = &self.funcs[idx];
+        let func = &mut self.declared_funcs[idx];
 
         let mut func_ctx = FunctionBuilderContext::new();
 
         let mut fn_codegen = FnCodegen::new(
-            &func.symbol_name,
+            &func_binding.symbol_name,
             &mut self.module,
-            native_func,
+            func,
             &mut func_ctx,
             &self.globals,
             &self.funcs,
@@ -117,11 +121,6 @@ impl Codegen for BinaryCodegen {
         for instr in decl.body.iter() {
             fn_codegen.instr(instr);
         }
-
-        println!(
-            "<{}>: {}",
-            &fn_codegen.symbol_name, &fn_codegen.builder.func
-        );
 
         fn_codegen.finalize();
     }
@@ -147,31 +146,25 @@ impl Codegen for BinaryCodegen {
             .declare_data(&symbol_name, linkage, true, false)
             .unwrap();
 
-        let mut desc = DataDescription::new();
+        let mut data_desc = DataDescription::new();
         match &decl.value {
             Some(v) => {
-                desc.define(self.module.serialize(&decl.ty, v).into());
+                data_desc.define(self.module.serialize(&decl.ty, v).into());
             }
             _ => {
-                desc.define_zeroinit(size);
+                data_desc.define_zeroinit(size);
             }
         }
 
-        self.module.define_data(data_id, &desc).unwrap();
+        self.module.define_data(data_id, &data_desc).unwrap();
 
         self.globals.push(GlobalBinding {
             symbol_name: symbol_name.clone(),
             data_id,
+            data_desc,
             ty: decl.ty.clone(),
             native_ty,
         });
-
-        println!(
-            "<{}> = global_value (id: {}, size: {})\n",
-            symbol_name,
-            data_id.as_u32(),
-            desc.init.size()
-        );
     }
 
     fn build_module_init(&mut self, init: &mir::ModuleInit) {
@@ -215,16 +208,51 @@ impl Codegen for BinaryCodegen {
 
         fn_codegen.finalize();
 
-        println!("<_start>: {}\n", &func);
-
-        self.module_ctx.func = func;
-        self.module
-            .define_function(func_id, &mut self.module_ctx)
-            .unwrap();
+        self.funcs.push(FuncBinding {
+            symbol_name: "_start".to_string(),
+            is_extern: false,
+            func_id,
+            params: vec![],
+            ret: vec![],
+        });
+        self.declared_funcs.push(func);
     }
 
-    fn write_to_file(mut self, file: &str) {
+    fn write_to_file(mut self, file: &Path) {
+        if self.globals.len() > 0 && self.dump_clif {
+            for global in &self.globals {
+                let data_init = &global.data_desc.init;
+                print!(
+                    "<{}> {} = data {}",
+                    global.symbol_name,
+                    global.data_id,
+                    data_init.size()
+                );
+                match data_init {
+                    cranelift_module::Init::Zeros { size } => {
+                        println!(" {{{}}}", size);
+                    }
+                    cranelift_module::Init::Bytes { contents } => {
+                        print!(" {{");
+                        for (i, byte) in contents.iter().enumerate() {
+                            if i != 0 {
+                                print!(", ");
+                            }
+                            print!("{}", byte);
+                        }
+                        println!("}}");
+                    }
+                    _ => {}
+                }
+            }
+            println!();
+        }
+
         for (func_binding, func) in izip!(self.funcs, self.declared_funcs) {
+            if self.dump_clif {
+                println!("<{}> {}", func_binding.symbol_name, func);
+            }
+
             if func_binding.is_extern {
                 continue;
             }
@@ -238,7 +266,8 @@ impl Codegen for BinaryCodegen {
         let obj_product = self.module.finish();
 
         // FIXME: get file name from some kind of configuration
-        let obj_path = env::temp_dir().join(format!("{}.o", file));
+        let obj_path =
+            env::temp_dir().join(format!("{}.o", file.to_string_lossy().replace("/", "__")));
         let out_file = File::create(&obj_path).expect("Failed to create object file");
 
         obj_product

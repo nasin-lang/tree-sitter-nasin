@@ -1,15 +1,8 @@
-pub mod codegen;
-pub mod mir;
-pub mod module_builder;
-pub mod tree_sitter_utils;
-
 use std::fs;
 use std::path::PathBuf;
 
-use crate::codegen::compile_program;
 use clap::{Parser, Subcommand, ValueEnum};
-use tree_sitter as ts;
-use tree_sitter_torvo::language;
+use torvo::{build_file, config::BuildConfig, get_module_name, parse_mir, parse_tree};
 
 #[derive(Parser, Debug)]
 #[command(name = "Torvo Language")]
@@ -22,23 +15,38 @@ struct Cli {
 #[derive(Subcommand, Debug)]
 enum CliCommand {
     #[clap(alias = "b")]
-    /// Build file to a binary
+    /// Build a source file
     Build {
         /// Path to the file to compile
         file: PathBuf,
+        #[arg(long, short)]
+        /// Path where to place the output file
+        out: Option<PathBuf>,
+        #[arg(long, short)]
+        /// Omit all messages
+        silent: bool,
+        #[arg(long)]
+        /// Whether to dump the AST of the source file
+        dump_ast: bool,
+        #[arg(long)]
+        /// Whether to dump the MIR of the source file
+        dump_mir: bool,
+        #[arg(long)]
+        /// Whether to dump the CLIF of the source file, if using Cranelift
+        dump_clif: bool,
     },
-    /// Show artifacts of compilation
-    Show {
-        target: ShowTarget,
+    /// Dump artifacts of compilation
+    Dump {
+        target: DumpTarget,
         /// Path to the file to show the artifacts of
         file: PathBuf,
     },
 }
 
 #[derive(Debug, Clone, ValueEnum)]
-enum ShowTarget {
+enum DumpTarget {
     Ast,
-    Lex,
+    Mir,
 }
 
 fn main() {
@@ -47,45 +55,38 @@ fn main() {
     let cli = Cli::parse();
 
     match cli.cmd {
-        CliCommand::Build { file } => {
-            let name = file.file_stem().expect("failed to read module name");
+        CliCommand::Build {
+            file,
+            out,
+            silent,
+            dump_ast,
+            dump_mir,
+            dump_clif,
+        } => {
             let src = fs::read_to_string(&file).expect("failed to read file");
+            let name = get_module_name(&file);
 
-            let mut parser = ts::Parser::new();
-            parser.set_language(language()).unwrap();
-            let tree = parser.parse(&src, None).expect("Could not parse this f");
+            let cfg = BuildConfig {
+                out: out.unwrap_or(name.clone().into()),
+                silent,
+                dump_ast,
+                dump_mir,
+                dump_clif,
+            };
 
-            println!("{}\n", tree.root_node().to_sexp());
-
-            let module = module_builder::ModuleBuilder::parse(
-                name.to_str().expect("What even is this name").to_string(),
-                &src,
-                &tree.root_node(),
-            );
-
-            println!("{}", module);
-            println!();
-
-            compile_program(&module);
+            build_file(&name, &src, &cfg);
         }
-        CliCommand::Show { target, file } => {
-            let name = file.file_stem().expect("failed to read module name");
+        CliCommand::Dump { target, file } => {
             let src = fs::read_to_string(&file).expect("failed to read file");
-
-            let mut parser = ts::Parser::new();
-            parser.set_language(language()).unwrap();
-            let tree = parser.parse(&src, None).expect("Could not parse this f");
+            let name = get_module_name(&file);
 
             match target {
-                ShowTarget::Ast => {
+                DumpTarget::Ast => {
+                    let tree = parse_tree(&src);
                     println!("{}", tree.root_node().to_sexp());
                 }
-                ShowTarget::Lex => {
-                    let module = module_builder::ModuleBuilder::parse(
-                        name.to_str().expect("What even is this name").to_string(),
-                        &src,
-                        &tree.root_node(),
-                    );
+                DumpTarget::Mir => {
+                    let module = parse_mir(&name, &src, &BuildConfig::default());
                     println!("{}", module);
                 }
             }
