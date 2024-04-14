@@ -276,21 +276,14 @@ impl Codegen for BinaryCodegen {
             .unwrap();
 
         // TODO: windows support
-        let cc = [
-            "/usr/bin/clang",
-            "/usr/local/bin/clang",
-            "/usr/bin/gcc",
-            "/usr/local/bin/gcc",
-        ]
-        .into_iter()
-        .find(|path| std::fs::metadata(path).is_ok())
-        .expect("Could not find clang or gcc");
-
-        std::process::Command::new(cc)
-            .arg("-nostartfiles")
+        std::process::Command::new("ld")
+            .arg("-dynamic-linker")
+            // FIXME: determine the dynamic linker from the target
+            .arg("/lib64/ld-linux-x86-64.so.2")
             .arg("-o")
             .arg(file)
             .arg(&obj_path)
+            .arg("-lc")
             .status()
             .expect("failed to link object file");
     }
