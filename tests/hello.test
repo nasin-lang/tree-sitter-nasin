@@ -1,0 +1,5 @@
+main: usize =
+    write(1 "Hello\n" 6)
+
+---
+Hello

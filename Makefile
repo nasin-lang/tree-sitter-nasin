@@ -8,6 +8,11 @@ clean:
 	rm -rf parser/src/proto
 	cargo clean
 
+TESTS = $(shell find tests/ -type f)
+.PHONY: test
+test: bin/torvo
+	cd bun_scripts && bun test.ts
+
 RUST_SRC = $(shell find src/ -type f -name '*.rs')
 bin/torvo: Cargo.toml $(RUST_SRC) tree-sitter-torvo/src/parser.c
 	cargo build     \

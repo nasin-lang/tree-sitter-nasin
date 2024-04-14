@@ -2,7 +2,7 @@ msg: str   = "Hello World\n"
 len: usize = 12
 
 fn hello(_: u8) =
-    write(0 msg len)
+    write(1 msg len)
 
 main: u32 =
     _ = hello(0)
