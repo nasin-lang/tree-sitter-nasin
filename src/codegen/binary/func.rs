@@ -133,7 +133,7 @@ impl<'a> FnCodegen<'a> {
 
                 let ss = self.builder.create_sized_stack_slot(StackSlotData::new(
                     StackSlotKind::ExplicitSlot,
-                    v.string.len() as u32,
+                    v.string.len() as u32 + 1,
                 ));
                 let ptr = self.builder.ins().stack_addr(local.native_ty, ss, 0);
 
@@ -143,6 +143,12 @@ impl<'a> FnCodegen<'a> {
                         .ins()
                         .store(MemFlags::new(), value, ptr, i as i32);
                 }
+
+                // Append a null terminator to avoid problems if used as a C string
+                let value = self.builder.ins().iconst(types::I8, 0);
+                self.builder
+                    .ins()
+                    .store(MemFlags::new(), value, ptr, v.string.len() as i32);
 
                 let local = self.locals.get_mut(v.target_idx as usize).unwrap();
                 local.value = Some(ptr);
