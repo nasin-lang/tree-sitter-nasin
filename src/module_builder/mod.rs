@@ -26,55 +26,52 @@ impl<'a> ModuleBuilder<'a> {
         // TODO: use syscalls instead of libc functions, maybe we will have to implement a
         //       wrapper around syscall in C to be able to call it from Cranelift
 
-        // void exit(int status);
-        let exit_func = {
-            let params = vec![mir::Type::I32];
-            let ret = vec![];
-            registry.register_func("exit", params.clone());
-            registry.set_value_type(
-                VirtualValue::Func(0),
-                mir::Type::func_type(params.clone(), ret.clone()),
-                None,
-            );
-            mir::Func {
-                extern_: Some(mir::Extern {
-                    name: "exit".to_string(),
-                }),
-                params: params.into_iter().map(|ty| mir::Param { ty }).collect(),
-                ret,
-                ..Default::default()
-            }
-        };
+        let funcs = [
+            // void exit(int status);
+            (
+                "exit",
+                mir::Func {
+                    extern_: Some(mir::Extern {
+                        name: "exit".to_string(),
+                    }),
+                    params: ext_params([mir::Type::I32]),
+                    ret: vec![],
+                    ..Default::default()
+                },
+            ),
+            // ssize_t write(int fildes, const void *buf, size_t nbyte);
+            (
+                "write",
+                mir::Func {
+                    extern_: Some(mir::Extern {
+                        name: "write".to_string(),
+                    }),
+                    params: ext_params([
+                        mir::Type::I32,
+                        mir::Type::String(mir::StringType { len: None }),
+                        mir::Type::USize,
+                    ]),
+                    ret: vec![mir::Type::USize],
+                    ..Default::default()
+                },
+            ),
+        ];
 
-        // ssize_t write(int fildes, const void *buf, size_t nbyte)
-        let write_func = {
-            let params = vec![
-                mir::Type::I32,
-                mir::Type::String(mir::StringType { len: None }),
-                mir::Type::USize,
-            ];
-            let ret = vec![mir::Type::USize];
-            registry.register_func("write", params.clone());
+        for (i, (name, func)) in funcs.iter().enumerate() {
+            let params_ty: Vec<_> = func.params.iter().map(|p| p.ty.clone()).collect();
+            registry.register_func(name, params_ty.clone());
             registry.set_value_type(
-                VirtualValue::Func(1),
-                mir::Type::func_type(params.clone(), ret.clone()),
+                VirtualValue::Func(i as u32),
+                mir::Type::func_type(params_ty, func.ret.clone()),
                 None,
             );
-            mir::Func {
-                extern_: Some(mir::Extern {
-                    name: "write".to_string(),
-                }),
-                params: params.into_iter().map(|ty| mir::Param { ty }).collect(),
-                ret: vec![mir::Type::USize],
-                ..Default::default()
-            }
-        };
+        }
 
         ModuleBuilder {
             name: name.to_string(),
             source,
             globals: Vec::new(),
-            funcs: vec![exit_func, write_func],
+            funcs: funcs.into_iter().map(|(_, f)| f).collect(),
             registry,
             init_body: Vec::new(),
         }
@@ -298,4 +295,11 @@ impl<'a> ModuleBuilder<'a> {
             },
         }
     }
+}
+
+fn ext_params<T>(params: T) -> Vec<mir::Param>
+where
+    T: IntoIterator<Item = mir::Type>,
+{
+    params.into_iter().map(|ty| mir::Param { ty }).collect()
 }
