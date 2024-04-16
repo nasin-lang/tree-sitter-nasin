@@ -353,6 +353,7 @@ impl ModuleRegistry {
             ..Default::default()
         });
         self.global_idents.insert(ident, v_value.clone());
+        self.init_idents.insert(ident, v_value.clone());
         self.constrain_value_type_chain(v_value.clone(), None);
 
         idx as u32

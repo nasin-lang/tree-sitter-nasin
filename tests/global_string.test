@@ -1,0 +1,7 @@
+hello_str: str = "Hello from global\n"
+
+main: usize =
+    write(1 hello_str 18)
+
+---
+Hello from global
