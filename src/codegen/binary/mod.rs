@@ -275,11 +275,20 @@ impl Codegen for BinaryCodegen {
             .write_stream(BufWriter::new(out_file))
             .unwrap();
 
+        let dyn_linker = [
+            "/lib/ld64.so.2",
+            "/lib/ld64.so.1",
+            "/lib64/ld-linux-x86-64.so.2",
+            "/lib/ld-linux-x86-64.so.2",
+        ]
+        .into_iter()
+        .find(|path| Path::new(path).is_file())
+        .expect("libc.a not found");
+
         // TODO: windows support
         std::process::Command::new("ld")
             .arg("-dynamic-linker")
-            // FIXME: determine the dynamic linker from the target
-            .arg("/lib64/ld-linux-x86-64.so.2")
+            .arg(dyn_linker)
             .arg("-o")
             .arg(file)
             .arg(&obj_path)
