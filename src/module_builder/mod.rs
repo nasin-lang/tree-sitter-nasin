@@ -6,7 +6,9 @@ use tree_sitter as ts;
 use self::instr_builder::InstrBuilder;
 use self::registry::ModuleRegistry;
 use crate::mir;
-use crate::module_builder::registry::{FuncRegistry, Registry, ValueTypeDeps, VirtualValue};
+use crate::module_builder::registry::{
+    FuncRegistry, Registry, ValueTypeDeps, VirtualValue,
+};
 use crate::tree_sitter_utils::TreeSitterUtils;
 
 pub struct ModuleBuilder<'a> {
@@ -122,28 +124,11 @@ impl<'a> ModuleBuilder<'a> {
 
         let ret = node
             .field("ret_type")
-            .as_ref()
-            .map_or(mir::Type::Unknown, |ty_node| {
-                local_builder.parse_type(ty_node)
-            });
-
-        let (ret_v_value, _) = local_builder.add_expr(&node.required_field("return"));
-        let ret_value = local_builder.use_virtual_value(&ret_v_value);
-        let ret_ref: VirtualValue = ret_value.clone().into();
-
-        local_builder
-            .body
-            .push(mir::Instr::Return(mir::ReturnInstr {
-                value: Some(ret_value.clone()),
-            }));
-
-        local_builder
-            .registry
-            .set_value_type(ret_ref.clone(), ret, None);
+            .map(|ty_node| local_builder.parse_type(&ty_node));
+        let ret = local_builder.add_return(&node.required_field("return"), ret);
 
         let locals: Vec<_> = local_builder.registry.get_locals().collect();
         let params: Vec<_> = local_builder.registry.get_params().collect();
-        let ret = local_builder.registry.value_type(&ret_ref).unwrap();
 
         if ret.is_ambig() {
             panic!("Type should be known for function return: {}", name);
@@ -151,10 +136,11 @@ impl<'a> ModuleBuilder<'a> {
 
         let ty = mir::Type::func_type(params.iter().map(|p| p.ty.clone()), [ret.clone()]);
 
-        local_builder
-            .registry
-            .module_registry
-            .set_value_type(func_ref.clone(), ty.clone(), None);
+        local_builder.registry.module_registry.set_value_type(
+            func_ref.clone(),
+            ty.clone(),
+            None,
+        );
 
         let body = local_builder.finish();
 
@@ -234,13 +220,13 @@ impl<'a> ModuleBuilder<'a> {
             (_, VirtualValue::Array(items)) => {
                 for (i, item) in items.iter().enumerate() {
                     let value = instr_builder.use_virtual_value(item);
-                    instr_builder
-                        .body
-                        .push(mir::Instr::StoreGlobal(mir::StoreGlobalInstr {
+                    instr_builder.body.push(mir::Instr::StoreGlobal(
+                        mir::StoreGlobalInstr {
                             global_idx,
                             field_idx: Some(i as u32),
                             value,
-                        }));
+                        },
+                    ));
                 }
 
                 None

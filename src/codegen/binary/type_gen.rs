@@ -13,6 +13,7 @@ pub trait TypeGen {
         }
 
         match &ty {
+            mir::Type::Bool => return types::I8,
             mir::Type::I8 => return types::I8,
             mir::Type::I16 => return types::I16,
             mir::Type::I32 => return types::I32,
@@ -63,6 +64,9 @@ pub trait TypeGen {
         let size = self.get_size(ty);
 
         let bytes = match value {
+            mir::ConstValue::Bool(b) => {
+                vec![*b as u8]
+            }
             mir::ConstValue::Number(n) => {
                 macro_rules! serialize_number {
                     ($ty:ty) => {{

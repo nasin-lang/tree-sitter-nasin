@@ -1,11 +1,13 @@
 const PREC = {
-    BLOCK: 0,
-    BLOCK_CLAUSE: 1,
-    SUM: 2,
-    MUL: 3,
-    POW: 4,
-    ATOM: 5,
-    CALL: 6,
+    IF: 0,
+    BLOCK: 1,
+    BLOCK_CLAUSE: 2,
+    SUM: 3,
+    MUL: 4,
+    POW: 5,
+    ATOM: 6,
+    KEYWORD: 7,
+    CALL: 8,
 }
 
 function bin_op(prec_lvl, operator, operand) {
@@ -57,6 +59,8 @@ module.exports = grammar({
         _expr: ($) =>
             choice(
                 prec(PREC.ATOM, seq("(", $._expr, ")")),
+                $.true,
+                $.false,
                 $.ident,
                 $.number,
                 $.string_lit,
@@ -64,6 +68,7 @@ module.exports = grammar({
                 $.call,
                 $.bin_op,
                 $.block,
+                $.if,
             ),
 
         bin_op: ($) =>
@@ -110,6 +115,18 @@ module.exports = grammar({
             ),
         _block_stmt: ($) => choice($.var_decl),
 
+        if: ($) =>
+            prec.right(
+                PREC.IF,
+                seq(
+                    "if",
+                    field("cond", $._expr),
+                    "then",
+                    field("then", $._expr),
+                    optional(seq("else", field("else", $._expr))),
+                ),
+            ),
+
         _type_expr: ($) => choice($.ident, $.array_type),
 
         array_type: ($) =>
@@ -134,6 +151,9 @@ module.exports = grammar({
 
         ident: ($) => prec(PREC.ATOM, $._ident),
         _ident: () => /[\p{L}_][\p{L}\p{Nd}_]*/,
+
+        true: () => prec(PREC.KEYWORD, "true"),
+        false: () => prec(PREC.KEYWORD, "false"),
 
         number: () => prec(PREC.ATOM, /(\d(_?\d)*)?\.?\d(_?\d)*/),
     },

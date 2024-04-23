@@ -10,6 +10,7 @@ pub enum VirtualValue {
     Global(u32),
     Local(u32),
     Param(u32),
+    Bool(bool),
     Number(String),
     String(String),
     Array(Vec<VirtualValue>),
@@ -117,7 +118,12 @@ impl IdentMap {
 pub trait Registry {
     fn idents(&self) -> &IdentMap;
     fn idents_mut(&mut self) -> &mut IdentMap;
-    fn register_local(&mut self, ident: &str, ty: mir::Type, produced_by: ValueTypeDeps) -> u32;
+    fn register_local(
+        &mut self,
+        ident: &str,
+        ty: mir::Type,
+        produced_by: ValueTypeDeps,
+    ) -> u32;
     fn get_locals(&self) -> impl Iterator<Item = mir::Local>;
     fn global_type(&self, idx: u32) -> Option<mir::Type>;
     fn func_type(&self, idx: u32) -> Option<mir::Type>;
@@ -136,6 +142,7 @@ pub trait Registry {
             VirtualValue::Global(idx) => self.global_type(*idx),
             VirtualValue::Local(idx) => self.local_type(*idx),
             VirtualValue::Param(idx) => self.param_type(*idx),
+            VirtualValue::Bool(_) => Some(mir::Type::Bool),
             VirtualValue::Number(n) => Some(mir::Type::num_type(n)),
             VirtualValue::String(s) => {
                 Some(mir::Type::String(mir::StringType { len: Some(s.len()) }))
@@ -168,8 +175,11 @@ trait RegistryExt: Registry {
         while stack.len() > 0 {
             let (v_value, args) = stack.pop().unwrap();
 
-            if matches!(&v_value, VirtualValue::Number(_) | VirtualValue::String(_)) {
-                return;
+            if matches!(
+                &v_value,
+                VirtualValue::Bool(_) | VirtualValue::Number(_) | VirtualValue::String(_)
+            ) {
+                continue;
             }
 
             let Some(value_type) = self.get_mut_value_type(&v_value) else {
@@ -214,10 +224,9 @@ trait RegistryExt: Registry {
 
                     let sigs_len = value_type.produced_by.sig.len();
 
-                    value_type
-                        .produced_by
-                        .sig
-                        .retain(|sig| mir::Type::matches([&producer_ty, &sig.params[arg_idx]]));
+                    value_type.produced_by.sig.retain(|sig| {
+                        mir::Type::matches([&producer_ty, &sig.params[arg_idx]])
+                    });
 
                     // Since the new type is a merge of the returned types of the
                     // producing signatures, if it didn't change, we know that nothing
@@ -226,9 +235,10 @@ trait RegistryExt: Registry {
                         continue;
                     }
 
-                    let ty =
-                        mir::Type::merge(value_type.produced_by.sig.iter().map(|sig| &sig.ret[0]))
-                            .expect("Failed to merge types");
+                    let ty = mir::Type::merge(
+                        value_type.produced_by.sig.iter().map(|sig| &sig.ret[0]),
+                    )
+                    .expect("Failed to merge types");
 
                     if value_type.ty == ty {
                         continue;
@@ -425,7 +435,12 @@ impl Registry for ModuleRegistry {
         );
     }
 
-    fn register_local(&mut self, ident: &str, ty: mir::Type, produced_by: ValueTypeDeps) -> u32 {
+    fn register_local(
+        &mut self,
+        ident: &str,
+        ty: mir::Type,
+        produced_by: ValueTypeDeps,
+    ) -> u32 {
         let idx = self.init_locals.len();
         let v_value = VirtualValue::Local(idx as u32);
         self.init_locals.push(ValueType {
@@ -543,7 +558,12 @@ impl Registry for FuncRegistry<'_> {
         );
     }
 
-    fn register_local(&mut self, ident: &str, ty: mir::Type, produced_by: ValueTypeDeps) -> u32 {
+    fn register_local(
+        &mut self,
+        ident: &str,
+        ty: mir::Type,
+        produced_by: ValueTypeDeps,
+    ) -> u32 {
         let idx = self.locals.len();
         self.locals.push(ValueType {
             ty,

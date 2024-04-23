@@ -33,6 +33,15 @@ where
         }
     }
 
+    pub fn create_nested_builder(&mut self) -> InstrBuilder<'_, R> {
+        InstrBuilder {
+            body: Vec::new(),
+            registry: self.registry,
+            source: self.source,
+            loaded_globals: self.loaded_globals.clone(),
+        }
+    }
+
     pub fn finish(self) -> Vec<mir::Instr> {
         self.body
     }
@@ -59,6 +68,8 @@ where
 
     pub fn add_expr(&mut self, node: &ts::Node) -> (VirtualValue, mir::Type) {
         match node.kind() {
+            "true" => (VirtualValue::Bool(true), mir::Type::Bool),
+            "false" => (VirtualValue::Bool(false), mir::Type::Bool),
             "number" => {
                 let number = node.get_text(self.source);
                 let ty = mir::Type::num_type(number);
@@ -85,8 +96,8 @@ where
                 let (items, items_types): (Vec<_>, Vec<_>) =
                     node.iter_field("items").map(|n| self.add_expr(&n)).unzip();
 
-                let item_ty =
-                    mir::Type::merge(&items_types).expect("Array items must have same type");
+                let item_ty = mir::Type::merge(&items_types)
+                    .expect("Array items must have same type");
                 let ty = mir::Type::array_type(item_ty.clone(), Some(items.len()));
 
                 (VirtualValue::Array(items), ty)
@@ -228,7 +239,138 @@ where
 
                 (value, ty)
             }
+            "if" => {
+                let (cond_value, _) = self.add_expr(&node.required_field("cond"));
+                let cond_value = self.use_virtual_value(&cond_value);
+
+                let (then_value, then_ty, mut then_body) =
+                    if let Some(then_node) = &node.field("then") {
+                        let mut nested = self.create_nested_builder();
+
+                        let (then_v, then_ty) = nested.add_expr(then_node);
+                        (nested.use_virtual_value(&then_v), then_ty, nested.body)
+                    } else {
+                        todo!();
+                    };
+
+                let (else_value, else_ty, mut else_body) =
+                    if let Some(else_node) = &node.field("else") {
+                        let mut nested = self.create_nested_builder();
+
+                        let (else_v, else_ty) = nested.add_expr(else_node);
+                        (nested.use_virtual_value(&else_v), else_ty, nested.body)
+                    } else {
+                        todo!();
+                    };
+
+                let ty = mir::Type::merge([&then_ty, &else_ty])
+                    .expect(&format!("Type mismatch: {} and {}", then_ty, else_ty));
+
+                let local_idx = self.registry.register_local(
+                    "",
+                    ty.clone(),
+                    ValueTypeDeps {
+                        sig: ty
+                            .possible_types()
+                            .into_iter()
+                            .map(|ty| mir::FuncType::if_sig(ty))
+                            .collect(),
+                        refs: vec![
+                            cond_value.clone().into(),
+                            then_value.clone().into(),
+                            else_value.clone().into(),
+                        ],
+                    },
+                );
+
+                then_body.push(mir::Instr::Assign(mir::AssignInstr {
+                    target_idx: local_idx,
+                    value: then_value,
+                }));
+
+                else_body.push(mir::Instr::Assign(mir::AssignInstr {
+                    target_idx: local_idx,
+                    value: else_value,
+                }));
+
+                self.body.push(mir::Instr::If(mir::IfInstr {
+                    // TODO: multi-value
+                    inits_idx_list: vec![local_idx],
+                    cond: cond_value,
+                    then_body,
+                    else_body,
+                }));
+
+                (VirtualValue::Local(local_idx), ty)
+            }
             k => panic!("Found unexpected expression `{}`", k),
+        }
+    }
+
+    pub fn add_return(&mut self, node: &ts::Node, ty: Option<mir::Type>) -> mir::Type {
+        match node.kind() {
+            "block" => {
+                for stmt_node in node.iter_field("body") {
+                    self.add_stmt(&stmt_node);
+                }
+
+                let old_idents = self.registry.idents().clone();
+
+                let ty = self.add_return(&node.required_field("value"), ty);
+
+                self.registry.idents_mut().clear();
+                self.registry.idents_mut().extend(old_idents);
+
+                ty
+            }
+            "if" => {
+                let (cond_v_value, _) = self.add_expr(&node.required_field("cond"));
+                let cond_value = self.use_virtual_value(&cond_v_value);
+
+                self.registry
+                    .set_value_type(cond_v_value, mir::Type::Bool, None);
+
+                let (then_ty, then_body) = if let Some(then_node) = &node.field("then") {
+                    let mut nested = self.create_nested_builder();
+
+                    let then_ty = nested.add_return(then_node, ty.clone());
+                    (then_ty, nested.body)
+                } else {
+                    todo!();
+                };
+
+                let (else_ty, else_body) = if let Some(else_node) = &node.field("else") {
+                    let mut nested = self.create_nested_builder();
+
+                    let else_ty = nested.add_return(else_node, ty.clone());
+                    (else_ty, nested.body)
+                } else {
+                    todo!();
+                };
+
+                self.body.push(mir::Instr::If(mir::IfInstr {
+                    inits_idx_list: vec![],
+                    cond: cond_value,
+                    then_body,
+                    else_body,
+                }));
+
+                mir::Type::merge([&then_ty, &else_ty])
+                    .expect(&format!("Type mismatch: {} and {}", then_ty, else_ty))
+            }
+            _ => {
+                let (v_value, _) = self.add_expr(&node);
+
+                let value = self.use_virtual_value(&v_value);
+                self.body
+                    .push(mir::Instr::Return(mir::ReturnInstr { value: Some(value) }));
+
+                if let Some(ret) = ty {
+                    self.registry.set_value_type(v_value.clone(), ret, None);
+                }
+
+                self.registry.value_type(&v_value).unwrap()
+            }
         }
     }
 
@@ -261,17 +403,35 @@ where
                 mir::Value::Local(local_idx)
             }
             VirtualValue::Func(_idx) => todo!(),
+            VirtualValue::Bool(b) => {
+                let ty = mir::Type::Bool;
+
+                let target_idx = self.registry.register_local(
+                    "",
+                    ty.clone(),
+                    ValueTypeDeps::default(),
+                );
+
+                self.body.push(mir::Instr::CreateBool(mir::CreateBoolInstr {
+                    target_idx,
+                    value: *b,
+                }));
+
+                mir::Value::Local(target_idx)
+            }
             VirtualValue::Number(n) => {
                 let ty = mir::Type::num_type(n);
 
-                let target_idx =
-                    self.registry
-                        .register_local("", ty.clone(), ValueTypeDeps::default());
+                let target_idx = self.registry.register_local(
+                    "",
+                    ty.clone(),
+                    ValueTypeDeps::default(),
+                );
 
                 self.body
                     .push(mir::Instr::CreateNumber(mir::CreateNumberInstr {
                         target_idx,
-                        number: n.to_string(),
+                        value: n.to_string(),
                     }));
 
                 mir::Value::Local(target_idx)
@@ -279,14 +439,16 @@ where
             VirtualValue::String(s) => {
                 let ty = mir::Type::String(mir::StringType { len: Some(s.len()) });
 
-                let target_idx =
-                    self.registry
-                        .register_local("", ty.clone(), ValueTypeDeps::default());
+                let target_idx = self.registry.register_local(
+                    "",
+                    ty.clone(),
+                    ValueTypeDeps::default(),
+                );
 
                 self.body
                     .push(mir::Instr::CreateString(mir::CreateStringInstr {
                         target_idx,
-                        string: s.clone(),
+                        value: s.clone(),
                     }));
 
                 mir::Value::Local(target_idx)

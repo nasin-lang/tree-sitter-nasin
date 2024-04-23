@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use cranelift_codegen::ir::{types, StackSlotData, StackSlotKind};
+use cranelift_codegen::ir::{types, Block, GlobalValue, StackSlotData, StackSlotKind};
 use cranelift_codegen::ir::{FuncRef, Function, InstBuilder, MemFlags, Value};
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
 use cranelift_module::{DataDescription, DataId, FuncId, Module};
@@ -44,7 +44,7 @@ pub struct FnCodegen<'a> {
     pub funcs: &'a [FuncBinding],
     pub params: Vec<LocalBinding>,
     pub locals: Vec<LocalBinding>,
-    global_ptrs: HashMap<u32, Value>,
+    global_values: HashMap<u32, GlobalValue>,
     func_refs: HashMap<u32, FuncRef>,
 }
 
@@ -91,7 +91,7 @@ impl<'a> FnCodegen<'a> {
             funcs,
             params,
             locals,
-            global_ptrs: HashMap::new(),
+            global_values: HashMap::new(),
             func_refs: HashMap::new(),
         }
     }
@@ -112,6 +112,26 @@ impl<'a> FnCodegen<'a> {
 
     pub fn instr(&mut self, instr: &mir::Instr) {
         match instr {
+            mir::Instr::Assign(v) => {
+                let value = self.get_value(&v.value);
+
+                let target = self
+                    .locals
+                    .get_mut(v.target_idx as usize)
+                    .expect("Local not found");
+
+                target.value = Some(value);
+            }
+            mir::Instr::CreateBool(v) => {
+                let local = self
+                    .locals
+                    .get_mut(v.target_idx as usize)
+                    .expect("Local not found");
+
+                let value = self.builder.ins().iconst(local.native_ty, v.value as i64);
+
+                local.value = Some(value);
+            }
             mir::Instr::CreateNumber(v) => {
                 let local = self
                     .locals
@@ -120,7 +140,7 @@ impl<'a> FnCodegen<'a> {
 
                 let value = self.builder.ins().iconst(
                     local.native_ty,
-                    v.number.parse::<i64>().expect("Invalid number"),
+                    v.value.parse::<i64>().expect("Invalid number"),
                 );
 
                 local.value = Some(value);
@@ -133,11 +153,11 @@ impl<'a> FnCodegen<'a> {
 
                 let ss = self.builder.create_sized_stack_slot(StackSlotData::new(
                     StackSlotKind::ExplicitSlot,
-                    v.string.len() as u32 + 1,
+                    v.value.len() as u32 + 1,
                 ));
                 let ptr = self.builder.ins().stack_addr(local.native_ty, ss, 0);
 
-                for (i, byte) in v.string.bytes().enumerate() {
+                for (i, byte) in v.value.bytes().enumerate() {
                     let value = self.builder.ins().iconst(types::I8, byte as i64);
                     self.builder
                         .ins()
@@ -146,9 +166,12 @@ impl<'a> FnCodegen<'a> {
 
                 // Append a null terminator to avoid problems if used as a C string
                 let value = self.builder.ins().iconst(types::I8, 0);
-                self.builder
-                    .ins()
-                    .store(MemFlags::new(), value, ptr, v.string.len() as i32);
+                self.builder.ins().store(
+                    MemFlags::new(),
+                    value,
+                    ptr,
+                    v.value.len() as i32,
+                );
 
                 let local = self.locals.get_mut(v.target_idx as usize).unwrap();
                 local.value = Some(ptr);
@@ -385,9 +408,10 @@ impl<'a> FnCodegen<'a> {
                             .funcs
                             .get(v.func_idx as usize)
                             .expect("Function not found");
-                        let func_ref = self
-                            .module
-                            .declare_func_in_func(func.func_id.clone(), &mut self.builder.func);
+                        let func_ref = self.module.declare_func_in_func(
+                            func.func_id.clone(),
+                            &mut self.builder.func,
+                        );
                         self.func_refs.insert(v.func_idx, func_ref);
                         func_ref
                     }
@@ -405,6 +429,53 @@ impl<'a> FnCodegen<'a> {
                         .expect("Local not found");
 
                     local.value = Some(value);
+                }
+            }
+            mir::Instr::If(v) => {
+                let cond = self.get_value(&v.cond);
+
+                let then_block = self.builder.create_block();
+                let else_block = self.builder.create_block();
+
+                self.builder
+                    .ins()
+                    .brif(cond, then_block, &[], else_block, &[]);
+
+                let jump_to_block = if !instr.returns() {
+                    let b = self.builder.create_block();
+                    for idx in &v.inits_idx_list {
+                        let local =
+                            self.locals.get_mut(*idx as usize).expect("Local not found");
+
+                        let value =
+                            self.builder.append_block_param(b, local.native_ty.clone());
+                        local.value = Some(value);
+                    }
+
+                    Some(b)
+                } else {
+                    None
+                };
+
+                self.if_branch(
+                    &v.then_body,
+                    then_block,
+                    jump_to_block,
+                    &v.inits_idx_list,
+                );
+                self.if_branch(
+                    &v.else_body,
+                    else_block,
+                    jump_to_block,
+                    &v.inits_idx_list,
+                );
+
+                if instr.returns() {
+                    return;
+                }
+
+                if let Some(b) = jump_to_block {
+                    self.builder.switch_to_block(b);
                 }
             }
             mir::Instr::Return(v) => {
@@ -433,26 +504,66 @@ impl<'a> FnCodegen<'a> {
     }
 
     fn get_global_ptr(&mut self, global_idx: u32) -> Value {
-        match self.global_ptrs.get(&global_idx) {
-            Some(ptr) => ptr.clone(),
+        let data = match self.global_values.get(&global_idx) {
+            Some(gv) => gv.clone(),
             None => {
                 let global = self
                     .globals
                     .get(global_idx as usize)
                     .expect("Global not found");
 
-                let data = self
-                    .module
-                    .declare_data_in_func(global.data_id.clone(), &mut self.builder.func);
-                let ptr = self
-                    .builder
-                    .ins()
-                    .global_value(self.module.poiter_type(), data);
-
-                self.global_ptrs.insert(global_idx, ptr.clone());
-
-                ptr
+                self.module
+                    .declare_data_in_func(global.data_id.clone(), &mut self.builder.func)
             }
+        };
+
+        self.global_values.insert(global_idx, data);
+
+        let ptr = self
+            .builder
+            .ins()
+            .global_value(self.module.poiter_type(), data);
+
+        ptr
+    }
+
+    fn if_branch(
+        &mut self,
+        body: &[mir::Instr],
+        block: Block,
+        jump_to_block: Option<Block>,
+        target_idx_list: &[u32],
+    ) {
+        self.builder.switch_to_block(block);
+
+        let mut jump_args: Vec<Option<Value>> = vec![None].repeat(target_idx_list.len());
+
+        'instrs: for instr in body {
+            if instr.returns() {
+                self.instr(instr);
+                return;
+            }
+
+            if let mir::Instr::Assign(mir::AssignInstr { target_idx, value }) = instr {
+                for (i, idx) in target_idx_list.iter().enumerate() {
+                    if idx == target_idx {
+                        jump_args[i] = Some(self.get_value(&value));
+                        continue 'instrs;
+                    }
+                }
+            }
+
+            self.instr(instr);
+        }
+
+        if let Some(b) = jump_to_block {
+            self.builder.ins().jump(
+                b,
+                &jump_args
+                    .into_iter()
+                    .collect::<Option<Vec<_>>>()
+                    .expect("all block params should be defined at this point"),
+            );
         }
     }
 }

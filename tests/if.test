@@ -1,0 +1,20 @@
+true_msg  = "it's true!\n"
+false_msg = "it's false\n"
+
+main: i32 =
+    if_result = if true then
+        true_msg
+    else
+        false_msg
+    _ = write(1 if_result 11)
+
+    if_result = if false then
+        true_msg
+    else
+        false_msg
+    _ = write(1 if_result 11)
+
+    0
+---
+it's true!
+it's false

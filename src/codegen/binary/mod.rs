@@ -6,7 +6,9 @@ use std::fs::File;
 use std::io::BufWriter;
 use std::path::Path;
 
-use cranelift_codegen::ir::{types, AbiParam, Function, InstBuilder, TrapCode, UserFuncName};
+use cranelift_codegen::ir::{
+    types, AbiParam, Function, InstBuilder, TrapCode, UserFuncName,
+};
 use cranelift_codegen::{isa, settings, Context};
 use cranelift_frontend::FunctionBuilderContext;
 use cranelift_module::{default_libcall_names, DataDescription, Linkage, Module};
@@ -261,13 +263,14 @@ impl Codegen for BinaryCodegen {
             self.module
                 .define_function(func_binding.func_id, &mut self.module_ctx)
                 .unwrap();
+            self.module.clear_context(&mut self.module_ctx)
         }
 
         let obj_product = self.module.finish();
 
         // FIXME: get file name from some kind of configuration
-        let obj_path =
-            env::temp_dir().join(format!("{}.o", file.to_string_lossy().replace("/", "__")));
+        let obj_path = env::temp_dir()
+            .join(format!("{}.o", file.to_string_lossy().replace("/", "__")));
         let out_file = File::create(&obj_path).expect("Failed to create object file");
 
         obj_product

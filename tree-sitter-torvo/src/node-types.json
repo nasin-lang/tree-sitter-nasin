@@ -32,7 +32,15 @@
             "named": true
           },
           {
+            "type": "false",
+            "named": true
+          },
+          {
             "type": "ident",
+            "named": true
+          },
+          {
+            "type": "if",
             "named": true
           },
           {
@@ -41,6 +49,10 @@
           },
           {
             "type": "string_lit",
+            "named": true
+          },
+          {
+            "type": "true",
             "named": true
           }
         ]
@@ -110,7 +122,15 @@
             "named": true
           },
           {
+            "type": "false",
+            "named": true
+          },
+          {
             "type": "ident",
+            "named": true
+          },
+          {
+            "type": "if",
             "named": true
           },
           {
@@ -119,6 +139,10 @@
           },
           {
             "type": "string_lit",
+            "named": true
+          },
+          {
+            "type": "true",
             "named": true
           }
         ]
@@ -182,7 +206,15 @@
             "named": true
           },
           {
+            "type": "false",
+            "named": true
+          },
+          {
             "type": "ident",
+            "named": true
+          },
+          {
+            "type": "if",
             "named": true
           },
           {
@@ -191,6 +223,10 @@
           },
           {
             "type": "string_lit",
+            "named": true
+          },
+          {
+            "type": "true",
             "named": true
           }
         ]
@@ -240,7 +276,15 @@
             "named": true
           },
           {
+            "type": "false",
+            "named": true
+          },
+          {
             "type": "ident",
+            "named": true
+          },
+          {
+            "type": "if",
             "named": true
           },
           {
@@ -249,6 +293,10 @@
           },
           {
             "type": "string_lit",
+            "named": true
+          },
+          {
+            "type": "true",
             "named": true
           }
         ]
@@ -288,7 +336,15 @@
             "named": true
           },
           {
+            "type": "false",
+            "named": true
+          },
+          {
             "type": "ident",
+            "named": true
+          },
+          {
+            "type": "if",
             "named": true
           },
           {
@@ -297,6 +353,10 @@
           },
           {
             "type": "string_lit",
+            "named": true
+          },
+          {
+            "type": "true",
             "named": true
           }
         ]
@@ -330,7 +390,15 @@
             "named": true
           },
           {
+            "type": "false",
+            "named": true
+          },
+          {
             "type": "ident",
+            "named": true
+          },
+          {
+            "type": "if",
             "named": true
           },
           {
@@ -340,10 +408,19 @@
           {
             "type": "string_lit",
             "named": true
+          },
+          {
+            "type": "true",
+            "named": true
           }
         ]
       }
     }
+  },
+  {
+    "type": "false",
+    "named": true,
+    "fields": {}
   },
   {
     "type": "fn_decl",
@@ -412,7 +489,15 @@
             "named": true
           },
           {
+            "type": "false",
+            "named": true
+          },
+          {
             "type": "ident",
+            "named": true
+          },
+          {
+            "type": "if",
             "named": true
           },
           {
@@ -421,6 +506,10 @@
           },
           {
             "type": "string_lit",
+            "named": true
+          },
+          {
+            "type": "true",
             "named": true
           }
         ]
@@ -514,7 +603,15 @@
             "named": true
           },
           {
+            "type": "false",
+            "named": true
+          },
+          {
             "type": "ident",
+            "named": true
+          },
+          {
+            "type": "if",
             "named": true
           },
           {
@@ -523,6 +620,10 @@
           },
           {
             "type": "string_lit",
+            "named": true
+          },
+          {
+            "type": "true",
             "named": true
           }
         ]
@@ -533,6 +634,174 @@
     "type": "ident",
     "named": true,
     "fields": {}
+  },
+  {
+    "type": "if",
+    "named": true,
+    "fields": {
+      "cond": {
+        "multiple": true,
+        "required": true,
+        "types": [
+          {
+            "type": "(",
+            "named": false
+          },
+          {
+            "type": ")",
+            "named": false
+          },
+          {
+            "type": "array_lit",
+            "named": true
+          },
+          {
+            "type": "bin_op",
+            "named": true
+          },
+          {
+            "type": "block",
+            "named": true
+          },
+          {
+            "type": "call",
+            "named": true
+          },
+          {
+            "type": "false",
+            "named": true
+          },
+          {
+            "type": "ident",
+            "named": true
+          },
+          {
+            "type": "if",
+            "named": true
+          },
+          {
+            "type": "number",
+            "named": true
+          },
+          {
+            "type": "string_lit",
+            "named": true
+          },
+          {
+            "type": "true",
+            "named": true
+          }
+        ]
+      },
+      "else": {
+        "multiple": true,
+        "required": false,
+        "types": [
+          {
+            "type": "(",
+            "named": false
+          },
+          {
+            "type": ")",
+            "named": false
+          },
+          {
+            "type": "array_lit",
+            "named": true
+          },
+          {
+            "type": "bin_op",
+            "named": true
+          },
+          {
+            "type": "block",
+            "named": true
+          },
+          {
+            "type": "call",
+            "named": true
+          },
+          {
+            "type": "false",
+            "named": true
+          },
+          {
+            "type": "ident",
+            "named": true
+          },
+          {
+            "type": "if",
+            "named": true
+          },
+          {
+            "type": "number",
+            "named": true
+          },
+          {
+            "type": "string_lit",
+            "named": true
+          },
+          {
+            "type": "true",
+            "named": true
+          }
+        ]
+      },
+      "then": {
+        "multiple": true,
+        "required": true,
+        "types": [
+          {
+            "type": "(",
+            "named": false
+          },
+          {
+            "type": ")",
+            "named": false
+          },
+          {
+            "type": "array_lit",
+            "named": true
+          },
+          {
+            "type": "bin_op",
+            "named": true
+          },
+          {
+            "type": "block",
+            "named": true
+          },
+          {
+            "type": "call",
+            "named": true
+          },
+          {
+            "type": "false",
+            "named": true
+          },
+          {
+            "type": "ident",
+            "named": true
+          },
+          {
+            "type": "if",
+            "named": true
+          },
+          {
+            "type": "number",
+            "named": true
+          },
+          {
+            "type": "string_lit",
+            "named": true
+          },
+          {
+            "type": "true",
+            "named": true
+          }
+        ]
+      }
+    }
   },
   {
     "type": "number",
@@ -573,6 +842,11 @@
         ]
       }
     }
+  },
+  {
+    "type": "true",
+    "named": true,
+    "fields": {}
   },
   {
     "type": "var_decl",
@@ -631,7 +905,15 @@
             "named": true
           },
           {
+            "type": "false",
+            "named": true
+          },
+          {
             "type": "ident",
+            "named": true
+          },
+          {
+            "type": "if",
             "named": true
           },
           {
@@ -640,6 +922,10 @@
           },
           {
             "type": "string_lit",
+            "named": true
+          },
+          {
+            "type": "true",
             "named": true
           }
         ]
@@ -687,7 +973,19 @@
     "named": true
   },
   {
+    "type": "else",
+    "named": false
+  },
+  {
+    "type": "false",
+    "named": false
+  },
+  {
     "type": "fn",
+    "named": false
+  },
+  {
+    "type": "if",
     "named": false
   },
   {
@@ -713,5 +1011,13 @@
   {
     "type": "string_lit_content",
     "named": true
+  },
+  {
+    "type": "then",
+    "named": false
+  },
+  {
+    "type": "true",
+    "named": false
   }
 ]

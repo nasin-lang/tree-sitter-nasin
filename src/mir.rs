@@ -130,6 +130,8 @@ pub struct Extern {
 pub enum Instr {
     LoadGlobal(LoadGlobalInstr),
     StoreGlobal(StoreGlobalInstr),
+    Assign(AssignInstr),
+    CreateBool(CreateBoolInstr),
     CreateNumber(CreateNumberInstr),
     CreateString(CreateStringInstr),
     CreateData(CreateDataInstr),
@@ -140,6 +142,7 @@ pub enum Instr {
     Mod(BinOpInstr),
     Pow(BinOpInstr),
     Call(CallInstr),
+    If(IfInstr),
     Return(ReturnInstr),
 }
 
@@ -157,15 +160,27 @@ pub struct StoreGlobalInstr {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct AssignInstr {
+    pub target_idx: u32,
+    pub value: Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CreateBoolInstr {
+    pub target_idx: u32,
+    pub value: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateNumberInstr {
     pub target_idx: u32,
-    pub number: String,
+    pub value: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateStringInstr {
     pub target_idx: u32,
-    pub string: String,
+    pub value: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -193,6 +208,34 @@ pub struct ReturnInstr {
     pub value: Option<Value>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct IfInstr {
+    /// List of indexes that the if block initializes in both `then` and `else` bodies.
+    /// These locals will be available to be used in instructions after the if
+    /// instruction. All other locals assigned by instructions inside the `then` and
+    /// `else` bodies are exclusive to the if instruction and should not be used
+    /// afterwards. This is necessary mainly for ease compilation to SSA targets like
+    /// Cranelift.
+    pub inits_idx_list: Vec<u32>,
+    pub cond: Value,
+    pub then_body: Vec<Instr>,
+    pub else_body: Vec<Instr>,
+}
+
+impl Instr {
+    /// Returns true if the instruction unconditionally returns the current function
+    pub fn returns(&self) -> bool {
+        match self {
+            Instr::Return(..) => true,
+            Instr::If(v) => {
+                v.then_body.iter().any(Instr::returns)
+                    && v.else_body.iter().any(Instr::returns)
+            }
+            _ => false,
+        }
+    }
+}
+
 impl Display for Instr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self {
@@ -210,15 +253,21 @@ impl Display for Instr {
                 }
                 write!(f, ">, {}", v.value)?;
             }
+            Instr::Assign(v) => {
+                write!(f, "%{} = {}", v.target_idx, &v.value)?;
+            }
+            Instr::CreateBool(v) => {
+                write!(f, "%{} = create_bool {}", v.target_idx, &v.value)?;
+            }
             Instr::CreateNumber(v) => {
-                write!(f, "%{} = create_number {}", v.target_idx, &v.number)?;
+                write!(f, "%{} = create_number {}", v.target_idx, &v.value)?;
             }
             Instr::CreateString(v) => {
                 write!(
                     f,
                     "%{} = create_string \"{}\"",
                     v.target_idx,
-                    &v.string
+                    &v.value
                         .replace("\"", "\\\"")
                         .replace("\n", "\\n")
                         .replace("\r", "\\r")
@@ -256,6 +305,31 @@ impl Display for Instr {
                     write!(f, ", {}", arg)?;
                 }
             }
+            Instr::If(v) => {
+                write!(f, "(if {}", v.cond,)?;
+
+                if v.inits_idx_list.len() > 0 {
+                    write!(f, " (inits")?;
+                    for target_idx in &v.inits_idx_list {
+                        write!(f, " %{}", target_idx)?;
+                    }
+                    write!(f, ")")?;
+                }
+
+                if v.then_body.len() == 1 {
+                    write!(f, "\n  (then\n{})", &v.then_body[0])?;
+                } else if v.then_body.len() > 1 {
+                    write!(f, "\n  (then\n{})", indented(4, &v.then_body))?;
+                }
+
+                if v.else_body.len() == 1 {
+                    write!(f, "\n  (else\n{})", &v.else_body[0])?;
+                } else if v.else_body.len() > 1 {
+                    write!(f, "\n  (else\n{})", indented(4, &v.else_body))?;
+                }
+
+                write!(f, ")")?;
+            }
             Instr::Return(ret) => {
                 write!(f, "return")?;
                 if let Some(value) = &ret.value {
@@ -269,6 +343,7 @@ impl Display for Instr {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ConstValue {
+    Bool(bool),
     Number(String),
     String(String),
     Array(Vec<ConstValue>),
@@ -277,8 +352,11 @@ pub enum ConstValue {
 impl Display for ConstValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self {
-            ConstValue::Number(num) => {
-                write!(f, "{}", num)?;
+            ConstValue::Bool(b) => {
+                write!(f, "{}", b)?;
+            }
+            ConstValue::Number(n) => {
+                write!(f, "{}", n)?;
             }
             ConstValue::String(s) => {
                 write!(
@@ -312,6 +390,16 @@ pub enum Value {
     Param(u32),
 }
 
+impl Value {
+    /// If the value is a param, replace if with the corresponding value in the specified
+    /// list
+    pub fn replace_params(&mut self, values: &[Value]) {
+        if let Value::Param(idx) = self {
+            *self = values[*idx as usize].clone();
+        }
+    }
+}
+
 impl Display for Value {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self {
@@ -329,6 +417,7 @@ impl Display for Value {
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub enum Type {
     Unknown,
+    Bool,
     I8,
     I16,
     I32,
@@ -423,7 +512,7 @@ impl Type {
         )
     }
 
-    /// Returns a type for a array. If the item type is ambiguous, returns an ambiguous
+    /// Returns a type for an array. If the item type is ambiguous, returns an ambiguous
     /// type where the item type is concrete.
     pub fn array_type(item_type: Type, len: Option<usize>) -> Self {
         match item_type {
@@ -582,6 +671,7 @@ impl Display for Type {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self {
             Type::Unknown => write!(f, "unknown"),
+            Type::Bool => write!(f, "bool"),
             Type::I8 => write!(f, "i8"),
             Type::I16 => write!(f, "i16"),
             Type::I32 => write!(f, "i32"),
@@ -625,11 +715,11 @@ impl Display for Type {
                 Ok(())
             }
             Type::String(v) => {
-                write!(f, "(string")?;
                 if let Some(len) = v.len {
-                    write!(f, " {}", len)?;
+                    write!(f, "(string {})", len)?;
+                } else {
+                    write!(f, "string")?;
                 }
-                write!(f, ")")?;
                 Ok(())
             }
             Type::Array(v) => {
@@ -656,7 +746,7 @@ impl FuncType {
     }
 
     /// Returns a function type for a binary operation with the given type. For this to
-    /// work, the type must be a absolute type, not a ambiguous or unknown type.
+    /// work, the type must be an absolute type, not an ambiguous or unknown one.
     pub fn binop_sig(ty: &Type) -> FuncType {
         assert!(!ty.is_unknown());
         assert!(!ty.is_ambig());
@@ -666,14 +756,25 @@ impl FuncType {
         }
     }
 
-    /// Returns a function type for a array const operation with the given type. For this to
-    /// work, the type must be a absolute type, not a ambiguous or unknown type.
+    /// Returns a function type for an array const operation with the given type. For this
+    /// to work, the type must be an absolute type, not an ambiguous or unknown one.
     pub fn array_sig(ty: &Type, len: usize) -> FuncType {
         assert!(!ty.is_unknown());
         assert!(!ty.is_ambig());
         FuncType {
             params: (0..len).map(|_| ty.clone()).collect(),
             ret: vec![Type::Array(ArrayType::new(ty.clone(), Some(len)))],
+        }
+    }
+
+    /// Returns a function type for an if expression that results in the given type. For
+    /// this to work, the type must be an absolute type, not an ambiguous or unknown one.
+    pub fn if_sig(ty: &Type) -> FuncType {
+        assert!(!ty.is_unknown());
+        assert!(!ty.is_ambig());
+        FuncType {
+            params: vec![Type::Bool, ty.clone(), ty.clone()],
+            ret: vec![ty.clone()],
         }
     }
 }
@@ -732,16 +833,17 @@ impl ArrayType {
 }
 
 fn indented<T: Display, I: IntoIterator<Item = T>>(n: usize, items: I) -> String {
-    let mut s = String::new();
+    let indent = " ".repeat(n);
+    let mut buf = String::new();
 
     for (i, item) in items.into_iter().enumerate() {
         for (j, line) in item.to_string().lines().enumerate() {
             if i > 0 || j > 0 {
-                write!(s, "\n").unwrap();
+                write!(buf, "\n").unwrap();
             }
-            write!(s, "{}{}", " ".repeat(n), line).unwrap();
+            write!(buf, "{}{}", &indent, line).unwrap();
         }
     }
 
-    s
+    buf
 }

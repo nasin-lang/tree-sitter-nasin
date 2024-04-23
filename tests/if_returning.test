@@ -1,0 +1,16 @@
+true_msg  = "it's true!\n"
+false_msg = "it's false\n"
+
+fn get_msg(cond) =
+    if cond then
+        true_msg
+    else
+        false_msg
+
+main: i32 =
+    _ = write(1 get_msg(true) 11)
+    _ = write(1 get_msg(false) 11)
+    0
+---
+it's true!
+it's false
