@@ -475,10 +475,7 @@ impl Type {
 
     /// Returns an ambiguous type with the given types. If there is only one type, returns
     /// that type instead. If no types are given, returns an unknown type.
-    pub fn ambig<I>(types: I) -> Self
-    where
-        I: IntoIterator<Item = Type>,
-    {
+    pub fn ambig(types: impl IntoIterator<Item = Type>) -> Self {
         let ambig = AmbigType::new(types);
 
         if ambig.types.len() == 1 {
@@ -495,11 +492,10 @@ impl Type {
     /// Returns a type for a function. If any of the arguments or the return type is
     /// ambiguous, returns an ambiguous type for all combinations of the function
     /// signature.
-    pub fn func_type<A, R>(args: A, ret: R) -> Self
-    where
-        A: IntoIterator<Item = Type>,
-        R: IntoIterator<Item = Type>,
-    {
+    pub fn func_type(
+        args: impl IntoIterator<Item = Type>,
+        ret: impl IntoIterator<Item = Type>,
+    ) -> Self {
         let args = args
             .into_iter()
             .map(|ty| ty.into_possible_types())
@@ -530,19 +526,13 @@ impl Type {
     }
 
     /// Returns true if all the types are the same or are supertype/subtype of each other.
-    pub fn matches<'a, I>(types: I) -> bool
-    where
-        I: IntoIterator<Item = &'a Type>,
-    {
+    pub fn matches<'a>(types: impl IntoIterator<Item = &'a Type>) -> bool {
         Self::merge(types).is_some()
     }
 
     /// Merges a list of types into a single type. If the types are incompatible, returns
     /// None.
-    pub fn merge<'a, I>(types: I) -> Option<Self>
-    where
-        I: IntoIterator<Item = &'a Type>,
-    {
+    pub fn merge<'a>(types: impl IntoIterator<Item = &'a Type>) -> Option<Self> {
         let mut iter = types.into_iter();
         let mut res_type = iter.next()?.clone();
 
@@ -788,10 +778,7 @@ pub struct AmbigType {
 }
 
 impl AmbigType {
-    pub fn new<I>(types: I) -> Self
-    where
-        I: IntoIterator<Item = Type>,
-    {
+    pub fn new(types: impl IntoIterator<Item = Type>) -> Self {
         let types: HashSet<_> = types
             .into_iter()
             .flat_map(|ty| ty.into_possible_types())

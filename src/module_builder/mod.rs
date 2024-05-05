@@ -283,9 +283,6 @@ impl<'a> ModuleBuilder<'a> {
     }
 }
 
-fn ext_params<T>(params: T) -> Vec<mir::Param>
-where
-    T: IntoIterator<Item = mir::Type>,
-{
+fn ext_params(params: impl IntoIterator<Item = mir::Type>) -> Vec<mir::Param> {
     params.into_iter().map(|ty| mir::Param { ty }).collect()
 }

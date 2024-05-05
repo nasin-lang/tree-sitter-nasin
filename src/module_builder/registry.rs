@@ -333,10 +333,11 @@ impl ModuleRegistry {
         }
     }
 
-    pub fn register_func<P>(&mut self, ident: &str, params: P) -> u32
-    where
-        P: IntoIterator<Item = mir::Type>,
-    {
+    pub fn register_func(
+        &mut self,
+        ident: &str,
+        params: impl IntoIterator<Item = mir::Type>,
+    ) -> u32 {
         let idx = self.funcs.len();
         let v_value = VirtualValue::Func(idx as u32);
         self.funcs.push(mir::Type::func_type(
