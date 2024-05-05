@@ -130,7 +130,6 @@ pub struct Extern {
 pub enum Instr {
     LoadGlobal(LoadGlobalInstr),
     StoreGlobal(StoreGlobalInstr),
-    Assign(AssignInstr),
     CreateBool(CreateBoolInstr),
     CreateNumber(CreateNumberInstr),
     CreateString(CreateStringInstr),
@@ -144,6 +143,7 @@ pub enum Instr {
     Call(CallInstr),
     If(IfInstr),
     Return(ReturnInstr),
+    Break(BreakInstr),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -156,12 +156,6 @@ pub struct LoadGlobalInstr {
 pub struct StoreGlobalInstr {
     pub global_idx: u32,
     pub field_idx: Option<u32>,
-    pub value: Value,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct AssignInstr {
-    pub target_idx: u32,
     pub value: Value,
 }
 
@@ -209,14 +203,14 @@ pub struct ReturnInstr {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct BreakInstr {
+    pub count: u16,
+    pub values: Vec<Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct IfInstr {
-    /// List of indexes that the if block initializes in both `then` and `else` bodies.
-    /// These locals will be available to be used in instructions after the if
-    /// instruction. All other locals assigned by instructions inside the `then` and
-    /// `else` bodies are exclusive to the if instruction and should not be used
-    /// afterwards. This is necessary mainly for ease compilation to SSA targets like
-    /// Cranelift.
-    pub inits_idx_list: Vec<u32>,
+    pub target_idx_list: Vec<u32>,
     pub cond: Value,
     pub then_body: Vec<Instr>,
     pub else_body: Vec<Instr>,
@@ -232,6 +226,15 @@ impl Instr {
                     && v.else_body.iter().any(Instr::returns)
             }
             _ => false,
+        }
+    }
+
+    /// Returns true if the instruction unconditionally returns the current function, or
+    /// continue or break an if or loop
+    pub fn jumps(&self) -> bool {
+        match self {
+            Instr::Break(..) => true,
+            ins => ins.returns(),
         }
     }
 }
@@ -252,9 +255,6 @@ impl Display for Instr {
                     write!(f, ".{}", field_idx)?;
                 }
                 write!(f, ">, {}", v.value)?;
-            }
-            Instr::Assign(v) => {
-                write!(f, "%{} = {}", v.target_idx, &v.value)?;
             }
             Instr::CreateBool(v) => {
                 write!(f, "%{} = create_bool {}", v.target_idx, &v.value)?;
@@ -306,33 +306,36 @@ impl Display for Instr {
                 }
             }
             Instr::If(v) => {
-                write!(f, "(if {}", v.cond,)?;
-
-                if v.inits_idx_list.len() > 0 {
-                    write!(f, " (inits")?;
-                    for target_idx in &v.inits_idx_list {
-                        write!(f, " %{}", target_idx)?;
+                if v.target_idx_list.len() > 0 {
+                    for (i, target_idx) in v.target_idx_list.iter().enumerate() {
+                        if i > 0 {
+                            write!(f, ", ")?;
+                        }
+                        write!(f, "%{}", target_idx)?;
                     }
-                    write!(f, ")")?;
+                    write!(f, " = ")?;
                 }
 
-                if v.then_body.len() == 1 {
-                    write!(f, "\n  (then\n{})", &v.then_body[0])?;
-                } else if v.then_body.len() > 1 {
-                    write!(f, "\n  (then\n{})", indented(4, &v.then_body))?;
-                }
-
-                if v.else_body.len() == 1 {
-                    write!(f, "\n  (else\n{})", &v.else_body[0])?;
-                } else if v.else_body.len() > 1 {
-                    write!(f, "\n  (else\n{})", indented(4, &v.else_body))?;
-                }
-
-                write!(f, ")")?;
+                write!(
+                    f,
+                    "(if {}\n  (then\n{})\n  (else\n{}))",
+                    v.cond,
+                    indented(4, &v.then_body),
+                    indented(4, &v.else_body)
+                )?;
             }
-            Instr::Return(ret) => {
+            Instr::Return(v) => {
                 write!(f, "return")?;
-                if let Some(value) = &ret.value {
+                if let Some(value) = &v.value {
+                    write!(f, " {}", value)?;
+                }
+            }
+            Instr::Break(v) => {
+                write!(f, "break {}", v.count)?;
+                for (i, value) in v.values.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
                     write!(f, " {}", value)?;
                 }
             }

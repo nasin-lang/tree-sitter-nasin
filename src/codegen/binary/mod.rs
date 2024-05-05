@@ -120,9 +120,7 @@ impl Codegen for BinaryCodegen {
             &decl.locals,
         );
 
-        for instr in decl.body.iter() {
-            fn_codegen.instr(instr);
-        }
+        fn_codegen.instrs(&decl.body, true);
 
         fn_codegen.finalize();
     }
@@ -189,9 +187,7 @@ impl Codegen for BinaryCodegen {
             &init.locals,
         );
 
-        for instr in &init.body {
-            fn_codegen.instr(instr);
-        }
+        fn_codegen.instrs(&init.body, false);
 
         // In the future, main will evaluate in a Action monad that will be run in the
         // entry function

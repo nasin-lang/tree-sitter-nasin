@@ -283,19 +283,19 @@ where
                     },
                 );
 
-                then_body.push(mir::Instr::Assign(mir::AssignInstr {
-                    target_idx: local_idx,
-                    value: then_value,
+                // TODO: multi-value
+                then_body.push(mir::Instr::Break(mir::BreakInstr {
+                    count: 1,
+                    values: vec![then_value],
                 }));
 
-                else_body.push(mir::Instr::Assign(mir::AssignInstr {
-                    target_idx: local_idx,
-                    value: else_value,
+                else_body.push(mir::Instr::Break(mir::BreakInstr {
+                    count: 1,
+                    values: vec![else_value],
                 }));
 
                 self.body.push(mir::Instr::If(mir::IfInstr {
-                    // TODO: multi-value
-                    inits_idx_list: vec![local_idx],
+                    target_idx_list: vec![local_idx],
                     cond: cond_value,
                     then_body,
                     else_body,
@@ -349,7 +349,7 @@ where
                 };
 
                 self.body.push(mir::Instr::If(mir::IfInstr {
-                    inits_idx_list: vec![],
+                    target_idx_list: vec![],
                     cond: cond_value,
                     then_body,
                     else_body,

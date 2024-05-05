@@ -46,6 +46,7 @@ pub struct FnCodegen<'a> {
     pub locals: Vec<LocalBinding>,
     global_values: HashMap<u32, GlobalValue>,
     func_refs: HashMap<u32, FuncRef>,
+    jump_stack: Vec<Block>,
 }
 
 impl<'a> FnCodegen<'a> {
@@ -93,6 +94,7 @@ impl<'a> FnCodegen<'a> {
             locals,
             global_values: HashMap::new(),
             func_refs: HashMap::new(),
+            jump_stack: vec![],
         }
     }
 
@@ -112,16 +114,6 @@ impl<'a> FnCodegen<'a> {
 
     pub fn instr(&mut self, instr: &mir::Instr) {
         match instr {
-            mir::Instr::Assign(v) => {
-                let value = self.get_value(&v.value);
-
-                let target = self
-                    .locals
-                    .get_mut(v.target_idx as usize)
-                    .expect("Local not found");
-
-                target.value = Some(value);
-            }
             mir::Instr::CreateBool(v) => {
                 let local = self
                     .locals
@@ -441,41 +433,33 @@ impl<'a> FnCodegen<'a> {
                     .ins()
                     .brif(cond, then_block, &[], else_block, &[]);
 
-                let jump_to_block = if !instr.returns() {
-                    let b = self.builder.create_block();
-                    for idx in &v.inits_idx_list {
+                if !instr.returns() {
+                    let block = self.builder.create_block();
+                    for idx in &v.target_idx_list {
                         let local =
                             self.locals.get_mut(*idx as usize).expect("Local not found");
 
-                        let value =
-                            self.builder.append_block_param(b, local.native_ty.clone());
+                        let value = self
+                            .builder
+                            .append_block_param(block, local.native_ty.clone());
                         local.value = Some(value);
                     }
 
-                    Some(b)
-                } else {
-                    None
+                    self.jump_stack.push(block);
                 };
 
-                self.if_branch(
-                    &v.then_body,
-                    then_block,
-                    jump_to_block,
-                    &v.inits_idx_list,
-                );
-                self.if_branch(
-                    &v.else_body,
-                    else_block,
-                    jump_to_block,
-                    &v.inits_idx_list,
-                );
+                self.builder.switch_to_block(then_block);
+                self.instrs(&v.then_body, true);
+
+                self.builder.switch_to_block(else_block);
+                self.instrs(&v.else_body, true);
 
                 if instr.returns() {
                     return;
                 }
 
-                if let Some(b) = jump_to_block {
-                    self.builder.switch_to_block(b);
+                if let Some(block) = self.jump_stack.pop() {
+                    self.builder.switch_to_block(block);
                 }
             }
             mir::Instr::Return(v) => {
@@ -488,6 +472,33 @@ impl<'a> FnCodegen<'a> {
                         .map_or(vec![], |value| vec![self.get_value(value)]);
                     self.builder.ins().return_(&values);
                 }
+            }
+            mir::Instr::Break(v) => {
+                let jump_args: Vec<_> =
+                    v.values.iter().map(|x| self.get_value(x)).collect();
+
+                let Some(block) = self
+                    .jump_stack
+                    .get(self.jump_stack.len() - v.count as usize)
+                else {
+                    panic!("Break count is too big");
+                };
+
+                self.builder.ins().jump(block.clone(), &jump_args);
+            }
+        }
+    }
+
+    pub fn instrs(&mut self, instrs: &[mir::Instr], can_return: bool) {
+        for instr in instrs {
+            if instr.returns() && !can_return {
+                return;
+            }
+
+            self.instr(instr);
+
+            if instr.jumps() {
+                return;
             }
         }
     }
@@ -525,45 +536,5 @@ impl<'a> FnCodegen<'a> {
             .global_value(self.module.poiter_type(), data);
 
         ptr
-    }
-
-    fn if_branch(
-        &mut self,
-        body: &[mir::Instr],
-        block: Block,
-        jump_to_block: Option<Block>,
-        target_idx_list: &[u32],
-    ) {
-        self.builder.switch_to_block(block);
-
-        let mut jump_args: Vec<Option<Value>> = vec![None].repeat(target_idx_list.len());
-
-        'instrs: for instr in body {
-            if instr.returns() {
-                self.instr(instr);
-                return;
-            }
-
-            if let mir::Instr::Assign(mir::AssignInstr { target_idx, value }) = instr {
-                for (i, idx) in target_idx_list.iter().enumerate() {
-                    if idx == target_idx {
-                        jump_args[i] = Some(self.get_value(&value));
-                        continue 'instrs;
-                    }
-                }
-            }
-
-            self.instr(instr);
-        }
-
-        if let Some(b) = jump_to_block {
-            self.builder.ins().jump(
-                b,
-                &jump_args
-                    .into_iter()
-                    .collect::<Option<Vec<_>>>()
-                    .expect("all block params should be defined at this point"),
-            );
-        }
     }
 }
