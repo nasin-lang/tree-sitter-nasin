@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use cranelift_codegen::ir::condcodes::IntCC;
 use cranelift_codegen::ir::{types, Block, GlobalValue, StackSlotData, StackSlotKind};
 use cranelift_codegen::ir::{FuncRef, Function, InstBuilder, MemFlags, Value};
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
@@ -422,6 +423,56 @@ impl<'a> FnCodegen<'a> {
 
                     local.value = Some(value);
                 }
+            }
+            mir::Instr::Eq(v)
+            | mir::Instr::Neq(v)
+            | mir::Instr::Gt(v)
+            | mir::Instr::Lt(v)
+            | mir::Instr::Gte(v)
+            | mir::Instr::Lte(v) => {
+                let left = self.get_value(&v.left);
+                let right = self.get_value(&v.right);
+
+                // I'm assuming that left and right have the same type
+                let input_ty = {
+                    match &v.left {
+                        mir::Value::Local(i) => self.locals.get(*i as usize),
+                        mir::Value::Param(i) => self.params.get(*i as usize),
+                    }
+                    .expect("Local not found")
+                    .ty
+                    .clone()
+                };
+
+                let local = self
+                    .locals
+                    .get_mut(v.target_idx as usize)
+                    .expect("Local not found");
+
+                let signed = if input_ty.is_signed_number() {
+                    true
+                } else if input_ty.is_unsigned_number() {
+                    false
+                } else {
+                    panic!("Unhandled type: {input_ty}")
+                };
+
+                let cond = match (instr, signed) {
+                    (mir::Instr::Eq(..), _) => IntCC::Equal,
+                    (mir::Instr::Neq(..), _) => IntCC::NotEqual,
+                    (mir::Instr::Gt(..), true) => IntCC::SignedGreaterThan,
+                    (mir::Instr::Gt(..), false) => IntCC::UnsignedGreaterThan,
+                    (mir::Instr::Lt(..), true) => IntCC::SignedLessThan,
+                    (mir::Instr::Lt(..), false) => IntCC::UnsignedLessThan,
+                    (mir::Instr::Gte(..), true) => IntCC::SignedGreaterThanOrEqual,
+                    (mir::Instr::Gte(..), false) => IntCC::UnsignedGreaterThanOrEqual,
+                    (mir::Instr::Lte(..), true) => IntCC::SignedLessThanOrEqual,
+                    (mir::Instr::Lte(..), false) => IntCC::UnsignedLessThanOrEqual,
+                    _ => unreachable!(),
+                };
+
+                let value = self.builder.ins().icmp(cond, left, right);
+                local.value = Some(value);
             }
             mir::Instr::If(v) => {
                 let cond = self.get_value(&v.cond);

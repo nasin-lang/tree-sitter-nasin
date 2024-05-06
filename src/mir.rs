@@ -140,6 +140,12 @@ pub enum Instr {
     Div(BinOpInstr),
     Mod(BinOpInstr),
     Pow(BinOpInstr),
+    Eq(BinOpInstr),
+    Neq(BinOpInstr),
+    Gt(BinOpInstr),
+    Lt(BinOpInstr),
+    Gte(BinOpInstr),
+    Lte(BinOpInstr),
     Call(CallInstr),
     If(IfInstr),
     Return(ReturnInstr),
@@ -298,6 +304,24 @@ impl Display for Instr {
             }
             Instr::Pow(v) => {
                 write!(f, "%{} = pow {}, {}", v.target_idx, v.left, v.right)?;
+            }
+            Instr::Eq(v) => {
+                write!(f, "%{} = eq {}, {}", v.target_idx, v.left, v.right)?;
+            }
+            Instr::Neq(v) => {
+                write!(f, "%{} = neq {}, {}", v.target_idx, v.left, v.right)?;
+            }
+            Instr::Gt(v) => {
+                write!(f, "%{} = gt {}, {}", v.target_idx, v.left, v.right)?;
+            }
+            Instr::Lt(v) => {
+                write!(f, "%{} = lt {}, {}", v.target_idx, v.left, v.right)?;
+            }
+            Instr::Lte(v) => {
+                write!(f, "%{} = lte {}, {}", v.target_idx, v.left, v.right)?;
+            }
+            Instr::Gte(v) => {
+                write!(f, "%{} = gte {}, {}", v.target_idx, v.left, v.right)?;
             }
             Instr::Call(v) => {
                 write!(f, "%{} = call <func {}>", v.target_idx, v.func_idx,)?;
@@ -658,6 +682,17 @@ impl Type {
     pub fn is_primitive(&self) -> bool {
         !self.is_composite() && !self.is_unknown() && !self.is_ambig()
     }
+
+    pub fn is_signed_number(&self) -> bool {
+        matches!(self, Type::I8 | Type::I16 | Type::I32 | Type::I64)
+    }
+
+    pub fn is_unsigned_number(&self) -> bool {
+        matches!(
+            self,
+            Type::U8 | Type::U16 | Type::U32 | Type::U64 | Type::USize
+        )
+    }
 }
 
 impl Display for Type {
@@ -740,12 +775,14 @@ impl FuncType {
 
     /// Returns a function type for a binary operation with the given type. For this to
     /// work, the type must be an absolute type, not an ambiguous or unknown one.
-    pub fn binop_sig(ty: &Type) -> FuncType {
-        assert!(!ty.is_unknown());
-        assert!(!ty.is_ambig());
+    pub fn binop_sig(operands_ty: &Type, result_ty: &Type) -> FuncType {
+        assert!(!operands_ty.is_unknown());
+        assert!(!operands_ty.is_ambig());
+        assert!(!result_ty.is_unknown());
+        assert!(!result_ty.is_ambig());
         FuncType {
-            params: vec![ty.clone(), ty.clone()],
-            ret: vec![ty.clone()],
+            params: vec![operands_ty.clone(), operands_ty.clone()],
+            ret: vec![result_ty.clone()],
         }
     }
 

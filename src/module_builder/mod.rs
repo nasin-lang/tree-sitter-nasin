@@ -120,7 +120,11 @@ impl<'a> ModuleBuilder<'a> {
             .registry
             .module_registry
             .register_func(&name, local_builder.registry.get_params().map(|p| p.ty));
-        let func_ref = VirtualValue::Func(func_idx);
+        let func_value = VirtualValue::Func(func_idx);
+        local_builder
+            .registry
+            .idents
+            .insert(&name, func_value.clone());
 
         let ret = node
             .field("ret_type")
@@ -137,7 +141,7 @@ impl<'a> ModuleBuilder<'a> {
         let ty = mir::Type::func_type(params.iter().map(|p| p.ty.clone()), [ret.clone()]);
 
         local_builder.registry.module_registry.set_value_type(
-            func_ref.clone(),
+            func_value.clone(),
             ty.clone(),
             None,
         );

@@ -1,0 +1,13 @@
+msg: str = "got 10\n"
+
+fn rec(i: u8): str =
+    if i >= 10 then
+        msg
+    else
+        rec(i + 1)
+
+main: i32 =
+    _ = write(1 rec(0) 7)
+    0
+---
+got 10

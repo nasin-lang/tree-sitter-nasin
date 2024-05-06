@@ -103,44 +103,63 @@ where
                 (VirtualValue::Array(items), ty)
             }
             "bin_op" => {
+                let op_node = node.required_field("op");
+                let op = op_node.get_text(self.source);
+
                 let (left, left_ty) = self.add_expr(&node.required_field("left"));
+                let left = self.use_virtual_value(&left);
+
                 let (right, right_ty) = self.add_expr(&node.required_field("right"));
+                let right = self.use_virtual_value(&right);
 
                 // This will be implemented with typeclasses and generics so will be
                 // like `for T: Sum fn(T, T): T` but none of this is implemented yet so we
                 // will use the number types instead, with one signature for each type
-                let num_ty = mir::Type::num_type("0");
-                let ty = mir::Type::merge([&num_ty, &left_ty, &right_ty]).unwrap();
-                let sigs = ty
+                let operand_ty = mir::Type::merge([&left_ty, &right_ty]).unwrap();
+                let sig: Vec<_> = operand_ty
                     .possible_types()
                     .into_iter()
-                    .map(mir::FuncType::binop_sig);
+                    .map(|ty| match op {
+                        "+" | "-" | "%" | "*" | "/" | "**" => {
+                            mir::FuncType::binop_sig(ty, ty)
+                        }
+                        "==" | "!=" | ">" | "<" | ">=" | "<=" => {
+                            mir::FuncType::binop_sig(ty, &mir::Type::Bool)
+                        }
+                        op => panic!("Unhandled binary operator: {op}"),
+                    })
+                    .collect();
+                let ty = mir::Type::ambig(sig.iter().map(|s| s.ret[0].clone()));
 
                 let target_idx = self.registry.register_local(
                     "",
                     ty.clone(),
                     ValueTypeDeps {
                         refs: vec![left.clone().into(), right.clone().into()],
-                        sig: sigs.collect(),
+                        sig,
                     },
                 );
 
-                let op_node = node.required_field("op");
-
                 let bin_op_instr = mir::BinOpInstr {
                     target_idx,
-                    left: self.use_virtual_value(&left),
-                    right: self.use_virtual_value(&right),
+                    left,
+                    right,
                 };
 
-                self.body.push(match op_node.get_text(self.source) {
+                self.body.push(match op {
                     "+" => mir::Instr::Add(bin_op_instr),
                     "-" => mir::Instr::Sub(bin_op_instr),
                     "%" => mir::Instr::Mod(bin_op_instr),
                     "*" => mir::Instr::Mul(bin_op_instr),
                     "/" => mir::Instr::Div(bin_op_instr),
                     "**" => mir::Instr::Pow(bin_op_instr),
-                    _ => unreachable!(),
+                    "==" => mir::Instr::Eq(bin_op_instr),
+                    "!=" => mir::Instr::Neq(bin_op_instr),
+                    ">" => mir::Instr::Gt(bin_op_instr),
+                    "<" => mir::Instr::Lt(bin_op_instr),
+                    ">=" => mir::Instr::Gte(bin_op_instr),
+                    "<=" => mir::Instr::Lte(bin_op_instr),
+                    op => panic!("Unhandled binary operator: {op}"),
                 });
 
                 (VirtualValue::Local(target_idx), ty)
@@ -324,11 +343,14 @@ where
                 ty
             }
             "if" => {
-                let (cond_v_value, _) = self.add_expr(&node.required_field("cond"));
-                let cond_value = self.use_virtual_value(&cond_v_value);
+                let (cond_value, _) = self.add_expr(&node.required_field("cond"));
+                let cond_value = self.use_virtual_value(&cond_value);
 
-                self.registry
-                    .set_value_type(cond_v_value, mir::Type::Bool, None);
+                self.registry.set_value_type(
+                    cond_value.clone().into(),
+                    mir::Type::Bool,
+                    None,
+                );
 
                 let (then_ty, then_body) = if let Some(then_node) = &node.field("then") {
                     let mut nested = self.create_nested_builder();
@@ -359,17 +381,19 @@ where
                     .expect(&format!("Type mismatch: {} and {}", then_ty, else_ty))
             }
             _ => {
-                let (v_value, _) = self.add_expr(&node);
+                let (value, _) = self.add_expr(&node);
+                let value = self.use_virtual_value(&value);
 
-                let value = self.use_virtual_value(&v_value);
-                self.body
-                    .push(mir::Instr::Return(mir::ReturnInstr { value: Some(value) }));
+                self.body.push(mir::Instr::Return(mir::ReturnInstr {
+                    value: Some(value.clone()),
+                }));
 
                 if let Some(ret) = ty {
-                    self.registry.set_value_type(v_value.clone(), ret, None);
+                    self.registry
+                        .set_value_type(value.clone().into(), ret, None);
                 }
 
-                self.registry.value_type(&v_value).unwrap()
+                self.registry.value_type(&value.into()).unwrap()
             }
         }
     }

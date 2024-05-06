@@ -152,11 +152,35 @@
         "required": true,
         "types": [
           {
+            "type": "double_eq",
+            "named": true
+          },
+          {
             "type": "double_star",
             "named": true
           },
           {
+            "type": "gt",
+            "named": true
+          },
+          {
+            "type": "gt_eq",
+            "named": true
+          },
+          {
+            "type": "lt",
+            "named": true
+          },
+          {
+            "type": "lt_eq",
+            "named": true
+          },
+          {
             "type": "minus",
+            "named": true
+          },
+          {
+            "type": "not_eq",
             "named": true
           },
           {
@@ -969,6 +993,10 @@
     "named": false
   },
   {
+    "type": "double_eq",
+    "named": true
+  },
+  {
     "type": "double_star",
     "named": true
   },
@@ -985,11 +1013,31 @@
     "named": false
   },
   {
+    "type": "gt",
+    "named": true
+  },
+  {
+    "type": "gt_eq",
+    "named": true
+  },
+  {
     "type": "if",
     "named": false
   },
   {
+    "type": "lt",
+    "named": true
+  },
+  {
+    "type": "lt_eq",
+    "named": true
+  },
+  {
     "type": "minus",
+    "named": true
+  },
+  {
+    "type": "not_eq",
     "named": true
   },
   {

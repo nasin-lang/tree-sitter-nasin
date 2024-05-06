@@ -2,12 +2,13 @@ const PREC = {
     IF: 0,
     BLOCK: 1,
     BLOCK_CLAUSE: 2,
-    SUM: 3,
-    MUL: 4,
-    POW: 5,
-    ATOM: 6,
-    KEYWORD: 7,
-    CALL: 8,
+    LOGICAL: 3,
+    SUM: 4,
+    MUL: 5,
+    POW: 6,
+    ATOM: 7,
+    KEYWORD: 8,
+    CALL: 9,
 }
 
 function bin_op(prec_lvl, operator, operand) {
@@ -73,6 +74,12 @@ module.exports = grammar({
 
         bin_op: ($) =>
             choice(
+                bin_op(PREC.LOGICAL, $.double_eq, $._expr),
+                bin_op(PREC.LOGICAL, $.not_eq, $._expr),
+                bin_op(PREC.LOGICAL, $.gt, $._expr),
+                bin_op(PREC.LOGICAL, $.lt, $._expr),
+                bin_op(PREC.LOGICAL, $.gt_eq, $._expr),
+                bin_op(PREC.LOGICAL, $.lt_eq, $._expr),
                 bin_op(PREC.SUM, $.plus, $._expr),
                 bin_op(PREC.SUM, $.minus, $._expr),
                 bin_op(PREC.MUL, $.star, $._expr),
@@ -148,6 +155,12 @@ module.exports = grammar({
         double_star: () => "**",
         slash: () => "/",
         percent: () => "%",
+        double_eq: () => "==",
+        not_eq: () => "!=",
+        gt: () => ">",
+        lt: () => "<",
+        gt_eq: () => ">=",
+        lt_eq: () => "<=",
 
         ident: ($) => prec(PREC.ATOM, $._ident),
         _ident: () => /[\p{L}_][\p{L}\p{Nd}_]*/,

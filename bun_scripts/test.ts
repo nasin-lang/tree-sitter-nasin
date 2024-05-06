@@ -38,9 +38,10 @@ async function runTest(file: string, index: number) {
 
     await writeFile(srcPath, src)
 
-    const res = await $`../bin/torvo b -s -o ${outPath} ${srcPath} && ${outPath}`
-        .quiet()
-        .nothrow()
+    const res =
+        await $`RUST_BACKTRACE=1 ../bin/torvo b -s -o ${outPath} ${srcPath} && ${outPath}`
+            .quiet()
+            .nothrow()
 
     const stdout = res.stdout.toString("utf-8")
     const stderr = res.stderr.toString("utf-8")
