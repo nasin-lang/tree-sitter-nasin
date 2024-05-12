@@ -1,7 +1,7 @@
 msg: str = "Hello from global\n"
 len: usize = 18
 
-fn print_hello(file_des: i32): usize =
+print_hello(file_des: i32): usize =
     write(file_des msg len)
 
 main: usize =

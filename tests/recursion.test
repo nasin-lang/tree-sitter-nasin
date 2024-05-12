@@ -1,6 +1,6 @@
 msg: str = "got 10\n"
 
-fn rec(i: u8): str =
+rec(i: u8): str =
     if i >= 10 then
         msg
     else

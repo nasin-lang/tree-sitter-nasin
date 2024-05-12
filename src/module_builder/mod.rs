@@ -87,7 +87,7 @@ impl<'a> ModuleBuilder<'a> {
             let ident = ident_node.get_text(self.source).to_string();
 
             match sym_node.kind() {
-                "fn_decl" => self.add_func(ident, sym_node),
+                "func_decl" => self.add_func(ident, sym_node),
                 "global_var_decl" => self.add_global(ident, sym_node),
                 _ => panic!("Unexpected symbol kind: {}", sym_node.kind()),
             }
@@ -97,7 +97,7 @@ impl<'a> ModuleBuilder<'a> {
     }
 
     pub fn add_func(&mut self, name: String, node: ts::Node<'a>) {
-        assert_eq!(node.kind(), "fn_decl");
+        assert_eq!(node.kind(), "func_decl");
 
         let func_idx = self.funcs.len() as u32;
         let func_value = VirtualValue::Func(func_idx);

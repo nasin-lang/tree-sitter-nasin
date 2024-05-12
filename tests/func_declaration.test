@@ -1,4 +1,4 @@
-fn print_hello(file_des: i32): usize =
+print_hello(file_des: i32): usize =
     write(file_des "Hello\n" 6)
 
 main: usize =

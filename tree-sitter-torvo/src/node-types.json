@@ -447,7 +447,7 @@
     "fields": {}
   },
   {
-    "type": "fn_decl",
+    "type": "func_decl",
     "named": true,
     "fields": {
       "name": {
@@ -465,7 +465,7 @@
         "required": false,
         "types": [
           {
-            "type": "fn_param",
+            "type": "func_param",
             "named": true
           }
         ]
@@ -541,7 +541,7 @@
     }
   },
   {
-    "type": "fn_param",
+    "type": "func_param",
     "named": true,
     "fields": {
       "pat": {
@@ -841,7 +841,7 @@
       "required": false,
       "types": [
         {
-          "type": "fn_decl",
+          "type": "func_decl",
           "named": true
         },
         {
@@ -1006,10 +1006,6 @@
   },
   {
     "type": "false",
-    "named": false
-  },
-  {
-    "type": "fn",
     "named": false
   },
   {

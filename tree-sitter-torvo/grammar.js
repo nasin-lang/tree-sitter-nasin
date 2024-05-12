@@ -24,21 +24,20 @@ module.exports = grammar({
     rules: {
         root: ($) => repeat($._module_stmt),
 
-        _module_stmt: ($) => choice($.fn_decl, $.global_var_decl),
+        _module_stmt: ($) => choice($.func_decl, $.global_var_decl),
 
-        fn_decl: ($) =>
+        func_decl: ($) =>
             seq(
-                "fn",
                 field("name", $.ident),
                 "(",
-                repeat(seq(field("params", $.fn_param), optional(","))),
+                repeat(seq(field("params", $.func_param), optional(","))),
                 ")",
                 optional(seq(":", field("ret_type", $._type_expr))),
                 "=",
                 field("return", $._expr),
             ),
 
-        fn_param: ($) =>
+        func_param: ($) =>
             seq(field("pat", $._pat), optional(seq(":", field("type", $._type_expr)))),
 
         global_var_decl: ($) =>
