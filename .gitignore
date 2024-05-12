@@ -3,7 +3,7 @@ node_modules/
 .cargo/
 
 # Generated files
-parser/src/proto/*
+tree-sitter-torvo/src
 
 # Compiled results
 bin/*
@@ -18,7 +18,3 @@ target/
 
 # Finder (MacOS) folder config
 .DS_Store
-
-# replit config
-.replit
-replit.nix
