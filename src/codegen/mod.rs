@@ -21,7 +21,7 @@ pub fn compile_program(program: &mir::Module, cfg: &BuildConfig) {
     }
 
     for (i, func) in program.funcs.iter().enumerate() {
-        if func.extern_.is_some() {
+        if func.body.is_empty() {
             continue;
         }
         codegen.build_function(i, func);

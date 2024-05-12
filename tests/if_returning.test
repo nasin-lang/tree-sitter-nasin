@@ -1,3 +1,6 @@
+@extern("write")
+write(f: i32, buf: str, len: usize): i32
+
 true_msg  = "it's true!\n"
 false_msg = "it's false\n"
 

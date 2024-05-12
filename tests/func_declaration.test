@@ -1,7 +1,10 @@
-print_hello(file_des: i32): usize =
-    write(file_des "Hello\n" 6)
+@extern("write")
+write(f: i32, buf: str, len: usize): i32
 
-main: usize =
+print_hello(f: i32): i32 =
+    write(f "Hello\n" 6)
+
+main: i32 =
     print_hello(1)
 
 ---

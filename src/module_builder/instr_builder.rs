@@ -8,6 +8,7 @@ use super::registry::ValueTypeDeps;
 use super::registry::VirtualValue;
 use crate::mir;
 use crate::tree_sitter_utils::TreeSitterUtils;
+use crate::utils;
 
 #[derive(Debug)]
 pub struct InstrBuilder<'a, R>
@@ -134,15 +135,9 @@ where
                 (VirtualValue::Number(number.to_string()), ty)
             }
             "string_lit" => {
-                let string = node
-                    .required_field("content")
-                    .get_text(self.source)
-                    .replace("\\\"", "\"")
-                    .replace("\\n", "\n")
-                    .replace("\\t", "\t")
-                    .replace("\\r", "\r")
-                    .replace("\\\\", "\\")
-                    .to_string();
+                let string = utils::decode_string_lit(
+                    node.required_field("content").get_text(self.source),
+                );
                 let ty = mir::Type::String(mir::StringType {
                     len: Some(string.len()),
                 });

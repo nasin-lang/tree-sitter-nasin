@@ -22,7 +22,11 @@ use super::traits::Codegen;
 use crate::config::BuildConfig;
 use crate::mir;
 
-const EXIT_FUNC_IDX: usize = 0;
+const USER_FUNC_NS: u32 = 0;
+const INTERNAL_FUNC_NS: u32 = 1;
+
+const START_FUNC_IDX: u32 = 0;
+const EXIT_FUNC_IDX: u32 = 1;
 
 pub struct BinaryCodegen {
     module: ObjectModule,
@@ -68,22 +72,24 @@ impl Codegen for BinaryCodegen {
             sig.returns.push(AbiParam::new(self.module.get_type(ret)));
         }
 
-        let user_func_name = UserFuncName::user(0, idx as u32);
+        let user_func_name = UserFuncName::user(USER_FUNC_NS, idx as u32);
 
         let func = Function::with_name_signature(user_func_name, sig);
 
-        let symbol_name = if let Some(mir::Extern { name }) = &decl.extern_ {
+        let symbol_name = if let Some(mir::Extern { name }) = &decl.extn {
             name.clone()
         } else if let Some(mir::Export { name }) = &decl.export {
-            name.clone()
+            format!("$func_{name}")
         } else {
-            format!("$func{}", idx)
+            format!("$func{idx}")
         };
 
-        let linkage = if decl.extern_.is_some() {
-            Linkage::Import
-        } else if decl.export.is_some() {
-            Linkage::Export
+        let linkage = if decl.extn.is_some() {
+            if decl.body.is_empty() {
+                Linkage::Import
+            } else {
+                Linkage::Export
+            }
         } else {
             Linkage::Local
         };
@@ -95,7 +101,7 @@ impl Codegen for BinaryCodegen {
 
         self.funcs.push(FuncBinding {
             symbol_name,
-            is_extern: decl.extern_.is_some(),
+            is_extern: decl.extn.is_some(),
             func_id,
             params: decl.params.clone(),
             ret: decl.ret.clone(),
@@ -130,20 +136,14 @@ impl Codegen for BinaryCodegen {
         let size = self.module.get_size(&decl.ty);
 
         let symbol_name = if let Some(mir::Export { name }) = &decl.export {
-            name.clone()
+            format!("$global_{name}")
         } else {
-            format!("$global{}", idx)
-        };
-
-        let linkage = if decl.export.is_some() {
-            Linkage::Export
-        } else {
-            Linkage::Local
+            format!("$global{idx}")
         };
 
         let data_id = self
             .module
-            .declare_data(&symbol_name, linkage, true, false)
+            .declare_data(&symbol_name, Linkage::Local, true, false)
             .unwrap();
 
         let mut data_desc = DataDescription::new();
@@ -168,8 +168,22 @@ impl Codegen for BinaryCodegen {
     }
 
     fn build_module_init(&mut self, init: &mir::ModuleInit) {
+        let mut exit_sig = self.module.make_signature();
+        exit_sig.params.push(AbiParam::new(types::I32));
+        let exit_func = Function::with_name_signature(
+            UserFuncName::user(INTERNAL_FUNC_NS, EXIT_FUNC_IDX),
+            exit_sig,
+        );
+        let exit_func_id = self
+            .module
+            .declare_function("exit", Linkage::Import, &exit_func.signature)
+            .unwrap();
+
         let sig = self.module.make_signature();
-        let mut func = Function::with_name_signature(UserFuncName::user(2, 0), sig);
+        let mut func = Function::with_name_signature(
+            UserFuncName::user(INTERNAL_FUNC_NS, START_FUNC_IDX),
+            sig,
+        );
         let func_id = self
             .module
             .declare_function("_start", Linkage::Export, &func.signature)
@@ -193,10 +207,9 @@ impl Codegen for BinaryCodegen {
         // entry function
         let exit_code = fn_codegen.builder.ins().iconst(types::I32, 0);
 
-        let exit_func_ref = fn_codegen.module.declare_func_in_func(
-            self.funcs[EXIT_FUNC_IDX].func_id.clone(),
-            &mut fn_codegen.builder.func,
-        );
+        let exit_func_ref = fn_codegen
+            .module
+            .declare_func_in_func(exit_func_id, &mut fn_codegen.builder.func);
         fn_codegen.builder.ins().call(exit_func_ref, &[exit_code]);
 
         fn_codegen

@@ -1,10 +1,13 @@
+@extern("write")
+write(f: i32, buf: str, len: usize): i32
+
 msg: str = "Hello from global\n"
 len: usize = 18
 
-print_hello(file_des: i32): usize =
-    write(file_des msg len)
+print_hello(f: i32): i32 =
+    write(f msg len)
 
-main: usize =
+main: i32 =
     print_hello(1)
 
 ---

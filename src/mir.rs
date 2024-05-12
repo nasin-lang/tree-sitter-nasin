@@ -4,6 +4,8 @@ use std::fmt::{Display, Write};
 
 use itertools::{izip, Itertools};
 
+use crate::utils;
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Module {
     pub name: String,
@@ -37,7 +39,7 @@ impl Display for Module {
                 write!(f, " (export \"{}\")", name)?;
             }
 
-            if let Some(Extern { name }) = &func.extern_ {
+            if let Some(Extern { name }) = &func.extn {
                 write!(f, " (extern \"{}\")", name)?;
             }
 
@@ -97,7 +99,7 @@ pub struct Func {
     pub locals: Vec<Local>,
     pub body: Vec<Instr>,
     pub export: Option<Export>,
-    pub extern_: Option<Extern>,
+    pub extn: Option<Extern>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -523,15 +525,7 @@ impl Display for ConstValue {
                 write!(f, "{}", n)?;
             }
             ConstValue::String(s) => {
-                write!(
-                    f,
-                    "\"{}\"",
-                    s.replace("\\", "\\\\")
-                        .replace("\"", "\\\"")
-                        .replace("\n", "\\n")
-                        .replace("\r", "\\r")
-                        .replace("\t", "\\t")
-                )?;
+                write!(f, "\"{}\"", utils::encode_string_lit(s))?;
             }
             ConstValue::Array(items) => {
                 write!(f, "[")?;

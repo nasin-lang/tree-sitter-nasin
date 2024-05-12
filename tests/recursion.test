@@ -1,3 +1,6 @@
+@extern("write")
+write(f: i32, buf: str, len: usize): i32
+
 msg: str = "got 10\n"
 
 rec(i: u8): str =

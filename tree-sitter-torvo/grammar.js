@@ -28,13 +28,13 @@ module.exports = grammar({
 
         func_decl: ($) =>
             seq(
+                repeat(field("directives", $.directive)),
                 field("name", $.ident),
                 "(",
                 repeat(seq(field("params", $.func_param), optional(","))),
                 ")",
                 optional(seq(":", field("ret_type", $._type_expr))),
-                "=",
-                field("return", $._expr),
+                optional(seq("=", field("return", $._expr))),
             ),
 
         func_param: ($) =>
@@ -54,6 +54,25 @@ module.exports = grammar({
                 optional(seq(":", field("type", $._type_expr))),
                 "=",
                 field("value", $._expr),
+            ),
+
+        directive: ($) =>
+            seq(
+                "@",
+                field("name", $.ident),
+                optional(seq("(", optional($._directive_args_list), seq(")"))),
+            ),
+        _directive_args_list: ($) =>
+            repeat1(seq(field("args", $._directive_arg), optional(","))),
+        _directive_arg: ($) =>
+            choice(
+                prec(PREC.ATOM, seq("(", $._directive_arg, ")")),
+                $.true,
+                $.false,
+                $.ident,
+                $.number,
+                $.string_lit,
+                $.array_lit,
             ),
 
         _expr: ($) =>

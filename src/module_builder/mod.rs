@@ -5,11 +5,11 @@ use tree_sitter as ts;
 
 use self::instr_builder::InstrBuilder;
 use self::registry::ModuleRegistry;
-use crate::mir;
 use crate::module_builder::registry::{
     FuncRegistry, Registry, ValueTypeDeps, VirtualValue,
 };
 use crate::tree_sitter_utils::TreeSitterUtils;
+use crate::{mir, utils};
 
 pub struct ModuleBuilder<'a> {
     pub name: String,
@@ -22,59 +22,12 @@ pub struct ModuleBuilder<'a> {
 
 impl<'a> ModuleBuilder<'a> {
     pub fn new(name: &str, source: &'a str) -> Self {
-        let mut registry = ModuleRegistry::new();
-
-        // TODO: detect which intrinsic functions are needed and declare only those
-        // TODO: use syscalls instead of libc functions, maybe we will have to implement a
-        //       wrapper around syscall in C to be able to call it from Cranelift
-
-        let funcs = [
-            // void exit(int status);
-            (
-                "exit",
-                mir::Func {
-                    extern_: Some(mir::Extern {
-                        name: "exit".to_string(),
-                    }),
-                    params: ext_params([mir::Type::I32]),
-                    ret: vec![],
-                    ..Default::default()
-                },
-            ),
-            // ssize_t write(int fildes, const void *buf, size_t nbyte);
-            (
-                "write",
-                mir::Func {
-                    extern_: Some(mir::Extern {
-                        name: "write".to_string(),
-                    }),
-                    params: ext_params([
-                        mir::Type::I32,
-                        mir::Type::String(mir::StringType { len: None }),
-                        mir::Type::USize,
-                    ]),
-                    ret: vec![mir::Type::USize],
-                    ..Default::default()
-                },
-            ),
-        ];
-
-        for (i, (name, func)) in funcs.iter().enumerate() {
-            let params_ty: Vec<_> = func.params.iter().map(|p| p.ty.clone()).collect();
-            registry.register_func(name, params_ty.clone());
-            registry.set_value_type(
-                VirtualValue::Func(i as u32),
-                mir::Type::func_type(params_ty, func.ret.clone()),
-                None,
-            );
-        }
-
         ModuleBuilder {
             name: name.to_string(),
             source,
+            registry: ModuleRegistry::new(),
             globals: Vec::new(),
-            funcs: funcs.into_iter().map(|(_, f)| f).collect(),
-            registry,
+            funcs: Vec::new(),
             init_body: Vec::new(),
         }
     }
@@ -132,12 +85,16 @@ impl<'a> ModuleBuilder<'a> {
             .module_registry
             .register_func(&name, params_ty);
 
-        let ret = node
+        let mut ret = node
             .field("ret_type")
             .map_or(mir::Type::Unknown, |ty_node| {
                 local_builder.parse_type(&ty_node)
             });
-        let (_, ret) = local_builder.add_expr(&node.required_field("return"), Some(ret));
+
+        if let Some(return_node) = node.field("return") {
+            let (_, inferred_ret) = local_builder.add_expr(&return_node, Some(ret));
+            ret = inferred_ret;
+        }
 
         if ret.is_ambig() {
             panic!("Type should be known for function return: {}", name);
@@ -156,8 +113,28 @@ impl<'a> ModuleBuilder<'a> {
             None,
         );
 
+        let mut extn: Option<mir::Extern> = None;
+        for directive_node in node.iter_field("directives") {
+            let args_nodes: Vec<_> = directive_node.iter_field("args").collect();
+            match directive_node.required_field("name").get_text(self.source) {
+                "extern" => {
+                    // TODO: error handling
+                    assert!(args_nodes.len() == 1);
+                    assert!(args_nodes[0].kind() == "string_lit");
+                    let symbol_name = utils::decode_string_lit(
+                        args_nodes[0]
+                            .required_field("content")
+                            .get_text(self.source),
+                    );
+                    extn = Some(mir::Extern { name: symbol_name });
+                }
+                _ => todo!(),
+            }
+        }
+
         self.funcs.push(mir::Func {
             export: Some(mir::Export { name }),
+            extn,
             locals,
             params,
             ret: vec![ret],
@@ -265,12 +242,7 @@ impl<'a> ModuleBuilder<'a> {
         };
 
         self.globals.push(mir::Global {
-            // FIXME: read export info from the source
-            export: if name == "main" {
-                Some(mir::Export { name })
-            } else {
-                None
-            },
+            export: Some(mir::Export { name }),
             ty,
             value: const_value,
         });
@@ -293,8 +265,4 @@ impl<'a> ModuleBuilder<'a> {
             },
         }
     }
-}
-
-fn ext_params(params: impl IntoIterator<Item = mir::Type>) -> Vec<mir::Param> {
-    params.into_iter().map(|ty| mir::Param { ty }).collect()
 }

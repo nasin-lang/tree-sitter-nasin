@@ -1,4 +1,7 @@
-main: usize =
+@extern("write")
+write(f: i32, buf: str, len: usize): i32
+
+main: i32 =
     write(1 "Hello\n" 6)
 
 ---

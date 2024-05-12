@@ -3,6 +3,7 @@ pub mod config;
 pub mod mir;
 pub mod module_builder;
 mod tree_sitter_utils;
+pub mod utils;
 
 use std::path::Path;
 
