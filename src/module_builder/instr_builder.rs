@@ -17,19 +17,23 @@ where
     pub registry: &'a mut R,
     pub body: Vec<mir::Instr>,
     pub source: &'a str,
+    pub func_idx: Option<u32>,
     loaded_globals: HashMap<u32, u32>,
+    tco: bool,
 }
 
 impl<'a, R> InstrBuilder<'a, R>
 where
     R: Registry + Debug,
 {
-    pub fn new(registry: &'a mut R, source: &'a str) -> Self {
+    pub fn new(registry: &'a mut R, source: &'a str, func_idx: Option<u32>) -> Self {
         InstrBuilder {
             registry,
             body: Vec::new(),
             source,
             loaded_globals: HashMap::new(),
+            func_idx,
+            tco: false,
         }
     }
 
@@ -39,10 +43,59 @@ where
             registry: self.registry,
             source: self.source,
             loaded_globals: self.loaded_globals.clone(),
+            func_idx: self.func_idx,
+            tco: self.tco,
         }
     }
 
-    pub fn finish(self) -> Vec<mir::Instr> {
+    pub fn finish(mut self) -> Vec<mir::Instr> {
+        if self.tco {
+            let mut body = self.body;
+
+            self.body = vec![];
+
+            let params: Vec<_> = self.registry.get_params().collect();
+            let mut updating_idx_list = vec![];
+
+            for (param_idx, param) in params.into_iter().enumerate() {
+                let sig: Vec<_> = param
+                    .ty
+                    .possible_types()
+                    .into_iter()
+                    .map(mir::FuncType::id_sig)
+                    .collect();
+                let target_idx = self.registry.register_local(
+                    "",
+                    param.ty.clone(),
+                    ValueTypeDeps {
+                        sig,
+                        refs: vec![VirtualValue::Param(param_idx as u32)],
+                    },
+                );
+                self.body.push(mir::Instr::Bind(mir::BindInstr {
+                    target_idx,
+                    value: mir::Value::Param(param_idx as u32),
+                }));
+
+                updating_idx_list.push(target_idx);
+            }
+
+            let param_locals: Vec<_> = updating_idx_list
+                .iter()
+                .map(|i| mir::Value::Local(*i))
+                .collect();
+
+            for ins in &mut body {
+                ins.replace_params(&param_locals);
+            }
+
+            self.body.push(mir::Instr::Loop(mir::LoopInstr {
+                target_idx_list: vec![],
+                updating_idx_list,
+                body,
+            }));
+        }
+
         self.body
     }
 
@@ -52,7 +105,7 @@ where
                 let var_name_node = node.required_field("pat").of_kind("ident");
                 let var_name = var_name_node.get_text(self.source);
 
-                let (value, _) = self.add_expr(&node.required_field("value"));
+                let (value, _) = self.add_expr(&node.required_field("value"), None);
                 let v_value: VirtualValue = value.into();
 
                 self.registry.idents_mut().insert(var_name, v_value.clone());
@@ -66,8 +119,12 @@ where
         }
     }
 
-    pub fn add_expr(&mut self, node: &ts::Node) -> (VirtualValue, mir::Type) {
-        match node.kind() {
+    pub fn add_expr(
+        &mut self,
+        node: &ts::Node,
+        return_ty: Option<mir::Type>,
+    ) -> (VirtualValue, mir::Type) {
+        let (value, ty) = match node.kind() {
             "true" => (VirtualValue::Bool(true), mir::Type::Bool),
             "false" => (VirtualValue::Bool(false), mir::Type::Bool),
             "number" => {
@@ -93,8 +150,10 @@ where
                 (VirtualValue::String(string), ty)
             }
             "array_lit" => {
-                let (items, items_types): (Vec<_>, Vec<_>) =
-                    node.iter_field("items").map(|n| self.add_expr(&n)).unzip();
+                let (items, items_types): (Vec<_>, Vec<_>) = node
+                    .iter_field("items")
+                    .map(|n| self.add_expr(&n, None))
+                    .unzip();
 
                 let item_ty = mir::Type::merge(&items_types)
                     .expect("Array items must have same type");
@@ -106,10 +165,11 @@ where
                 let op_node = node.required_field("op");
                 let op = op_node.get_text(self.source);
 
-                let (left, left_ty) = self.add_expr(&node.required_field("left"));
+                let (left, left_ty) = self.add_expr(&node.required_field("left"), None);
                 let left = self.use_virtual_value(&left);
 
-                let (right, right_ty) = self.add_expr(&node.required_field("right"));
+                let (right, right_ty) =
+                    self.add_expr(&node.required_field("right"), None);
                 let right = self.use_virtual_value(&right);
 
                 // This will be implemented with typeclasses and generics so will be
@@ -182,7 +242,7 @@ where
             "call" => {
                 let mut args = Vec::new();
                 for arg_node in node.iter_field("args") {
-                    let (v_value, _) = self.add_expr(&arg_node);
+                    let (v_value, _) = self.add_expr(&arg_node, None);
                     let value = self.use_virtual_value(&v_value);
                     args.push(value);
                 }
@@ -227,6 +287,18 @@ where
                         .map(|mut f| f.ret.remove(0)),
                 );
 
+                if let Some(self_func_idx) = self.func_idx {
+                    if self_func_idx == func_idx {
+                        self.tco = true;
+                        self.body.push(mir::Instr::Continue(mir::ContinueInstr {
+                            count: 1,
+                            values: args,
+                        }));
+
+                        return (VirtualValue::Never, ret_ty);
+                    }
+                }
+
                 let target_idx = self.registry.register_local(
                     "",
                     ret_ty.clone(),
@@ -251,7 +323,8 @@ where
 
                 let old_idents = self.registry.idents().clone();
 
-                let (value, ty) = self.add_expr(&node.required_field("value"));
+                let (value, ty) =
+                    self.add_expr(&node.required_field("value"), return_ty.clone());
 
                 self.registry.idents_mut().clear();
                 self.registry.idents_mut().extend(old_idents);
@@ -259,91 +332,7 @@ where
                 (value, ty)
             }
             "if" => {
-                let (cond_value, _) = self.add_expr(&node.required_field("cond"));
-                let cond_value = self.use_virtual_value(&cond_value);
-
-                let (then_value, then_ty, mut then_body) =
-                    if let Some(then_node) = &node.field("then") {
-                        let mut nested = self.create_nested_builder();
-
-                        let (then_v, then_ty) = nested.add_expr(then_node);
-                        (nested.use_virtual_value(&then_v), then_ty, nested.body)
-                    } else {
-                        todo!();
-                    };
-
-                let (else_value, else_ty, mut else_body) =
-                    if let Some(else_node) = &node.field("else") {
-                        let mut nested = self.create_nested_builder();
-
-                        let (else_v, else_ty) = nested.add_expr(else_node);
-                        (nested.use_virtual_value(&else_v), else_ty, nested.body)
-                    } else {
-                        todo!();
-                    };
-
-                let ty = mir::Type::merge([&then_ty, &else_ty])
-                    .expect(&format!("Type mismatch: {} and {}", then_ty, else_ty));
-
-                let local_idx = self.registry.register_local(
-                    "",
-                    ty.clone(),
-                    ValueTypeDeps {
-                        sig: ty
-                            .possible_types()
-                            .into_iter()
-                            .map(|ty| mir::FuncType::if_sig(ty))
-                            .collect(),
-                        refs: vec![
-                            cond_value.clone().into(),
-                            then_value.clone().into(),
-                            else_value.clone().into(),
-                        ],
-                    },
-                );
-
-                // TODO: multi-value
-                then_body.push(mir::Instr::Break(mir::BreakInstr {
-                    count: 1,
-                    values: vec![then_value],
-                }));
-
-                else_body.push(mir::Instr::Break(mir::BreakInstr {
-                    count: 1,
-                    values: vec![else_value],
-                }));
-
-                self.body.push(mir::Instr::If(mir::IfInstr {
-                    target_idx_list: vec![local_idx],
-                    cond: cond_value,
-                    then_body,
-                    else_body,
-                }));
-
-                (VirtualValue::Local(local_idx), ty)
-            }
-            k => panic!("Found unexpected expression `{}`", k),
-        }
-    }
-
-    pub fn add_return(&mut self, node: &ts::Node, ty: Option<mir::Type>) -> mir::Type {
-        match node.kind() {
-            "block" => {
-                for stmt_node in node.iter_field("body") {
-                    self.add_stmt(&stmt_node);
-                }
-
-                let old_idents = self.registry.idents().clone();
-
-                let ty = self.add_return(&node.required_field("value"), ty);
-
-                self.registry.idents_mut().clear();
-                self.registry.idents_mut().extend(old_idents);
-
-                ty
-            }
-            "if" => {
-                let (cond_value, _) = self.add_expr(&node.required_field("cond"));
+                let (cond_value, _) = self.add_expr(&node.required_field("cond"), None);
                 let cond_value = self.use_virtual_value(&cond_value);
 
                 self.registry.set_value_type(
@@ -352,50 +341,125 @@ where
                     None,
                 );
 
-                let (then_ty, then_body) = if let Some(then_node) = &node.field("then") {
-                    let mut nested = self.create_nested_builder();
+                let (then_value, then_ty, then_body) =
+                    if let Some(then_node) = &node.field("then") {
+                        let (value, ty, body, tco) = {
+                            let mut nested = self.create_nested_builder();
 
-                    let then_ty = nested.add_return(then_node, ty.clone());
-                    (then_ty, nested.body)
+                            let (value, ty) = if let Some(return_ty) = return_ty.clone() {
+                                let (_, ty) = nested.add_expr(then_node, Some(return_ty));
+                                (VirtualValue::Never, ty)
+                            } else {
+                                let (v_value, ty) = nested.add_expr(then_node, None);
+                                let value = nested.use_virtual_value(&v_value);
+
+                                // TODO: multi-value
+                                nested.body.push(mir::Instr::Break(mir::BreakInstr {
+                                    count: 1,
+                                    values: vec![value.clone()],
+                                }));
+
+                                (value.into(), ty)
+                            };
+
+                            (value, ty, nested.body, nested.tco)
+                        };
+
+                        self.tco = tco;
+                        (value, ty, body)
+                    } else {
+                        todo!();
+                    };
+
+                let (else_value, else_ty, else_body) =
+                    if let Some(else_node) = &node.field("else") {
+                        let (value, ty, body, tco) = {
+                            let mut nested = self.create_nested_builder();
+
+                            let (value, ty) = if let Some(return_ty) = return_ty.clone() {
+                                let (_, ty) = nested.add_expr(else_node, Some(return_ty));
+                                (VirtualValue::Never, ty)
+                            } else {
+                                let (v_value, ty) = nested.add_expr(else_node, None);
+                                let value = nested.use_virtual_value(&v_value);
+
+                                // TODO: multi-value
+                                nested.body.push(mir::Instr::Break(mir::BreakInstr {
+                                    count: 1,
+                                    values: vec![value.clone()],
+                                }));
+
+                                (VirtualValue::from(value), ty)
+                            };
+
+                            (value, ty, nested.body, nested.tco)
+                        };
+
+                        self.tco = tco;
+                        (value, ty, body)
+                    } else {
+                        todo!();
+                    };
+
+                let ty = mir::Type::merge([&then_ty, &else_ty])
+                    .expect(&format!("Type mismatch: {} and {}", then_ty, else_ty));
+
+                let (target_idx_list, v_value) = if let Some(_) = return_ty.clone() {
+                    (vec![], VirtualValue::Never)
                 } else {
-                    todo!();
-                };
+                    let local_idx = self.registry.register_local(
+                        "",
+                        ty.clone(),
+                        ValueTypeDeps {
+                            sig: ty
+                                .possible_types()
+                                .into_iter()
+                                .map(|ty| mir::FuncType::if_sig(ty))
+                                .collect(),
+                            refs: vec![
+                                cond_value.clone().into(),
+                                then_value.clone().into(),
+                                else_value.clone().into(),
+                            ],
+                        },
+                    );
 
-                let (else_ty, else_body) = if let Some(else_node) = &node.field("else") {
-                    let mut nested = self.create_nested_builder();
-
-                    let else_ty = nested.add_return(else_node, ty.clone());
-                    (else_ty, nested.body)
-                } else {
-                    todo!();
+                    (vec![local_idx], VirtualValue::Local(local_idx))
                 };
 
                 self.body.push(mir::Instr::If(mir::IfInstr {
-                    target_idx_list: vec![],
+                    target_idx_list,
                     cond: cond_value,
                     then_body,
                     else_body,
                 }));
 
-                mir::Type::merge([&then_ty, &else_ty])
-                    .expect(&format!("Type mismatch: {} and {}", then_ty, else_ty))
+                (v_value, ty)
             }
-            _ => {
-                let (value, _) = self.add_expr(&node);
-                let value = self.use_virtual_value(&value);
+            k => panic!("Found unexpected expression `{}`", k),
+        };
 
-                self.body.push(mir::Instr::Return(mir::ReturnInstr {
-                    value: Some(value.clone()),
-                }));
-
-                if let Some(ret) = ty {
-                    self.registry
-                        .set_value_type(value.clone().into(), ret, None);
-                }
-
-                self.registry.value_type(&value.into()).unwrap()
+        if let Some(return_ty) = return_ty {
+            // These have special behavior for returning value
+            if matches!(&value, VirtualValue::Never) {
+                return (VirtualValue::Never, ty);
             }
+
+            let value = self.use_virtual_value(&value);
+            let v_value: VirtualValue = value.clone().into();
+
+            self.body.push(mir::Instr::Return(mir::ReturnInstr {
+                value: Some(value.clone()),
+            }));
+
+            self.registry
+                .set_value_type(v_value.clone(), return_ty, None);
+
+            let ty = self.registry.value_type(&v_value).unwrap();
+            return (VirtualValue::Never, ty);
         }
+
+        (value, ty)
     }
 
     pub fn use_virtual_value(&mut self, v_value: &VirtualValue) -> mir::Value {
@@ -507,6 +571,7 @@ where
 
                 mir::Value::Local(target_idx)
             }
+            VirtualValue::Never => panic!("VirtualValue::Never does not have value"),
         }
     }
 

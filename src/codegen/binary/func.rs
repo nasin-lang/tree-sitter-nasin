@@ -48,6 +48,7 @@ pub struct FnCodegen<'a> {
     global_values: HashMap<u32, GlobalValue>,
     func_refs: HashMap<u32, FuncRef>,
     jump_stack: Vec<Block>,
+    loop_jump_stack: Vec<Block>,
 }
 
 impl<'a> FnCodegen<'a> {
@@ -96,6 +97,7 @@ impl<'a> FnCodegen<'a> {
             global_values: HashMap::new(),
             func_refs: HashMap::new(),
             jump_stack: vec![],
+            loop_jump_stack: vec![],
         }
     }
 
@@ -115,6 +117,15 @@ impl<'a> FnCodegen<'a> {
 
     pub fn instr(&mut self, instr: &mir::Instr) {
         match instr {
+            mir::Instr::Bind(v) => {
+                let value = self.get_value(&v.value);
+                let local = self
+                    .locals
+                    .get_mut(v.target_idx as usize)
+                    .expect("Local not found");
+
+                local.value = Some(value);
+            }
             mir::Instr::CreateBool(v) => {
                 let local = self
                     .locals
@@ -485,18 +496,17 @@ impl<'a> FnCodegen<'a> {
                     .brif(cond, then_block, &[], else_block, &[]);
 
                 if !instr.returns() {
-                    let block = self.builder.create_block();
+                    let next_block = self.builder.create_block();
                     for idx in &v.target_idx_list {
                         let local =
                             self.locals.get_mut(*idx as usize).expect("Local not found");
-
                         let value = self
                             .builder
-                            .append_block_param(block, local.native_ty.clone());
+                            .append_block_param(next_block, local.native_ty.clone());
                         local.value = Some(value);
                     }
 
-                    self.jump_stack.push(block);
+                    self.jump_stack.push(next_block);
                 };
 
                 self.builder.switch_to_block(then_block);
@@ -504,6 +514,49 @@ impl<'a> FnCodegen<'a> {
 
                 self.builder.switch_to_block(else_block);
                 self.instrs(&v.else_body, true);
+
+                if instr.returns() {
+                    return;
+                }
+
+                if let Some(block) = self.jump_stack.pop() {
+                    self.builder.switch_to_block(block);
+                }
+            }
+            mir::Instr::Loop(v) => {
+                let loop_block = self.builder.create_block();
+                self.loop_jump_stack.push(loop_block.clone());
+
+                let mut block_args = vec![];
+                for idx in &v.updating_idx_list {
+                    let local =
+                        self.locals.get_mut(*idx as usize).expect("Local not found");
+                    let value =
+                        self.builder.append_block_param(loop_block, local.native_ty);
+
+                    block_args
+                        .push(local.value.expect("loop value should be defined yet"));
+
+                    local.value = Some(value);
+                }
+                self.builder.ins().jump(loop_block, &block_args);
+
+                if !instr.returns() {
+                    let next_block = self.builder.create_block();
+                    for idx in &v.target_idx_list {
+                        let local =
+                            self.locals.get_mut(*idx as usize).expect("Local not found");
+                        let value = self
+                            .builder
+                            .append_block_param(next_block, local.native_ty.clone());
+                        local.value = Some(value);
+                    }
+
+                    self.jump_stack.push(next_block);
+                };
+
+                self.builder.switch_to_block(loop_block);
+                self.instrs(&v.body, true);
 
                 if instr.returns() {
                     return;
@@ -533,6 +586,20 @@ impl<'a> FnCodegen<'a> {
                     .get(self.jump_stack.len() - v.count as usize)
                 else {
                     panic!("Break count is too big");
+                };
+
+                self.builder.ins().jump(block.clone(), &jump_args);
+            }
+            mir::Instr::Continue(v) => {
+                let jump_args: Vec<_> =
+                    v.values.iter().map(|x| self.get_value(x)).collect();
+
+                let Some(block) = self
+                    .loop_jump_stack
+                    .get(self.loop_jump_stack.len() - v.count as usize)
+                else {
+                    dbg!(&v.count, &self.loop_jump_stack);
+                    panic!("Continue count is too big");
                 };
 
                 self.builder.ins().jump(block.clone(), &jump_args);

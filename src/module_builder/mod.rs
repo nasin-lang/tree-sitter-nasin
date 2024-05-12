@@ -99,8 +99,17 @@ impl<'a> ModuleBuilder<'a> {
     pub fn add_func(&mut self, name: String, node: ts::Node<'a>) {
         assert_eq!(node.kind(), "fn_decl");
 
+        let func_idx = self.funcs.len() as u32;
+        let func_value = VirtualValue::Func(func_idx);
+
         let mut local_registry = FuncRegistry::new(&mut self.registry);
-        let mut local_builder = InstrBuilder::new(&mut local_registry, self.source);
+        let mut local_builder =
+            InstrBuilder::new(&mut local_registry, self.source, Some(func_idx));
+
+        local_builder
+            .registry
+            .idents
+            .insert(&name, func_value.clone());
 
         for param_node in node.iter_field("params") {
             let param_name_node = param_node.required_field("pat").of_kind("ident");
@@ -116,37 +125,36 @@ impl<'a> ModuleBuilder<'a> {
             local_builder.registry.register_param(param_name, ty);
         }
 
-        let func_idx = local_builder
-            .registry
-            .module_registry
-            .register_func(&name, local_builder.registry.get_params().map(|p| p.ty));
-        let func_value = VirtualValue::Func(func_idx);
+        let params_ty: Vec<_> =
+            local_builder.registry.get_params().map(|p| p.ty).collect();
         local_builder
             .registry
-            .idents
-            .insert(&name, func_value.clone());
+            .module_registry
+            .register_func(&name, params_ty);
 
         let ret = node
             .field("ret_type")
-            .map(|ty_node| local_builder.parse_type(&ty_node));
-        let ret = local_builder.add_return(&node.required_field("return"), ret);
-
-        let locals: Vec<_> = local_builder.registry.get_locals().collect();
-        let params: Vec<_> = local_builder.registry.get_params().collect();
+            .map_or(mir::Type::Unknown, |ty_node| {
+                local_builder.parse_type(&ty_node)
+            });
+        let (_, ret) = local_builder.add_expr(&node.required_field("return"), Some(ret));
 
         if ret.is_ambig() {
             panic!("Type should be known for function return: {}", name);
         }
 
+        let body = local_builder.finish();
+
+        let locals: Vec<_> = local_registry.get_locals().collect();
+        let params: Vec<_> = local_registry.get_params().collect();
+
         let ty = mir::Type::func_type(params.iter().map(|p| p.ty.clone()), [ret.clone()]);
 
-        local_builder.registry.module_registry.set_value_type(
+        local_registry.module_registry.set_value_type(
             func_value.clone(),
             ty.clone(),
             None,
         );
-
-        let body = local_builder.finish();
 
         self.funcs.push(mir::Func {
             export: Some(mir::Export { name }),
@@ -161,9 +169,9 @@ impl<'a> ModuleBuilder<'a> {
     pub fn add_global(&mut self, name: String, node: ts::Node<'a>) {
         assert_eq!(node.kind(), "global_var_decl");
 
-        let mut instr_builder = InstrBuilder::new(&mut self.registry, self.source);
+        let mut instr_builder = InstrBuilder::new(&mut self.registry, self.source, None);
 
-        let (v_value, ty) = instr_builder.add_expr(&node.required_field("value"));
+        let (v_value, ty) = instr_builder.add_expr(&node.required_field("value"), None);
 
         let ty = match &node.field("type") {
             Some(ty_node) => {

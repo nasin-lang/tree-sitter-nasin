@@ -6,6 +6,7 @@ use crate::mir;
 
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
 pub enum VirtualValue {
+    Never,
     Func(u32),
     Global(u32),
     Local(u32),
@@ -124,6 +125,7 @@ pub trait Registry {
         ty: mir::Type,
         produced_by: ValueTypeDeps,
     ) -> u32;
+    fn get_params(&self) -> impl Iterator<Item = mir::Param>;
     fn get_locals(&self) -> impl Iterator<Item = mir::Local>;
     fn global_type(&self, idx: u32) -> Option<mir::Type>;
     fn func_type(&self, idx: u32) -> Option<mir::Type>;
@@ -158,6 +160,7 @@ pub trait Registry {
                 ));
                 Some(mir::Type::array_type(item_ty, Some(refs.len())))
             }
+            VirtualValue::Never => panic!("VirtualValue::Never does not have type"),
         }
     }
 }
@@ -455,6 +458,10 @@ impl Registry for ModuleRegistry {
         idx as u32
     }
 
+    fn get_params(&self) -> impl Iterator<Item = mir::Param> {
+        vec![].into_iter()
+    }
+
     fn get_locals(&self) -> impl Iterator<Item = mir::Local> {
         self.init_locals.iter().map(|value_type| mir::Local {
             ty: value_type.ty.clone(),
@@ -499,13 +506,6 @@ impl<'a> FuncRegistry<'a> {
         });
         self.idents.insert(ident, VirtualValue::Param(idx as u32));
         idx as u32
-    }
-
-    pub fn get_params(&self) -> impl Iterator<Item = mir::Param> {
-        self.params
-            .clone()
-            .into_iter()
-            .map(|value_type| mir::Param { ty: value_type.ty })
     }
 }
 
@@ -575,6 +575,13 @@ impl Registry for FuncRegistry<'_> {
         self.constrain_value_type_chain(VirtualValue::Local(idx as u32), None);
 
         idx as u32
+    }
+
+    fn get_params(&self) -> impl Iterator<Item = mir::Param> {
+        self.params
+            .clone()
+            .into_iter()
+            .map(|value_type| mir::Param { ty: value_type.ty })
     }
 
     fn get_locals(&self) -> impl Iterator<Item = mir::Local> {

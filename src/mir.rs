@@ -128,6 +128,7 @@ pub struct Extern {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Instr {
+    Bind(BindInstr),
     LoadGlobal(LoadGlobalInstr),
     StoreGlobal(StoreGlobalInstr),
     CreateBool(CreateBoolInstr),
@@ -148,8 +149,16 @@ pub enum Instr {
     Lte(BinOpInstr),
     Call(CallInstr),
     If(IfInstr),
+    Loop(LoopInstr),
     Return(ReturnInstr),
     Break(BreakInstr),
+    Continue(ContinueInstr),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct BindInstr {
+    pub target_idx: u32,
+    pub value: Value,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -215,11 +224,24 @@ pub struct BreakInstr {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ContinueInstr {
+    pub count: u16,
+    pub values: Vec<Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct IfInstr {
     pub target_idx_list: Vec<u32>,
     pub cond: Value,
     pub then_body: Vec<Instr>,
     pub else_body: Vec<Instr>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct LoopInstr {
+    pub target_idx_list: Vec<u32>,
+    pub updating_idx_list: Vec<u32>,
+    pub body: Vec<Instr>,
 }
 
 impl Instr {
@@ -228,8 +250,18 @@ impl Instr {
         match self {
             Instr::Return(..) => true,
             Instr::If(v) => {
-                v.then_body.iter().any(Instr::returns)
-                    && v.else_body.iter().any(Instr::returns)
+                let then_returns = v.then_body.iter().any(Instr::returns);
+                let else_returns = v.else_body.iter().any(Instr::returns);
+                if then_returns && else_returns {
+                    return true;
+                }
+                if then_returns {
+                    return v.else_body.iter().any(Instr::jumps);
+                }
+                if else_returns {
+                    return v.then_body.iter().any(Instr::jumps);
+                }
+                return false;
             }
             _ => false,
         }
@@ -240,7 +272,71 @@ impl Instr {
     pub fn jumps(&self) -> bool {
         match self {
             Instr::Break(..) => true,
+            Instr::Continue(..) => true,
             ins => ins.returns(),
+        }
+    }
+
+    /// Replaces all references to the params with the specified values
+    pub fn replace_params(&mut self, values: &[Value]) {
+        match self {
+            Instr::Bind(v) => v.value.replace_params(values),
+            Instr::StoreGlobal(v) => v.value.replace_params(values),
+            Instr::CreateData(v) => {
+                for value in &mut v.items {
+                    value.replace_params(values);
+                }
+            }
+            Instr::Add(v)
+            | Instr::Sub(v)
+            | Instr::Mul(v)
+            | Instr::Div(v)
+            | Instr::Mod(v)
+            | Instr::Pow(v)
+            | Instr::Eq(v)
+            | Instr::Neq(v)
+            | Instr::Gt(v)
+            | Instr::Lt(v)
+            | Instr::Gte(v)
+            | Instr::Lte(v) => {
+                v.left.replace_params(values);
+                v.right.replace_params(values);
+            }
+            Instr::Call(v) => {
+                for value in &mut v.args {
+                    value.replace_params(values);
+                }
+            }
+            Instr::If(v) => {
+                v.cond.replace_params(values);
+                for instr in &mut v.then_body {
+                    instr.replace_params(values);
+                }
+                for instr in &mut v.else_body {
+                    instr.replace_params(values);
+                }
+            }
+            Instr::Loop(v) => {
+                for instr in &mut v.body {
+                    instr.replace_params(values);
+                }
+            }
+            Instr::Return(v) => {
+                if let Some(value) = &mut v.value {
+                    value.replace_params(values);
+                }
+            }
+            Instr::Break(v) => {
+                for value in &mut v.values {
+                    value.replace_params(values);
+                }
+            }
+            Instr::Continue(v) => {
+                for value in &mut v.values {
+                    value.replace_params(values);
+                }
+            }
+            _ => {}
         }
     }
 }
@@ -248,6 +344,9 @@ impl Instr {
 impl Display for Instr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self {
+            Instr::Bind(v) => {
+                write!(f, "%{} = {}", v.target_idx, v.value)?;
+            }
             Instr::LoadGlobal(v) => {
                 write!(
                     f,
@@ -283,8 +382,11 @@ impl Display for Instr {
             }
             Instr::CreateData(v) => {
                 write!(f, "%{} = create_data", v.target_idx)?;
-                for item in &v.items {
-                    write!(f, ", {}", item)?;
+                for (i, item) in v.items.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ",")?;
+                    }
+                    write!(f, " {}", item)?;
                 }
             }
             Instr::Add(v) => {
@@ -331,11 +433,11 @@ impl Display for Instr {
             }
             Instr::If(v) => {
                 if v.target_idx_list.len() > 0 {
-                    for (i, target_idx) in v.target_idx_list.iter().enumerate() {
+                    for (i, idx) in v.target_idx_list.iter().enumerate() {
                         if i > 0 {
                             write!(f, ", ")?;
                         }
-                        write!(f, "%{}", target_idx)?;
+                        write!(f, "%{}", idx)?;
                     }
                     write!(f, " = ")?;
                 }
@@ -348,19 +450,54 @@ impl Display for Instr {
                     indented(4, &v.else_body)
                 )?;
             }
+            Instr::Loop(v) => {
+                if v.target_idx_list.len() > 0 {
+                    for (i, idx) in v.target_idx_list.iter().enumerate() {
+                        if i > 0 {
+                            write!(f, ", ")?;
+                        }
+                        write!(f, "%{}", idx)?;
+                    }
+                    write!(f, " = ")?;
+                }
+
+                write!(f, "(loop")?;
+
+                if v.updating_idx_list.len() > 0 {
+                    write!(f, " (updates")?;
+                    for (i, idx) in v.updating_idx_list.iter().enumerate() {
+                        if i > 0 {
+                            write!(f, ",")?;
+                        }
+                        write!(f, " %{idx}")?;
+                    }
+                    write!(f, ")")?;
+                }
+
+                write!(f, "\n{})", indented(2, &v.body))?;
+            }
             Instr::Return(v) => {
                 write!(f, "return")?;
                 if let Some(value) = &v.value {
-                    write!(f, " {}", value)?;
+                    write!(f, " {value}")?;
                 }
             }
             Instr::Break(v) => {
                 write!(f, "break {}", v.count)?;
                 for (i, value) in v.values.iter().enumerate() {
                     if i > 0 {
-                        write!(f, ", ")?;
+                        write!(f, ",")?;
                     }
-                    write!(f, " {}", value)?;
+                    write!(f, " {value}")?;
+                }
+            }
+            Instr::Continue(v) => {
+                write!(f, "continue {}", v.count)?;
+                for (i, value) in v.values.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ",")?;
+                    }
+                    write!(f, " {value}")?;
                 }
             }
         }
@@ -771,6 +908,18 @@ pub struct FuncType {
 impl FuncType {
     pub fn new(params: Vec<Type>, ret: Vec<Type>) -> Self {
         Self { params, ret }
+    }
+
+    /// Returns a function type that takes a type as argument and returns the same type.
+    /// For this to work, the type must be an absolute type, not an ambiguous or unknown
+    /// one.
+    pub fn id_sig(ty: &Type) -> FuncType {
+        assert!(!ty.is_unknown());
+        assert!(!ty.is_ambig());
+        FuncType {
+            params: vec![ty.clone()],
+            ret: vec![ty.clone()],
+        }
     }
 
     /// Returns a function type for a binary operation with the given type. For this to
