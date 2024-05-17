@@ -1,9 +1,0 @@
-msg: str   = "Hello World\n"
-len: usize = 12
-
-fn hello(_: u8) =
-    write(1 msg len)
-
-main: u32 =
-    _ = hello(0)
-    0
