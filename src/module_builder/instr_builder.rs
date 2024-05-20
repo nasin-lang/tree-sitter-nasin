@@ -11,11 +11,8 @@ use crate::tree_sitter_utils::TreeSitterUtils;
 use crate::utils;
 
 #[derive(Debug)]
-pub struct InstrBuilder<'a, R>
-where
-    R: Registry + Debug,
-{
-    pub registry: &'a mut R,
+pub struct InstrBuilder<'a> {
+    pub registry: &'a mut Registry,
     pub body: Vec<mir::Instr>,
     pub source: &'a str,
     pub func_idx: Option<u32>,
@@ -23,11 +20,12 @@ where
     tco: bool,
 }
 
-impl<'a, R> InstrBuilder<'a, R>
-where
-    R: Registry + Debug,
-{
-    pub fn new(registry: &'a mut R, source: &'a str, func_idx: Option<u32>) -> Self {
+impl<'a> InstrBuilder<'a> {
+    pub fn new(
+        registry: &'a mut Registry,
+        source: &'a str,
+        func_idx: Option<u32>,
+    ) -> Self {
         InstrBuilder {
             registry,
             body: Vec::new(),
@@ -38,7 +36,7 @@ where
         }
     }
 
-    pub fn create_nested_builder(&mut self) -> InstrBuilder<'_, R> {
+    pub fn create_nested_builder<'b>(&'b mut self) -> InstrBuilder<'b> {
         InstrBuilder {
             body: Vec::new(),
             registry: self.registry,
@@ -109,7 +107,9 @@ where
                 let (value, _) = self.add_expr(&node.required_field("value"), None);
                 let v_value: VirtualValue = value.into();
 
-                self.registry.idents_mut().insert(var_name, v_value.clone());
+                self.registry
+                    .idents
+                    .insert(var_name.to_string(), v_value.clone());
 
                 if let Some(ty_node) = node.field("type") {
                     let ty = self.parse_type(&ty_node);
@@ -223,9 +223,10 @@ where
                 let ident_text = node.get_text(self.source);
                 let v_value = self
                     .registry
-                    .idents()
+                    .idents
                     .get(ident_text)
-                    .expect(&format!("Identifier `{}` not found", ident_text));
+                    .expect(&format!("Identifier `{}` not found", ident_text))
+                    .clone();
 
                 let ty = self
                     .registry
@@ -249,9 +250,10 @@ where
                         let func_name = func_node.get_text(self.source);
                         let func_v_value = self
                             .registry
-                            .idents()
+                            .idents
                             .get(func_name)
-                            .expect(&format!("Function `{}` not found", func_name));
+                            .expect(&format!("Function `{}` not found", func_name))
+                            .clone();
 
                         let ty = self.registry.value_type(&func_v_value).unwrap();
 
@@ -316,13 +318,13 @@ where
                     self.add_stmt(&stmt_node);
                 }
 
-                let old_idents = self.registry.idents().clone();
+                let old_idents = self.registry.idents.clone();
 
                 let (value, ty) =
                     self.add_expr(&node.required_field("value"), return_ty.clone());
 
-                self.registry.idents_mut().clear();
-                self.registry.idents_mut().extend(old_idents);
+                self.registry.idents.clear();
+                self.registry.idents.extend(old_idents);
 
                 (value, ty)
             }

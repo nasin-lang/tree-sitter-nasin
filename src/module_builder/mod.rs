@@ -4,17 +4,14 @@ mod registry;
 use tree_sitter as ts;
 
 use self::instr_builder::InstrBuilder;
-use self::registry::ModuleRegistry;
-use crate::module_builder::registry::{
-    FuncRegistry, Registry, ValueTypeDeps, VirtualValue,
-};
+use self::registry::{Registry, RegistryScope, ValueTypeDeps, VirtualValue};
 use crate::tree_sitter_utils::TreeSitterUtils;
 use crate::{mir, utils};
 
 pub struct ModuleBuilder<'a> {
     pub name: String,
     pub source: &'a str,
-    registry: ModuleRegistry,
+    registry: Box<Registry>,
     globals: Vec<mir::Global>,
     funcs: Vec<mir::Func>,
     init_body: Vec<mir::Instr>,
@@ -25,7 +22,7 @@ impl<'a> ModuleBuilder<'a> {
         ModuleBuilder {
             name: name.to_string(),
             source,
-            registry: ModuleRegistry::new(),
+            registry: Box::new(Registry::new(RegistryScope::Module)),
             globals: Vec::new(),
             funcs: Vec::new(),
             init_body: Vec::new(),
@@ -55,63 +52,65 @@ impl<'a> ModuleBuilder<'a> {
         let func_idx = self.funcs.len() as u32;
         let func_value = VirtualValue::Func(func_idx);
 
-        let mut local_registry = FuncRegistry::new(&mut self.registry);
-        let mut local_builder =
-            InstrBuilder::new(&mut local_registry, self.source, Some(func_idx));
+        let rpl = utils::replace_with(&mut self.registry, |self_registry| {
+            let mut local_registry = Registry::new(RegistryScope::Func(self_registry));
+            let mut local_builder =
+                InstrBuilder::new(&mut local_registry, self.source, Some(func_idx));
 
-        local_builder
-            .registry
-            .idents
-            .insert(&name, func_value.clone());
+            local_builder
+                .registry
+                .idents
+                .insert(name.clone(), func_value.clone());
 
-        for param_node in node.iter_field("params") {
-            let param_name_node = param_node.required_field("pat").of_kind("ident");
-            let param_name = param_name_node.get_text(self.source);
+            for param_node in node.iter_field("params") {
+                let param_name_node = param_node.required_field("pat").of_kind("ident");
+                let param_name = param_name_node.get_text(self.source);
 
-            let ty = param_node
-                .field("type")
-                .as_ref()
+                let ty = param_node
+                    .field("type")
+                    .as_ref()
+                    .map_or(mir::Type::Unknown, |ty_node| {
+                        local_builder.parse_type(ty_node)
+                    });
+
+                local_builder.registry.register_param(param_name, ty);
+            }
+
+            let params_ty: Vec<_> =
+                local_builder.registry.get_params().map(|p| p.ty).collect();
+            local_builder
+                .registry
+                .module_registry_mut()
+                .register_func(&name, params_ty);
+
+            let mut ret = node
+                .field("ret_type")
                 .map_or(mir::Type::Unknown, |ty_node| {
-                    local_builder.parse_type(ty_node)
+                    local_builder.parse_type(&ty_node)
                 });
 
-            local_builder.registry.register_param(param_name, ty);
-        }
+            if let Some(return_node) = node.field("return") {
+                let (_, inferred_ret) = local_builder.add_expr(&return_node, Some(ret));
+                ret = inferred_ret;
+            }
 
-        let params_ty: Vec<_> =
-            local_builder.registry.get_params().map(|p| p.ty).collect();
-        local_builder
-            .registry
-            .module_registry
-            .register_func(&name, params_ty);
+            if ret.is_ambig() {
+                panic!("Type should be known for function return: {}", name);
+            }
 
-        let mut ret = node
-            .field("ret_type")
-            .map_or(mir::Type::Unknown, |ty_node| {
-                local_builder.parse_type(&ty_node)
-            });
+            let body = local_builder.finish();
 
-        if let Some(return_node) = node.field("return") {
-            let (_, inferred_ret) = local_builder.add_expr(&return_node, Some(ret));
-            ret = inferred_ret;
-        }
+            let locals: Vec<_> = local_registry.get_locals().collect();
+            let params: Vec<_> = local_registry.get_params().collect();
 
-        if ret.is_ambig() {
-            panic!("Type should be known for function return: {}", name);
-        }
-
-        let body = local_builder.finish();
-
-        let locals: Vec<_> = local_registry.get_locals().collect();
-        let params: Vec<_> = local_registry.get_params().collect();
+            (local_registry.scope.unwrap(), (locals, params, body, ret))
+        });
+        let (locals, params, body, ret) = rpl;
 
         let ty = mir::Type::func_type(params.iter().map(|p| p.ty.clone()), [ret.clone()]);
 
-        local_registry.module_registry.set_value_type(
-            func_value.clone(),
-            ty.clone(),
-            None,
-        );
+        self.registry
+            .set_value_type(func_value.clone(), ty.clone(), None);
 
         let mut extn: Option<mir::Extern> = None;
         for directive_node in node.iter_field("directives") {
@@ -234,8 +233,8 @@ impl<'a> ModuleBuilder<'a> {
                 // global we get the local value instead of loading the global again.
                 instr_builder
                     .registry
-                    .init_idents
-                    .insert(&name, v_value.clone());
+                    .idents
+                    .insert(name.clone(), v_value.clone());
 
                 None
             }
