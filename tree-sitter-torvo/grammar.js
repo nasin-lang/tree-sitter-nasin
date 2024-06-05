@@ -7,8 +7,10 @@ const PREC = {
     MUL: 5,
     POW: 6,
     ATOM: 7,
-    KEYWORD: 8,
-    CALL: 9,
+    GET_PROP: 10,
+    KEYWORD: 9,
+    CALL: 10,
+    INSTANCE: 11,
 }
 
 function bin_op(prec_lvl, operator, operand) {
@@ -24,7 +26,7 @@ module.exports = grammar({
     rules: {
         root: ($) => repeat($._module_stmt),
 
-        _module_stmt: ($) => choice($.func_decl, $.global_var_decl),
+        _module_stmt: ($) => choice($.func_decl, $.global_var_decl, $.type_decl),
 
         func_decl: ($) =>
             seq(
@@ -81,10 +83,12 @@ module.exports = grammar({
                 $.true,
                 $.false,
                 $.ident,
+                $.get_prop,
                 $.number,
                 $.string_lit,
                 $.array_lit,
                 $.call,
+                $.record_lit,
                 $.bin_op,
                 $.block,
                 $.if,
@@ -114,6 +118,12 @@ module.exports = grammar({
         _call_args_list: ($) =>
             prec(PREC.CALL, repeat1(seq(field("args", $._expr), optional(",")))),
 
+        get_prop: ($) =>
+            prec.left(
+                PREC.GET_PROP,
+                seq(field("parent", $._expr), ".", field("prop_name", $.ident)),
+            ),
+
         string_lit: ($) =>
             prec(
                 PREC.ATOM,
@@ -126,6 +136,14 @@ module.exports = grammar({
                 PREC.ATOM,
                 seq("[", repeat(seq(field("items", $._expr), optional(","))), "]"),
             ),
+
+        record_lit: ($) =>
+            prec(
+                PREC.INSTANCE,
+                seq("{", repeat(field("fields", $.record_lit_field)), "}"),
+            ),
+        record_lit_field: ($) =>
+            seq(".", field("name", $.ident), "=", field("value", $._expr), optional(",")),
 
         block: ($) => prec(PREC.BLOCK, $._block),
         _block: ($) => prec.left($._block_clause),
@@ -166,6 +184,14 @@ module.exports = grammar({
             ),
 
         _pat: ($) => choice($.ident),
+
+        type_decl: ($) =>
+            seq("type", field("name", $.ident), "=", field("body", $._type_decl_body)),
+        _type_decl_body: ($) => choice($.record_type),
+
+        record_type: ($) => seq("{", repeat(field("fields", $.record_type_field)), "}"),
+        record_type_field: ($) =>
+            seq(field("name", $.ident), ":", field("type", $._type_expr), optional(",")),
 
         plus: () => "+",
         minus: () => "-",

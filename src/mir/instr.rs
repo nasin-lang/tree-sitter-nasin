@@ -9,6 +9,7 @@ pub enum Instr {
     Bind(BindInstr),
     LoadGlobal(LoadGlobalInstr),
     StoreGlobal(StoreGlobalInstr),
+    LoadField(LoadFieldInstr),
     CreateBool(CreateBoolInstr),
     CreateNumber(CreateNumberInstr),
     CreateString(CreateStringInstr),
@@ -144,11 +145,18 @@ impl Display for Instr {
                 )?;
             }
             Instr::StoreGlobal(v) => {
-                write!(f, "store_global <global {}", v.global_idx)?;
+                write!(f, "store_global <global {}>", v.global_idx)?;
                 if let Some(field_idx) = v.field_idx {
                     write!(f, ".{}", field_idx)?;
                 }
-                write!(f, ">, {}", v.value)?;
+                write!(f, ", {}", v.value)?;
+            }
+            Instr::LoadField(v) => {
+                write!(
+                    f,
+                    "%{} = load_field {}.{}",
+                    v.target_idx, v.source, v.field_idx
+                )?;
             }
             Instr::CreateBool(v) => {
                 write!(f, "%{} = create_bool {}", v.target_idx, &v.value)?;
@@ -311,6 +319,13 @@ pub struct StoreGlobalInstr {
     pub global_idx: u32,
     pub field_idx: Option<u32>,
     pub value: Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct LoadFieldInstr {
+    pub target_idx: u32,
+    pub field_idx: u32,
+    pub source: Value,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

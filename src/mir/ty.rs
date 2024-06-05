@@ -2,11 +2,8 @@ use std::collections::HashSet;
 use std::fmt;
 use std::fmt::Display;
 
-use itertools::{izip, Itertools};
-
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub enum Type {
-    Unknown,
     Bool,
     I8,
     I16,
@@ -20,222 +17,29 @@ pub enum Type {
     F32,
     F64,
     Func(FuncType),
-    Ambig(AmbigType),
+    Infer(InferType),
     String(StringType),
     Array(ArrayType),
+    TypeRef(u32),
 }
 
 impl Type {
-    /// Returns the type of a number literal. Most of the time, this will be a ambiguous
-    /// type, including all possible types that the number can be parsed as.
-    pub fn num_type(num: &str) -> Self {
-        let is_float = num.contains('.');
-        let is_negative = num.starts_with('-');
-
-        if is_float {
-            Type::ambig([Self::F32, Self::F64])
-        } else if is_negative {
-            Type::ambig([
-                Self::I8,
-                Self::I16,
-                Self::I32,
-                Self::I64,
-                Self::F32,
-                Self::F64,
-            ])
-        } else {
-            Type::ambig([
-                Self::U8,
-                Self::U16,
-                Self::U32,
-                Self::U64,
-                Self::USize,
-                Self::I8,
-                Self::I16,
-                Self::I32,
-                Self::I64,
-                Self::F32,
-                Self::F64,
-            ])
-        }
-    }
-
-    /// Returns an ambiguous type with the given types. If there is only one type, returns
-    /// that type instead. If no types are given, returns an unknown type.
-    pub fn ambig(types: impl IntoIterator<Item = Type>) -> Self {
-        let ambig = AmbigType::new(types);
-
-        if ambig.types.len() == 1 {
-            return ambig.types[0].clone();
-        }
-
-        if ambig.types.is_empty() {
-            return Self::Unknown;
-        }
-
-        Self::Ambig(ambig)
-    }
-
-    /// Returns a type for a function. If any of the arguments or the return type is
-    /// ambiguous, returns an ambiguous type for all combinations of the function
-    /// signature.
-    pub fn func_type(
-        args: impl IntoIterator<Item = Type>,
-        ret: impl IntoIterator<Item = Type>,
-    ) -> Self {
-        let args = args
-            .into_iter()
-            .map(|ty| ty.into_possible_types())
-            .multi_cartesian_product();
-        let ret = ret
-            .into_iter()
-            .map(|ty| ty.into_possible_types())
-            .multi_cartesian_product();
-
-        Self::ambig(
-            args.cartesian_product(ret)
-                .map(|(args, ret)| Type::Func(FuncType::new(args, ret))),
-        )
-    }
-
-    /// Returns a type for an array. If the item type is ambiguous, returns an ambiguous
-    /// type where the item type is concrete.
-    pub fn array_type(item_type: Type, len: Option<usize>) -> Self {
-        match item_type {
-            Type::Ambig(ambig) => Type::ambig(
-                ambig
-                    .types
-                    .into_iter()
-                    .map(|ty| Type::Array(ArrayType::new(ty, len))),
-            ),
-            _ => Type::Array(ArrayType::new(item_type, len)),
-        }
-    }
-
-    /// Returns true if all the types are the same or are supertype/subtype of each other.
-    pub fn matches<'a>(types: impl IntoIterator<Item = &'a Type>) -> bool {
-        Self::merge(types).is_some()
-    }
-
-    /// Merges a list of types into a single type. If the types are incompatible, returns
-    /// None.
-    pub fn merge<'a>(types: impl IntoIterator<Item = &'a Type>) -> Option<Self> {
-        let mut iter = types.into_iter();
-        let mut res_type = iter.next()?.clone();
-
-        for ty in iter {
-            res_type = res_type.merge_with(ty)?;
-        }
-
-        Some(res_type)
-    }
-
-    /// Returns an vector listing all the possible types of a type. If the type is not
-    /// ambiguous, returns an iterator with only the type itself.
-    pub fn possible_types(&self) -> Vec<&Self> {
-        match &self {
-            Type::Ambig(ambig) => ambig.types.iter().collect(),
-            _ => vec![&self],
-        }
-    }
-
-    /// Returns an vector listing all the possible types of a type. If the type is not
-    /// ambiguous, returns an iterator with only the type itself.
-    pub fn into_possible_types(self) -> Vec<Self> {
-        match self {
-            Type::Ambig(ambig) => ambig.types,
-            _ => vec![self],
-        }
-    }
-
-    /// Merges with other type into single type. If the types are incompatible, returns
-    /// None.
-    pub fn merge_with(&self, other: &Self) -> Option<Self> {
-        if self == other || other.is_unknown() {
-            return Some(self.clone());
-        }
-
-        if self.is_unknown() {
-            return Some(other.clone());
-        }
-
-        if self.is_ambig() || other.is_ambig() {
-            let a_types = self.possible_types();
-            let b_types = other.possible_types();
-
-            let res_type = Self::ambig(
-                a_types
-                    .into_iter()
-                    .flat_map(|a| b_types.iter().filter_map(|b| a.merge_with(b))),
-            );
-
-            if res_type.is_unknown() {
-                return None;
-            }
-
-            return Some(res_type);
-        }
-
-        if let (Type::String(a), Type::String(b)) = (&self, &other) {
-            let len = match (a.len, b.len) {
-                (Some(a_len), Some(b_len)) => {
-                    if a_len != b_len {
-                        return None;
-                    }
-                    Some(a_len)
-                }
-                (Some(len), None) | (None, Some(len)) => Some(len),
-                (None, None) => None,
-            };
-
-            return Some(Self::String(StringType { len }));
-        }
-
-        if let (Type::Array(a), Type::Array(b)) = (&self, &other) {
-            let len = match (a.len, b.len) {
-                (Some(a_len), Some(b_len)) => {
-                    if a_len != b_len {
-                        return None;
-                    }
-                    Some(a_len)
-                }
-                (Some(len), None) | (None, Some(len)) => Some(len),
-                (None, None) => None,
-            };
-
-            let item = a.item.merge_with(&b.item)?;
-
-            return Some(Self::array_type(item, len));
-        }
-
-        if let (Type::Func(a), Type::Func(b)) = (&self, &other) {
-            if a.params.len() != b.params.len() || a.ret.len() != b.ret.len() {
-                return None;
-            }
-
-            let mut params = Vec::with_capacity(a.params.len());
-            let mut ret = Vec::with_capacity(a.ret.len());
-
-            for (a, b) in izip!(&a.params, &b.params) {
-                params.push(a.merge_with(b)?);
-            }
-
-            for (a, b) in izip!(&a.ret, &b.ret) {
-                ret.push(a.merge_with(b)?);
-            }
-
-            return Some(Self::func_type(params, ret));
-        }
-
-        None
+    pub fn unknown() -> Self {
+        Type::Infer(InferType {
+            types: vec![],
+            properties: vec![],
+        })
     }
 
     pub fn is_unknown(&self) -> bool {
-        matches!(self, Type::Unknown)
+        if let Type::Infer(i) = self {
+            return i.types.is_empty() && i.properties.is_empty();
+        }
+        false
     }
 
-    pub fn is_ambig(&self) -> bool {
-        matches!(self, Type::Ambig(_))
+    pub fn is_infer(&self) -> bool {
+        matches!(self, Type::Infer(_))
     }
 
     pub fn is_composite(&self) -> bool {
@@ -243,25 +47,36 @@ impl Type {
     }
 
     pub fn is_primitive(&self) -> bool {
-        !self.is_composite() && !self.is_unknown() && !self.is_ambig()
+        self.is_bool() || self.is_number()
     }
 
-    pub fn is_signed_number(&self) -> bool {
+    pub fn is_bool(&self) -> bool {
+        matches!(self, Type::Bool)
+    }
+
+    pub fn is_number(&self) -> bool {
+        self.is_signed_int() || self.is_unsigned_int() || self.is_float()
+    }
+
+    pub fn is_signed_int(&self) -> bool {
         matches!(self, Type::I8 | Type::I16 | Type::I32 | Type::I64)
     }
 
-    pub fn is_unsigned_number(&self) -> bool {
+    pub fn is_unsigned_int(&self) -> bool {
         matches!(
             self,
             Type::U8 | Type::U16 | Type::U32 | Type::U64 | Type::USize
         )
+    }
+
+    pub fn is_float(&self) -> bool {
+        matches!(self, Type::F32 | Type::F64)
     }
 }
 
 impl Display for Type {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self {
-            Type::Unknown => write!(f, "unknown"),
             Type::Bool => write!(f, "bool"),
             Type::I8 => write!(f, "i8"),
             Type::I16 => write!(f, "i16"),
@@ -297,8 +112,8 @@ impl Display for Type {
 
                 Ok(())
             }
-            Type::Ambig(v) => {
-                write!(f, "(ambig")?;
+            Type::Infer(v) => {
+                write!(f, "(infer")?;
                 for t in &v.types {
                     write!(f, " {}", t)?;
                 }
@@ -321,6 +136,7 @@ impl Display for Type {
                 write!(f, ")")?;
                 Ok(())
             }
+            Type::TypeRef(i) => write!(f, "(type {i})"),
         }
     }
 }
@@ -340,8 +156,8 @@ impl FuncType {
     /// For this to work, the type must be an absolute type, not an ambiguous or unknown
     /// one.
     pub fn id_sig(ty: &Type) -> FuncType {
-        assert!(!ty.is_unknown());
-        assert!(!ty.is_ambig());
+        assert!(!ty.is_infer());
+        assert!(!ty.is_infer());
         FuncType {
             params: vec![ty.clone()],
             ret: vec![ty.clone()],
@@ -351,10 +167,10 @@ impl FuncType {
     /// Returns a function type for a binary operation with the given type. For this to
     /// work, the type must be an absolute type, not an ambiguous or unknown one.
     pub fn binop_sig(operands_ty: &Type, result_ty: &Type) -> FuncType {
-        assert!(!operands_ty.is_unknown());
-        assert!(!operands_ty.is_ambig());
-        assert!(!result_ty.is_unknown());
-        assert!(!result_ty.is_ambig());
+        assert!(!operands_ty.is_infer());
+        assert!(!operands_ty.is_infer());
+        assert!(!result_ty.is_infer());
+        assert!(!result_ty.is_infer());
         FuncType {
             params: vec![operands_ty.clone(), operands_ty.clone()],
             ret: vec![result_ty.clone()],
@@ -364,8 +180,8 @@ impl FuncType {
     /// Returns a function type for an array const operation with the given type. For this
     /// to work, the type must be an absolute type, not an ambiguous or unknown one.
     pub fn array_sig(ty: &Type, len: usize) -> FuncType {
-        assert!(!ty.is_unknown());
-        assert!(!ty.is_ambig());
+        assert!(!ty.is_infer());
+        assert!(!ty.is_infer());
         FuncType {
             params: (0..len).map(|_| ty.clone()).collect(),
             ret: vec![Type::Array(ArrayType::new(ty.clone(), Some(len)))],
@@ -375,8 +191,8 @@ impl FuncType {
     /// Returns a function type for an if expression that results in the given type. For
     /// this to work, the type must be an absolute type, not an ambiguous or unknown one.
     pub fn if_sig(ty: &Type) -> FuncType {
-        assert!(!ty.is_unknown());
-        assert!(!ty.is_ambig());
+        assert!(!ty.is_infer());
+        assert!(!ty.is_infer());
         FuncType {
             params: vec![Type::Bool, ty.clone(), ty.clone()],
             ret: vec![ty.clone()],
@@ -385,23 +201,24 @@ impl FuncType {
 }
 
 #[derive(Debug, Clone, Eq, Hash)]
-pub struct AmbigType {
+pub struct InferType {
     pub types: Vec<Type>,
+    pub properties: Vec<(String, Type)>,
 }
 
-impl AmbigType {
-    pub fn new(types: impl IntoIterator<Item = Type>) -> Self {
-        let types: HashSet<_> = types
-            .into_iter()
-            .flat_map(|ty| ty.into_possible_types())
-            .collect();
+impl InferType {
+    pub fn new(
+        types: impl IntoIterator<Item = Type>,
+        properties: impl IntoIterator<Item = (String, Type)>,
+    ) -> Self {
         Self {
             types: types.into_iter().collect(),
+            properties: properties.into_iter().collect(),
         }
     }
 }
 
-impl PartialEq for AmbigType {
+impl PartialEq for InferType {
     fn eq(&self, other: &Self) -> bool {
         if self.types.len() != other.types.len() {
             return false;

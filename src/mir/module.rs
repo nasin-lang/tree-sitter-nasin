@@ -9,6 +9,7 @@ use crate::utils;
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Module {
     pub name: String,
+    pub typedefs: Vec<TypeDef>,
     pub globals: Vec<Global>,
     pub funcs: Vec<Func>,
     pub init: Option<ModuleInit>,
@@ -18,11 +19,34 @@ impl Display for Module {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "module \"{}\":", self.name,)?;
 
+        for (i, typedef) in self.typedefs.iter().enumerate() {
+            write!(f, "\n  type {}:", i)?;
+
+            if let Some(exprt) = &typedef.export {
+                write!(f, " {}", exprt)?;
+            }
+
+            match &typedef.body {
+                TypeDefBody::Record(v) => {
+                    write!(f, " (record")?;
+                    for field in &v.fields {
+                        write!(
+                            f,
+                            "\n    (field {} {})",
+                            utils::encode_string_lit(&field.name),
+                            &field.ty
+                        )?;
+                    }
+                    write!(f, ")")?;
+                }
+            }
+        }
+
         for (i, global) in self.globals.iter().enumerate() {
             write!(f, "\n  global {}:", i)?;
 
-            if let Some(Export { name }) = &global.export {
-                write!(f, " (export \"{}\")", name)?;
+            if let Some(exprt) = &global.export {
+                write!(f, " {}", exprt)?;
             }
 
             write!(f, " {}", global.ty)?;
@@ -35,8 +59,8 @@ impl Display for Module {
         for (i, func) in self.funcs.iter().enumerate() {
             write!(f, "\n  func {}:", i)?;
 
-            if let Some(Export { name }) = &func.export {
-                write!(f, " (export \"{}\")", name)?;
+            if let Some(exprt) = &func.export {
+                write!(f, " {}", exprt)?;
             }
 
             if let Some(Extern { name }) = &func.extn {
@@ -86,6 +110,12 @@ impl Display for Module {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct TypeDef {
+    pub body: TypeDefBody,
+    pub export: Option<Export>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Global {
     pub ty: Type,
     pub value: Option<ConstValue>,
@@ -109,6 +139,22 @@ pub struct ModuleInit {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum TypeDefBody {
+    Record(RecordType),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct RecordType {
+    pub fields: Vec<RecordTypeField>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct RecordTypeField {
+    pub name: String,
+    pub ty: Type,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Param {
     pub ty: Type,
 }
@@ -121,6 +167,13 @@ pub struct Local {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Export {
     pub name: String,
+}
+
+impl Display for Export {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "(export {})", utils::encode_string_lit(&self.name))?;
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

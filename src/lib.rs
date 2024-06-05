@@ -1,3 +1,5 @@
+#![allow(irrefutable_let_patterns)]
+
 pub mod codegen;
 pub mod config;
 pub mod mir;

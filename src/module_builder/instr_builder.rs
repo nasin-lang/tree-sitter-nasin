@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::fmt::Debug;
 
+use itertools::Itertools;
 use tree_sitter as ts;
 
 use super::registry::Registry;
@@ -57,9 +58,9 @@ impl<'a> InstrBuilder<'a> {
             let mut updating_idx_list = vec![];
 
             for (param_idx, param) in params.into_iter().enumerate() {
-                let sig: Vec<_> = param
-                    .ty
-                    .possible_types()
+                let sig: Vec<_> = self
+                    .registry
+                    .possible_types(&param.ty)
                     .into_iter()
                     .map(mir::FuncType::id_sig)
                     .collect();
@@ -130,7 +131,7 @@ impl<'a> InstrBuilder<'a> {
             "false" => (VirtualValue::Bool(false), mir::Type::Bool),
             "number" => {
                 let number = node.get_text(self.source);
-                let ty = mir::Type::num_type(number);
+                let ty = self.registry.create_num_type(number);
 
                 (VirtualValue::Number(number.to_string()), ty)
             }
@@ -150,29 +151,50 @@ impl<'a> InstrBuilder<'a> {
                     .map(|n| self.add_expr(&n, None))
                     .unzip();
 
-                let item_ty = mir::Type::merge(&items_types)
+                let item_ty = self
+                    .registry
+                    .merge_types(&items_types)
                     .expect("Array items must have same type");
-                let ty = mir::Type::array_type(item_ty.clone(), Some(items.len()));
+                let ty = self
+                    .registry
+                    .create_array_type(item_ty.clone(), Some(items.len()));
 
                 (VirtualValue::Array(items), ty)
+            }
+            "record_lit" => {
+                let (props, props_ty): (Vec<_>, Vec<_>) = node
+                    .iter_field("fields")
+                    .map(|n| {
+                        let name =
+                            n.required_field("name").get_text(self.source).to_string();
+                        let (value, ty) = self.add_expr(&n.required_field("value"), None);
+                        ((name.clone(), value), (name, ty))
+                    })
+                    .unzip();
+
+                let ty = self.registry.create_object_type(props_ty);
+
+                (VirtualValue::Record(props), ty)
             }
             "bin_op" => {
                 let op_node = node.required_field("op");
                 let op = op_node.get_text(self.source);
 
                 let (left, left_ty) = self.add_expr(&node.required_field("left"), None);
-                let left = self.use_virtual_value(&left);
+                let left = self.use_virtual_value(&left, &left_ty);
 
                 let (right, right_ty) =
                     self.add_expr(&node.required_field("right"), None);
-                let right = self.use_virtual_value(&right);
+                let right = self.use_virtual_value(&right, &right_ty);
 
                 // This will be implemented with typeclasses and generics so will be
                 // like `for T: Sum fn(T, T): T` but none of this is implemented yet so we
                 // will use the number types instead, with one signature for each type
-                let operand_ty = mir::Type::merge([&left_ty, &right_ty]).unwrap();
-                let sig: Vec<_> = operand_ty
-                    .possible_types()
+                let operand_ty =
+                    self.registry.merge_types([&left_ty, &right_ty]).unwrap();
+                let sig: Vec<_> = self
+                    .registry
+                    .possible_types(&operand_ty)
                     .into_iter()
                     .map(|ty| match op {
                         "+" | "-" | "%" | "*" | "/" | "**" => {
@@ -184,7 +206,9 @@ impl<'a> InstrBuilder<'a> {
                         op => panic!("Unhandled binary operator: {op}"),
                     })
                     .collect();
-                let ty = mir::Type::ambig(sig.iter().map(|s| s.ret[0].clone()));
+                let ty = self
+                    .registry
+                    .create_ambig_type(sig.iter().map(|s| s.ret[0].clone()));
 
                 let target_idx = self.registry.register_local(
                     "",
@@ -235,11 +259,82 @@ impl<'a> InstrBuilder<'a> {
 
                 (v_value, ty)
             }
+            "get_prop" => {
+                let (parent, parent_ty) =
+                    self.add_expr(&node.required_field("parent"), None);
+                let parent = self.use_virtual_value(&parent, &parent_ty);
+                let parent_v_value: VirtualValue = parent.clone().into();
+
+                let prop_name_node = node.required_field("prop_name");
+                let prop_name = prop_name_node.get_text(self.source).to_string();
+
+                self.registry.set_value_type(
+                    parent_v_value.clone(),
+                    self.registry
+                        .create_object_type([(prop_name.clone(), mir::Type::unknown())]),
+                    None,
+                );
+                let parent_ty =
+                    self.registry.value_type(&parent_v_value.clone()).unwrap();
+
+                let Some(prop_ty) = self.registry.get_prop_type(&parent_ty, &prop_name)
+                else {
+                    panic!(
+                        "Type {} doesn't have any property named {}",
+                        parent_ty, prop_name
+                    );
+                };
+
+                let local_idx = self.registry.register_local(
+                    "",
+                    prop_ty.clone(),
+                    ValueTypeDeps {
+                        sig: self
+                            .registry
+                            .possible_types(&parent_ty)
+                            .into_iter()
+                            .flat_map(|parent_ty| {
+                                let prop_ty = self
+                                    .registry
+                                    .get_prop_type(&parent_ty, &prop_name)
+                                    .unwrap();
+                                self.registry
+                                    .into_possible_types(prop_ty)
+                                    .into_iter()
+                                    .map(move |prop_ty| {
+                                        mir::FuncType::new(
+                                            vec![parent_ty.clone()],
+                                            vec![prop_ty.clone()],
+                                        )
+                                    })
+                            })
+                            .collect(),
+                        refs: vec![parent_v_value],
+                    },
+                );
+
+                let Some((field_idx, _)) =
+                    self.registry.get_type_field(&parent_ty, &prop_name)
+                else {
+                    // FIXME: to make this work with inferred types, I need to implement
+                    // "uncertain" field indexes. This is the same problem of overloaded
+                    // functions
+                    todo!("property access of inferred types");
+                };
+
+                self.body.push(mir::Instr::LoadField(mir::LoadFieldInstr {
+                    target_idx: local_idx,
+                    field_idx,
+                    source: parent,
+                }));
+
+                (VirtualValue::Local(local_idx), prop_ty)
+            }
             "call" => {
                 let mut args = Vec::new();
                 for arg_node in node.iter_field("args") {
-                    let (v_value, _) = self.add_expr(&arg_node, None);
-                    let value = self.use_virtual_value(&v_value);
+                    let (v_value, ty) = self.add_expr(&arg_node, None);
+                    let value = self.use_virtual_value(&v_value, &ty);
                     args.push(value);
                 }
 
@@ -267,8 +362,9 @@ impl<'a> InstrBuilder<'a> {
                     _ => todo!(),
                 };
 
-                let func_sigs: Vec<_> = func_ty
-                    .possible_types()
+                let func_sigs: Vec<_> = self
+                    .registry
+                    .possible_types(&func_ty)
                     .into_iter()
                     .filter_map(|ty| match &ty {
                         mir::Type::Func(func_ty) => Some(func_ty.clone()),
@@ -276,7 +372,7 @@ impl<'a> InstrBuilder<'a> {
                     })
                     .collect();
 
-                let ret_ty = mir::Type::ambig(
+                let ret_ty = self.registry.create_ambig_type(
                     func_sigs
                         .clone()
                         .into_iter()
@@ -329,8 +425,9 @@ impl<'a> InstrBuilder<'a> {
                 (value, ty)
             }
             "if" => {
-                let (cond_value, _) = self.add_expr(&node.required_field("cond"), None);
-                let cond_value = self.use_virtual_value(&cond_value);
+                let (cond_value, cond_ty) =
+                    self.add_expr(&node.required_field("cond"), None);
+                let cond_value = self.use_virtual_value(&cond_value, &cond_ty);
 
                 self.registry.set_value_type(
                     cond_value.clone().into(),
@@ -348,7 +445,7 @@ impl<'a> InstrBuilder<'a> {
                                 (VirtualValue::Never, ty)
                             } else {
                                 let (v_value, ty) = nested.add_expr(then_node, None);
-                                let value = nested.use_virtual_value(&v_value);
+                                let value = nested.use_virtual_value(&v_value, &ty);
 
                                 // TODO: multi-value
                                 nested.body.push(mir::Instr::Break(mir::BreakInstr {
@@ -378,7 +475,7 @@ impl<'a> InstrBuilder<'a> {
                                 (VirtualValue::Never, ty)
                             } else {
                                 let (v_value, ty) = nested.add_expr(else_node, None);
-                                let value = nested.use_virtual_value(&v_value);
+                                let value = nested.use_virtual_value(&v_value, &ty);
 
                                 // TODO: multi-value
                                 nested.body.push(mir::Instr::Break(mir::BreakInstr {
@@ -398,7 +495,9 @@ impl<'a> InstrBuilder<'a> {
                         todo!();
                     };
 
-                let ty = mir::Type::merge([&then_ty, &else_ty])
+                let ty = self
+                    .registry
+                    .merge_types([&then_ty, &else_ty])
                     .expect(&format!("Type mismatch: {} and {}", then_ty, else_ty));
 
                 let (target_idx_list, v_value) = if let Some(_) = return_ty.clone() {
@@ -408,8 +507,9 @@ impl<'a> InstrBuilder<'a> {
                         "",
                         ty.clone(),
                         ValueTypeDeps {
-                            sig: ty
-                                .possible_types()
+                            sig: self
+                                .registry
+                                .possible_types(&ty)
                                 .into_iter()
                                 .map(|ty| mir::FuncType::if_sig(ty))
                                 .collect(),
@@ -437,12 +537,16 @@ impl<'a> InstrBuilder<'a> {
         };
 
         if let Some(return_ty) = return_ty {
+            let Some(ty) = self.registry.merge_types([&ty, &return_ty]) else {
+                panic!("Type mismatch: {} and {}", &return_ty, &ty);
+            };
+
             // These have special behavior for returning value
             if matches!(&value, VirtualValue::Never) {
                 return (VirtualValue::Never, ty);
             }
 
-            let value = self.use_virtual_value(&value);
+            let value = self.use_virtual_value(&value, &ty);
             let v_value: VirtualValue = value.clone().into();
 
             self.body.push(mir::Instr::Return(mir::ReturnInstr {
@@ -459,8 +563,16 @@ impl<'a> InstrBuilder<'a> {
         (value, ty)
     }
 
-    pub fn use_virtual_value(&mut self, v_value: &VirtualValue) -> mir::Value {
-        let ty = self.registry.value_type(v_value).unwrap();
+    pub fn use_virtual_value(
+        &mut self,
+        v_value: &VirtualValue,
+        ty: &mir::Type,
+    ) -> mir::Value {
+        let v_value_ty = self.registry.value_type(v_value).unwrap();
+
+        if !self.registry.match_types([ty, &v_value_ty]) {
+            panic!("Type mismatch:\n    {}\n    {}", ty, &v_value_ty)
+        }
 
         match v_value {
             VirtualValue::Local(idx) => mir::Value::Local(*idx),
@@ -485,6 +597,8 @@ impl<'a> InstrBuilder<'a> {
                     global_idx: *idx,
                 }));
 
+                self.loaded_globals.insert(*idx, local_idx);
+
                 mir::Value::Local(local_idx)
             }
             VirtualValue::Func(_idx) => todo!(),
@@ -505,7 +619,7 @@ impl<'a> InstrBuilder<'a> {
                 mir::Value::Local(target_idx)
             }
             VirtualValue::Number(n) => {
-                let ty = mir::Type::num_type(n);
+                let ty = self.registry.create_num_type(n);
 
                 let target_idx = self.registry.register_local(
                     "",
@@ -539,22 +653,27 @@ impl<'a> InstrBuilder<'a> {
                 mir::Value::Local(target_idx)
             }
             VirtualValue::Array(items) => {
-                let items_values: Vec<_> = items
-                    .iter()
-                    .map(|item| self.use_virtual_value(item))
-                    .collect();
-
-                let mir::Type::Array(mir::ArrayType { item: item_ty, .. }) = &ty else {
+                let mir::Type::Array(mir::ArrayType { item: item_ty, .. }) = ty else {
                     unreachable!();
                 };
+
+                let items_values: Vec<_> = items
+                    .iter()
+                    .map(|item| self.use_virtual_value(item, item_ty))
+                    .collect();
 
                 let target_idx = self.registry.register_local(
                     "",
                     ty.clone(),
                     ValueTypeDeps {
-                        refs: items.clone(),
-                        sig: item_ty
-                            .possible_types()
+                        refs: items_values
+                            .iter()
+                            .cloned()
+                            .map(VirtualValue::from)
+                            .collect(),
+                        sig: self
+                            .registry
+                            .possible_types(&item_ty)
                             .into_iter()
                             .map(|t| mir::FuncType::array_sig(&t, items.len()))
                             .collect(),
@@ -568,29 +687,115 @@ impl<'a> InstrBuilder<'a> {
 
                 mir::Value::Local(target_idx)
             }
+            VirtualValue::Record(fields) => {
+                let mir::Type::TypeRef(type_ref) = ty else {
+                    panic!("Record type should be known at this point");
+                };
+
+                let mir::TypeDefBody::Record(rec_ty) = &self
+                    .registry
+                    .typedef(*type_ref)
+                    .expect("Type not defined")
+                    .body
+                else {
+                    panic!("Expect record type");
+                };
+
+                let fields_def = rec_ty.fields.clone();
+
+                let fields: Vec<_> = fields_def
+                    .iter()
+                    .map(|f| {
+                        let (_, field) = fields
+                            .iter()
+                            .find(|(name, _)| name == &f.name)
+                            .expect("Field not found");
+                        self.use_virtual_value(field, &f.ty)
+                    })
+                    .collect();
+
+                let fields_types = fields_def
+                    .iter()
+                    .map(|f| self.registry.possible_types(&f.ty).into_iter().cloned())
+                    .multi_cartesian_product();
+
+                let target_idx = self.registry.register_local(
+                    "",
+                    ty.clone(),
+                    ValueTypeDeps {
+                        refs: fields.iter().cloned().map(VirtualValue::from).collect(),
+                        sig: fields_types
+                            .map(|t| mir::FuncType::new(t, vec![ty.clone()]))
+                            .collect(),
+                    },
+                );
+
+                self.body.push(mir::Instr::CreateData(mir::CreateDataInstr {
+                    target_idx,
+                    items: fields,
+                }));
+
+                mir::Value::Local(target_idx)
+            }
             VirtualValue::Never => panic!("VirtualValue::Never does not have value"),
+        }
+    }
+
+    pub fn get_const_value(
+        &self,
+        v_value: &VirtualValue,
+        ty: &mir::Type,
+    ) -> Option<mir::ConstValue> {
+        match v_value {
+            VirtualValue::Bool(v) => Some(mir::ConstValue::Bool(*v)),
+            VirtualValue::Number(v) => Some(mir::ConstValue::Number(v.clone())),
+            VirtualValue::String(v) => Some(mir::ConstValue::String(v.clone())),
+            VirtualValue::Array(values) => {
+                let mir::Type::Array(mir::ArrayType { item: item_ty, .. }) = ty else {
+                    return None;
+                };
+
+                let values = values
+                    .iter()
+                    .map(|v| self.get_const_value(v, item_ty))
+                    .collect::<Option<Vec<_>>>()?;
+                Some(mir::ConstValue::Array(values))
+            }
+            VirtualValue::Record(fields) => {
+                let mir::Type::TypeRef(type_ref) = ty else {
+                    return None;
+                };
+
+                let mir::TypeDefBody::Record(rec_ty) =
+                    &self.registry.typedef(*type_ref)?.body
+                else {
+                    return None;
+                };
+
+                let values = rec_ty
+                    .fields
+                    .iter()
+                    .map(|f| {
+                        let (_, field) =
+                            fields.iter().find(|(name, _)| name == &f.name)?;
+                        self.get_const_value(field, &f.ty)
+                    })
+                    .collect::<Option<Vec<_>>>()?;
+                Some(mir::ConstValue::Record(values))
+            }
+            _ => None,
         }
     }
 
     pub fn parse_type(&mut self, node: &ts::Node<'_>) -> mir::Type {
         match node.kind() {
             "ident" => {
-                match node.get_text(self.source) {
-                    "i8" => mir::Type::I8,
-                    "i16" => mir::Type::I16,
-                    "i32" => mir::Type::I32,
-                    "i64" => mir::Type::I64,
-                    "u8" => mir::Type::U8,
-                    "u16" => mir::Type::U16,
-                    "u32" => mir::Type::U32,
-                    "u64" => mir::Type::U64,
-                    "usize" => mir::Type::USize,
-                    "f32" => mir::Type::F32,
-                    "f64" => mir::Type::F64,
-                    "str" => mir::Type::String(mir::StringType { len: None }),
-                    _ => {
+                let ident = node.get_text(self.source);
+                match self.registry.type_idents.get(ident) {
+                    Some(ty) => ty.clone(),
+                    None => {
                         // TODO: improve error handling
-                        panic!("{} is not a type, dummy", node.get_text(self.source));
+                        panic!("Type \"{ident}\" not found");
                     }
                 }
             }
@@ -601,7 +806,7 @@ impl<'a> InstrBuilder<'a> {
                         .parse::<usize>()
                         .expect("Cannot cast length to integer")
                 });
-                mir::Type::array_type(item_ty, len)
+                self.registry.create_array_type(item_ty, len)
             }
             k => panic!("Found unexpected type `{}`", k),
         }

@@ -18,7 +18,7 @@ use crate::mir;
 pub struct GlobalBinding {
     pub symbol_name: String,
     pub data_id: DataId,
-    pub data_desc: DataDescription,
+    pub data: DataDescription,
     pub ty: mir::Type,
     pub native_ty: types::Type,
 }
@@ -41,6 +41,7 @@ pub struct FnCodegen<'a> {
     pub symbol_name: String,
     pub module: &'a mut ObjectModule,
     pub builder: FunctionBuilder<'a>,
+    pub typedefs: &'a [mir::TypeDef],
     pub globals: &'a [GlobalBinding],
     pub funcs: &'a [FuncBinding],
     pub params: Vec<LocalBinding>,
@@ -57,6 +58,7 @@ impl<'a> FnCodegen<'a> {
         module: &'a mut ObjectModule,
         func: &'a mut Function,
         func_ctx: &'a mut FunctionBuilderContext,
+        typedefs: &'a [mir::TypeDef],
         globals: &'a [GlobalBinding],
         funcs: &'a [FuncBinding],
         params: &'a [mir::Param],
@@ -71,7 +73,7 @@ impl<'a> FnCodegen<'a> {
             .map(|(param, value)| LocalBinding {
                 value: Some(value.clone()),
                 ty: param.ty.clone(),
-                native_ty: module.get_type(&param.ty),
+                native_ty: module.get_type(&param.ty, typedefs),
             })
             .collect();
 
@@ -82,7 +84,7 @@ impl<'a> FnCodegen<'a> {
             .map(|local| LocalBinding {
                 value: None,
                 ty: local.ty.clone(),
-                native_ty: module.get_type(&local.ty),
+                native_ty: module.get_type(&local.ty, typedefs),
             })
             .collect();
 
@@ -90,6 +92,7 @@ impl<'a> FnCodegen<'a> {
             symbol_name: symbol_name.to_string(),
             module,
             builder,
+            typedefs,
             globals,
             funcs,
             params,
@@ -189,7 +192,7 @@ impl<'a> FnCodegen<'a> {
                 let mir::Type::Array(array_ty) = &local.ty else {
                     panic!("Invalid type for array")
                 };
-                let item_native_ty = self.module.get_type(&array_ty.item);
+                let item_native_ty = self.module.get_type(&array_ty.item, self.typedefs);
 
                 let ss = self.builder.create_sized_stack_slot(StackSlotData::new(
                     StackSlotKind::ExplicitSlot,
@@ -242,7 +245,8 @@ impl<'a> FnCodegen<'a> {
                 let offset = match v.field_idx {
                     Some(idx) => match &global.ty {
                         mir::Type::Array(array_ty) => {
-                            let item_native_ty = self.module.get_type(&array_ty.item);
+                            let item_native_ty =
+                                self.module.get_type(&array_ty.item, &self.typedefs);
                             (idx * item_native_ty.bytes()) as i32
                         }
                         _ => panic!("Cannot store field in type {}", &global.ty),
@@ -253,6 +257,52 @@ impl<'a> FnCodegen<'a> {
                 self.builder
                     .ins()
                     .store(MemFlags::new(), value, ptr, offset);
+            }
+            mir::Instr::LoadField(v) => {
+                let source = match &v.source {
+                    mir::Value::Local(idx) => &self.locals[*idx as usize],
+                    mir::Value::Param(idx) => &self.params[*idx as usize],
+                };
+
+                let offset = match &source.ty {
+                    mir::Type::Array(array_ty) => {
+                        // FIXME: check length
+                        let item_size =
+                            self.module.get_type(&array_ty.item, &self.typedefs).bytes();
+                        (item_size * v.field_idx) as i32
+                    }
+                    mir::Type::TypeRef(idx) => {
+                        let mir::TypeDefBody::Record(rec_def) =
+                            &self.typedefs[*idx as usize].body
+                        else {
+                            panic!("Expected record type");
+                        };
+
+                        let field_idx = v.field_idx as usize;
+                        assert!(rec_def.fields.len() > field_idx);
+
+                        let offset = rec_def
+                            .fields
+                            .iter()
+                            .take(field_idx)
+                            .map(|f| {
+                                self.module.get_type(&f.ty, &self.typedefs).bytes() as i32
+                            })
+                            .sum();
+
+                        offset
+                    }
+                    _ => panic!("Cannot get field {} of type {}", v.field_idx, source.ty),
+                };
+
+                let value = self.builder.ins().load(
+                    source.native_ty.clone(),
+                    MemFlags::new(),
+                    source.value.expect("source value is not defined yet"),
+                    offset,
+                );
+
+                self.locals[v.target_idx as usize].value = Some(value);
             }
             mir::Instr::Add(v) => {
                 // Different instructions for different types, might want to use some kind of
@@ -460,9 +510,9 @@ impl<'a> FnCodegen<'a> {
                     .get_mut(v.target_idx as usize)
                     .expect("Local not found");
 
-                let signed = if input_ty.is_signed_number() {
+                let signed = if input_ty.is_signed_int() {
                     true
-                } else if input_ty.is_unsigned_number() {
+                } else if input_ty.is_unsigned_int() {
                     false
                 } else {
                     panic!("Unhandled type: {input_ty}")

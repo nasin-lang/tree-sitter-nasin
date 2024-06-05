@@ -11,7 +11,7 @@ use cranelift_codegen::ir::{
 };
 use cranelift_codegen::{isa, settings, Context};
 use cranelift_frontend::FunctionBuilderContext;
-use cranelift_module::{default_libcall_names, DataDescription, Linkage, Module};
+use cranelift_module::{default_libcall_names, Linkage, Module};
 use cranelift_object::{ObjectBuilder, ObjectModule};
 use itertools::izip;
 use target_lexicon::Triple;
@@ -31,6 +31,7 @@ const EXIT_FUNC_IDX: u32 = 1;
 pub struct BinaryCodegen {
     module: ObjectModule,
     module_ctx: Context,
+    typedefs: Vec<mir::TypeDef>,
     globals: Vec<GlobalBinding>,
     funcs: Vec<FuncBinding>,
     declared_funcs: Vec<Function>,
@@ -52,6 +53,7 @@ impl BinaryCodegen {
         BinaryCodegen {
             module,
             module_ctx,
+            typedefs: Vec::new(),
             globals: Vec::new(),
             funcs: Vec::new(),
             declared_funcs: Vec::new(),
@@ -61,15 +63,21 @@ impl BinaryCodegen {
 }
 
 impl Codegen for BinaryCodegen {
+    fn declare_typedef(&mut self, _idx: usize, decl: &mir::TypeDef) {
+        self.typedefs.push(decl.clone());
+    }
+
     fn declare_function(&mut self, idx: usize, decl: &mir::Func) {
         let mut sig = self.module.make_signature();
 
         for param in &decl.params {
-            sig.params
-                .push(AbiParam::new(self.module.get_type(&param.ty)));
+            sig.params.push(AbiParam::new(
+                self.module.get_type(&param.ty, &self.typedefs),
+            ));
         }
         for ret in &decl.ret {
-            sig.returns.push(AbiParam::new(self.module.get_type(ret)));
+            sig.returns
+                .push(AbiParam::new(self.module.get_type(ret, &self.typedefs)));
         }
 
         let user_func_name = UserFuncName::user(USER_FUNC_NS, idx as u32);
@@ -120,6 +128,7 @@ impl Codegen for BinaryCodegen {
             &mut self.module,
             func,
             &mut func_ctx,
+            &self.typedefs,
             &self.globals,
             &self.funcs,
             &decl.params,
@@ -132,38 +141,25 @@ impl Codegen for BinaryCodegen {
     }
 
     fn declare_global(&mut self, idx: usize, decl: &mir::Global) {
-        let native_ty = self.module.get_type(&decl.ty);
-        let size = self.module.get_size(&decl.ty);
-
         let symbol_name = if let Some(mir::Export { name }) = &decl.export {
             format!("$global_{name}")
         } else {
             format!("$global{idx}")
         };
 
-        let data_id = self
-            .module
-            .declare_data(&symbol_name, Linkage::Local, true, false)
-            .unwrap();
-
-        let mut data_desc = DataDescription::new();
-        match &decl.value {
-            Some(v) => {
-                data_desc.define(self.module.serialize(&decl.ty, v).into());
-            }
-            _ => {
-                data_desc.define_zeroinit(size);
-            }
-        }
-
-        self.module.define_data(data_id, &data_desc).unwrap();
+        let (data_id, data) = self.module.create_global_data(
+            Some(&symbol_name),
+            decl.value.as_ref(),
+            &decl.ty,
+            &self.typedefs,
+        );
 
         self.globals.push(GlobalBinding {
             symbol_name: symbol_name.clone(),
             data_id,
-            data_desc,
+            data,
             ty: decl.ty.clone(),
-            native_ty,
+            native_ty: self.module.get_type(&decl.ty, &self.typedefs),
         });
     }
 
@@ -195,6 +191,7 @@ impl Codegen for BinaryCodegen {
             &mut self.module,
             &mut func,
             &mut func_ctx,
+            &self.typedefs,
             &self.globals,
             &self.funcs,
             &[],
@@ -232,31 +229,25 @@ impl Codegen for BinaryCodegen {
     fn write_to_file(mut self, file: &Path) {
         if self.globals.len() > 0 && self.dump_clif {
             for global in &self.globals {
-                let data_init = &global.data_desc.init;
+                let data_init = &global.data.init;
                 print!(
                     "<{}> {} = data {}",
                     global.symbol_name,
                     global.data_id,
                     data_init.size()
                 );
-                match data_init {
-                    cranelift_module::Init::Zeros { size } => {
-                        println!(" {{{}}}", size);
-                    }
-                    cranelift_module::Init::Bytes { contents } => {
-                        print!(" {{");
-                        for (i, byte) in contents.iter().enumerate() {
-                            if i != 0 {
-                                print!(", ");
-                            }
-                            print!("{}", byte);
+                if let cranelift_module::Init::Bytes { contents } = data_init {
+                    print!(" {{");
+                    for (i, byte) in contents.iter().enumerate() {
+                        if i != 0 {
+                            print!(" ");
                         }
-                        println!("}}");
+                        print!("{}", byte);
                     }
-                    _ => {}
+                    print!("}}");
                 }
+                println!("\n");
             }
-            println!();
         }
 
         for (func_binding, func) in izip!(self.funcs, self.declared_funcs) {

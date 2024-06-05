@@ -39,6 +39,17 @@ pub enum ConstValue {
     Number(String),
     String(String),
     Array(Vec<ConstValue>),
+    Record(Vec<ConstValue>),
+}
+
+impl ConstValue {
+    pub fn is_primitive(&self) -> bool {
+        matches!(self, ConstValue::Bool(_) | ConstValue::Number(_))
+    }
+
+    pub fn is_composite(&self) -> bool {
+        !self.is_primitive()
+    }
 }
 
 impl Display for ConstValue {
@@ -51,7 +62,7 @@ impl Display for ConstValue {
                 write!(f, "{}", n)?;
             }
             ConstValue::String(s) => {
-                write!(f, "\"{}\"", utils::encode_string_lit(s))?;
+                write!(f, "{}", utils::encode_string_lit(s))?;
             }
             ConstValue::Array(items) => {
                 write!(f, "[")?;
@@ -62,6 +73,16 @@ impl Display for ConstValue {
                     write!(f, "{}", item)?;
                 }
                 write!(f, "]")?;
+            }
+            ConstValue::Record(items) => {
+                write!(f, "{{")?;
+                for (i, item) in items.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", item)?;
+                }
+                write!(f, "}}")?;
             }
         }
         Ok(())

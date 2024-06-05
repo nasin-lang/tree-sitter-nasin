@@ -12,6 +12,10 @@ pub fn compile_program(program: &mir::Module, cfg: &BuildConfig) {
     let triple = Triple::host();
     let mut codegen = binary::BinaryCodegen::new(triple, program.name.clone(), cfg);
 
+    for (i, typedef) in program.typedefs.iter().enumerate() {
+        codegen.declare_typedef(i, typedef);
+    }
+
     for (i, global) in program.globals.iter().enumerate() {
         codegen.declare_global(i, global);
     }
