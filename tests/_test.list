@@ -1,0 +1,8 @@
+./bin/torvo b tests/hello.torv -o tests/out/hello && ./tests/out/hello
+./bin/torvo b tests/func_declaration.torv -o tests/out/func_declaration && ./tests/out/func_declaration
+./bin/torvo b tests/global_string.torv -o tests/out/global_string && ./tests/out/global_string
+./bin/torvo b tests/global_string_from_func.torv -o tests/out/global_string_from_func && ./tests/out/global_string_from_func
+./bin/torvo b tests/if.torv -o tests/out/if && ./tests/out/if
+./bin/torvo b tests/if_returning.torv -o tests/out/if_returning && ./tests/out/if_returning
+./bin/torvo b tests/record_type.torv -o tests/out/record_type && ./tests/out/record_type
+./bin/torvo b tests/recursion.torv -o tests/out/recursion && ./tests/out/recursion

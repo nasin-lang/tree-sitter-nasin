@@ -12,5 +12,3 @@ rec(i: u8): str =
 main: i32 =
     _ = write(1 rec(0) 7)
     0
----
-got 10

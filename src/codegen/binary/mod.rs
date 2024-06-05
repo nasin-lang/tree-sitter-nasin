@@ -289,7 +289,7 @@ impl Codegen for BinaryCodegen {
         .expect("libc.a not found");
 
         // TODO: windows support
-        std::process::Command::new("ld")
+        let status = std::process::Command::new("ld")
             .arg("-dynamic-linker")
             .arg(dyn_linker)
             .arg("-o")
@@ -298,5 +298,9 @@ impl Codegen for BinaryCodegen {
             .arg("-lc")
             .status()
             .expect("failed to link object file");
+
+        if !status.success() {
+            panic!("failed to link object file");
+        }
     }
 }

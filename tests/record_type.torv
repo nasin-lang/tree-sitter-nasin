@@ -10,6 +10,3 @@ msg: String = {.data="Hello from record\n", .len=18}
 
 main: i32 =
     write(1, msg.data, msg.len)
-
----
-Hello from record

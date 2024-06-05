@@ -1,6 +1,8 @@
 mod binary;
 mod traits;
 
+use std::fs;
+
 use target_lexicon::Triple;
 use traits::Codegen;
 
@@ -35,9 +37,11 @@ pub fn compile_program(program: &mir::Module, cfg: &BuildConfig) {
         codegen.build_module_init(init);
     }
 
+    fs::create_dir_all(cfg.out.parent().unwrap()).unwrap();
+
     codegen.write_to_file(&cfg.out);
 
     if !cfg.silent {
-        println!("Compiled program to {}", &program.name);
+        println!("Compiled program to {}", &cfg.out.to_string_lossy());
     }
 }

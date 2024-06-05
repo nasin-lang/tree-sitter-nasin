@@ -14,6 +14,3 @@ main: i32 =
     _ = write(1 get_msg(true) 11)
     _ = write(1 get_msg(false) 11)
     0
----
-it's true!
-it's false

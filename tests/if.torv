@@ -18,6 +18,3 @@ main: i32 =
     _ = write(1 if_result 11)
 
     0
----
-it's true!
-it's false

@@ -8,6 +8,7 @@ tree-sitter-torvo/src
 # Compiled results
 bin/*
 target/
+tests/out
 
 # dotenv environment variable files
 .env
