@@ -2,6 +2,8 @@ use std::fs;
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand, ValueEnum};
+use torvo::parser::parse_module;
+use tree_sitter as ts;
 
 #[derive(Parser, Debug)]
 #[command(name = "Torvo Language")]
@@ -62,9 +64,27 @@ fn main() {
             dump_bytecode,
             dump_clif,
         } => {
-            //let src = fs::read_to_string(&file).expect("failed to read file");
-            //let name = get_module_name(&file);
-            //
+            let src = fs::read_to_string(&file).expect("failed to read file");
+
+            let mut ts_parser = ts::Parser::new();
+            ts_parser
+                .set_language(tree_sitter_torvo::language())
+                .unwrap();
+            let tree = ts_parser
+                .parse(&src, None)
+                .expect("Could not parse this file");
+            let root_node = tree.root_node();
+
+            if dump_ast {
+                println!("{}", root_node.to_sexp());
+            }
+
+            let module = parse_module(&src, root_node);
+
+            if dump_bytecode {
+                println!("{}", module);
+            }
+
             //let cfg = BuildConfig {
             //    out: out.unwrap_or(name.clone().into()),
             //    silent,

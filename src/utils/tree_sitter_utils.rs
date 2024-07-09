@@ -2,11 +2,11 @@ use tree_sitter as ts;
 
 pub trait TreeSitterUtils<'a> {
     fn of_kind(self, kind: &'a str) -> Self;
-    fn get_text(&'a self, source: &'a str) -> &'a str;
-    fn iter_children(&'a self) -> impl Iterator<Item = ts::Node<'a>>;
-    fn iter_field(&'a self, field: &str) -> impl Iterator<Item = ts::Node<'a>>;
-    fn field(&'a self, field: &str) -> Option<ts::Node<'a>>;
-    fn required_field(&'a self, field: &str) -> ts::Node<'a>;
+    fn get_text(&self, source: &'a str) -> &'a str;
+    fn iter_children(&self) -> impl Iterator<Item = ts::Node<'a>>;
+    fn iter_field(&self, field: &str) -> impl Iterator<Item = ts::Node<'a>>;
+    fn field(&self, field: &str) -> Option<ts::Node<'a>>;
+    fn required_field(&self, field: &str) -> ts::Node<'a>;
 }
 
 impl<'a> TreeSitterUtils<'a> for ts::Node<'a> {
@@ -20,19 +20,19 @@ impl<'a> TreeSitterUtils<'a> for ts::Node<'a> {
         &source[self.start_byte()..self.end_byte()]
     }
 
-    fn iter_children(&'a self) -> impl Iterator<Item = ts::Node<'a>> {
+    fn iter_children(&self) -> impl Iterator<Item = ts::Node<'a>> {
         Children::new(self, None)
     }
 
-    fn iter_field(&'a self, field: &str) -> impl Iterator<Item = ts::Node<'a>> {
+    fn iter_field(&self, field: &str) -> impl Iterator<Item = ts::Node<'a>> {
         Children::new(self, Some(field.to_string()))
     }
 
-    fn field(&'a self, field: &str) -> Option<ts::Node<'a>> {
+    fn field(&self, field: &str) -> Option<ts::Node<'a>> {
         self.iter_field(field).next()
     }
 
-    fn required_field(&'a self, field: &str) -> ts::Node<'a> {
+    fn required_field(&self, field: &str) -> ts::Node<'a> {
         self.field(field)
             .expect(&format!("Field {} is missing", field))
     }
@@ -45,7 +45,7 @@ struct Children<'a> {
 }
 
 impl<'a> Children<'a> {
-    fn new(node: &'a ts::Node<'a>, field: Option<String>) -> Self {
+    fn new(node: &ts::Node<'a>, field: Option<String>) -> Self {
         let mut cursor = node.walk();
         let has_children = cursor.goto_first_child();
 
@@ -64,7 +64,9 @@ impl<'a> Iterator for Children<'a> {
         // Skip to a valid node
         while !self.finished {
             match (self.cursor.node().is_named(), self.field.as_ref()) {
-                (true, Some(field)) if self.cursor.field_name().is_some_and(|f| f == field) => {
+                (true, Some(field))
+                    if self.cursor.field_name().is_some_and(|f| f == field) =>
+                {
                     break
                 }
                 (true, None) => break,
