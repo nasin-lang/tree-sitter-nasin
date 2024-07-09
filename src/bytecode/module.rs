@@ -3,28 +3,21 @@ use std::fmt::Display;
 
 use super::instr::*;
 use super::ty::*;
-use super::value::*;
 use crate::utils;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Module {
-    pub name: String,
     pub typedefs: Vec<TypeDef>,
     pub globals: Vec<Global>,
     pub funcs: Vec<Func>,
-    pub init: Option<ModuleInit>,
 }
 
 impl Display for Module {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "module \"{}\":", self.name,)?;
+        write!(f, "module:")?;
 
         for (i, typedef) in self.typedefs.iter().enumerate() {
-            write!(f, "\n  type {}:", i)?;
-
-            if let Some(exprt) = &typedef.export {
-                write!(f, " {}", exprt)?;
-            }
+            write!(f, "\ntype {}:", i)?;
 
             match &typedef.body {
                 TypeDefBody::Record(v) => {
@@ -43,25 +36,17 @@ impl Display for Module {
         }
 
         for (i, global) in self.globals.iter().enumerate() {
-            write!(f, "\n  global {}:", i)?;
-
-            if let Some(exprt) = &global.export {
-                write!(f, " {}", exprt)?;
-            }
+            write!(f, "\nglobal {}:", i)?;
 
             write!(f, " {}", global.ty)?;
 
-            if let Some(value) = &global.value {
-                write!(f, " {}", value)?;
+            if global.body.len() > 0 {
+                write!(f, "\n{}", utils::indented(4, &global.body))?;
             }
         }
 
         for (i, func) in self.funcs.iter().enumerate() {
-            write!(f, "\n  func {}:", i)?;
-
-            if let Some(exprt) = &func.export {
-                write!(f, " {}", exprt)?;
-            }
+            write!(f, "\nfunc {}:", i)?;
 
             if let Some(Extern { name }) = &func.extn {
                 write!(f, " (extern \"{}\")", name)?;
@@ -75,35 +60,14 @@ impl Display for Module {
                 write!(f, ")")?;
             }
 
-            if func.ret.len() > 0 {
-                write!(f, " (returns")?;
-                for ret in &func.ret {
-                    write!(f, " {}", ret)?;
-                }
-                write!(f, ")")?;
-            }
-
-            for (i, local) in func.locals.iter().enumerate() {
-                write!(f, "\n       %{}: {}", i, local.ty)?;
-            }
+            write!(f, " (returns {})", &func.ret)?;
 
             if func.body.len() > 0 {
                 write!(f, "\n{}", utils::indented(4, &func.body))?;
             }
         }
 
-        if let Some(init) = &self.init {
-            write!(f, "\n  init: ")?;
-
-            for (i, local) in init.locals.iter().enumerate() {
-                if i > 0 {
-                    write!(f, "\n        ")?;
-                }
-                write!(f, "%{}: {}", i, local.ty)?;
-            }
-
-            write!(f, "\n{}", utils::indented(4, &init.body))?;
-        }
+        write!(f, "\n")?;
 
         Ok(())
     }
@@ -112,30 +76,20 @@ impl Display for Module {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TypeDef {
     pub body: TypeDefBody,
-    pub export: Option<Export>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Global {
     pub ty: Type,
-    pub value: Option<ConstValue>,
-    pub export: Option<Export>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
-pub struct Func {
-    pub params: Vec<Param>,
-    pub ret: Vec<Type>,
-    pub locals: Vec<Local>,
     pub body: Vec<Instr>,
-    pub export: Option<Export>,
-    pub extn: Option<Extern>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ModuleInit {
-    pub locals: Vec<Local>,
+pub struct Func {
+    pub params: Vec<Param>,
+    pub ret: Type,
     pub body: Vec<Instr>,
+    pub extn: Option<Extern>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -157,23 +111,6 @@ pub struct RecordTypeField {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Param {
     pub ty: Type,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Local {
-    pub ty: Type,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Export {
-    pub name: String,
-}
-
-impl Display for Export {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "(export {})", utils::encode_string_lit(&self.name))?;
-        Ok(())
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

@@ -1,8 +1,8 @@
 #![allow(irrefutable_let_patterns)]
 
 pub mod codegen;
+pub mod bytecode;
 pub mod config;
-pub mod mir;
 pub mod module_builder;
 mod tree_sitter_utils;
 pub mod utils;
@@ -25,19 +25,6 @@ pub fn build_file(name: &str, src: &str, cfg: &BuildConfig) {
     }
 
     compile_program(&module, cfg);
-}
-
-/// Parse the MIR of a source file
-pub fn parse_mir(name: &str, src: &str, cfg: &BuildConfig) -> mir::Module {
-    let tree = parse_tree(&src);
-
-    if cfg.dump_ast {
-        println!("{}", tree.root_node().to_sexp());
-        println!();
-    }
-
-    let builder = module_builder::ModuleBuilder::new(name, src);
-    builder.parse(&tree.root_node())
 }
 
 #[doc(hidden)]

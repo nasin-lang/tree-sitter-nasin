@@ -2,7 +2,6 @@ use std::fs;
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand, ValueEnum};
-use torvo::{build_file, config::BuildConfig, get_module_name, parse_mir, parse_tree};
 
 #[derive(Parser, Debug)]
 #[command(name = "Torvo Language")]
@@ -29,10 +28,10 @@ enum CliCommand {
         /// Whether to dump the AST of the source file
         dump_ast: bool,
         #[arg(long)]
-        /// Whether to dump the MIR of the source file
-        dump_mir: bool,
+        /// Whether to dump the parsed bytecode of the source file
+        dump_bytecode: bool,
         #[arg(long)]
-        /// Whether to dump the CLIF of the source file, if using Cranelift
+        /// Whether to dump the parsed CLIF of the source file, if using Cranelift
         dump_clif: bool,
     },
     /// Dump artifacts of compilation
@@ -46,7 +45,7 @@ enum CliCommand {
 #[derive(Debug, Clone, ValueEnum)]
 enum DumpTarget {
     Ast,
-    Mir,
+    Bytecode,
 }
 
 fn main() {
@@ -60,36 +59,36 @@ fn main() {
             out,
             silent,
             dump_ast,
-            dump_mir,
+            dump_bytecode,
             dump_clif,
         } => {
-            let src = fs::read_to_string(&file).expect("failed to read file");
-            let name = get_module_name(&file);
-
-            let cfg = BuildConfig {
-                out: out.unwrap_or(name.clone().into()),
-                silent,
-                dump_ast,
-                dump_mir,
-                dump_clif,
-            };
-
-            build_file(&name, &src, &cfg);
+            //let src = fs::read_to_string(&file).expect("failed to read file");
+            //let name = get_module_name(&file);
+            //
+            //let cfg = BuildConfig {
+            //    out: out.unwrap_or(name.clone().into()),
+            //    silent,
+            //    dump_ast,
+            //    dump_mir,
+            //    dump_clif,
+            //};
+            //
+            //build_file(&name, &src, &cfg);
         }
         CliCommand::Dump { target, file } => {
-            let src = fs::read_to_string(&file).expect("failed to read file");
-            let name = get_module_name(&file);
-
-            match target {
-                DumpTarget::Ast => {
-                    let tree = parse_tree(&src);
-                    println!("{}", tree.root_node().to_sexp());
-                }
-                DumpTarget::Mir => {
-                    let module = parse_mir(&name, &src, &BuildConfig::default());
-                    println!("{}", module);
-                }
-            }
+            //let src = fs::read_to_string(&file).expect("failed to read file");
+            //let name = get_module_name(&file);
+            //
+            //match target {
+            //    DumpTarget::Ast => {
+            //        let tree = parse_tree(&src);
+            //        println!("{}", tree.root_node().to_sexp());
+            //    }
+            //    DumpTarget::Mir => {
+            //        let module = parse_mir(&name, &src, &BuildConfig::default());
+            //        println!("{}", module);
+            //    }
+            //}
         }
     }
 }
