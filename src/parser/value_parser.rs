@@ -197,41 +197,30 @@ impl<'a> ValueParser<'a> {
                 }
             }
             ParserValue::Func(_) => todo!("func as value"),
-            ParserValue::Bool(_) | ParserValue::Number(_) | ParserValue::String(_) => {
-                self.add_instr_with_result(
-                    0,
-                    b::Instr::CreateValue(value.const_value().unwrap()),
-                );
+            ParserValue::Bool(v) => {
+                self.add_instr_with_result(0, b::Instr::CreateBool(*v));
+            }
+            ParserValue::Number(v) => {
+                self.add_instr_with_result(0, b::Instr::CreateNumber(v.clone()));
+            }
+            ParserValue::String(v) => {
+                self.add_instr_with_result(0, b::Instr::CreateString(v.clone()));
             }
             ParserValue::Array(vs) => {
-                let maybe_const_value = value.const_value();
-                if let Some(const_value) = maybe_const_value {
-                    self.add_instr_with_result(0, b::Instr::CreateValue(const_value));
-                } else {
-                    for item in vs {
-                        self.push_value(item, true);
-                    }
-                    self.add_instr_with_result(
-                        vs.len(),
-                        b::Instr::CreateArray(vs.len() as u32),
-                    );
+                for item in vs {
+                    self.push_value(item, true);
                 }
+                self.add_instr_with_result(
+                    vs.len(),
+                    b::Instr::CreateArray(vs.len() as u32),
+                );
             }
             ParserValue::Record(fields) => {
-                let maybe_const_value = value.const_value();
-                if let Some(const_value) = maybe_const_value {
-                    self.add_instr_with_result(0, b::Instr::CreateValue(const_value));
-                } else {
-                    for (_, value) in fields {
-                        self.push_value(value, true);
-                    }
-                    let fields: Vec<_> =
-                        fields.iter().map(|field| field.0.clone()).collect();
-                    self.add_instr_with_result(
-                        fields.len(),
-                        b::Instr::CreateRecord(fields),
-                    );
+                for (_, value) in fields {
+                    self.push_value(value, true);
                 }
+                let fields: Vec<_> = fields.iter().map(|field| field.0.clone()).collect();
+                self.add_instr_with_result(fields.len(), b::Instr::CreateRecord(fields));
             }
         }
     }

@@ -1,8 +1,11 @@
 use std::fmt;
 use std::fmt::Display;
 
-use super::value::*;
 use crate::utils;
+
+pub type RelativeValue = u16;
+pub type GlobalIdx = u32;
+pub type FuncIdx = u32;
 
 pub type InstrBlock = Vec<Instr>;
 pub type JumpCount = u8;
@@ -15,7 +18,9 @@ pub enum Instr {
 
     GetGlobal(GlobalIdx),
     GetField(String),
-    CreateValue(ConstValue),
+    CreateBool(bool),
+    CreateNumber(String),
+    CreateString(String),
     CreateArray(u32),
     CreateRecord(Vec<String>),
 
@@ -48,7 +53,9 @@ impl Display for Instr {
             Instr::Drop(v) => write!(f, "drop {v}")?,
             Instr::GetGlobal(idx) => write!(f, "get_global {idx}")?,
             Instr::GetField(field_name) => write!(f, "get_field {field_name}")?,
-            Instr::CreateValue(v) => write!(f, "create_value {v}")?,
+            Instr::CreateBool(v) => write!(f, "create_bool {v}")?,
+            Instr::CreateNumber(v) => write!(f, "create_number {v}")?,
+            Instr::CreateString(v) => write!(f, "create_string {v}")?,
             Instr::CreateArray(len) => write!(f, "create_array {len}")?,
             Instr::CreateRecord(fields) => {
                 write!(f, "create_record")?;
