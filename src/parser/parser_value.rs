@@ -1,3 +1,4 @@
+use crate::utils::SortedMap;
 
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
 pub enum ParserValue {
@@ -9,5 +10,5 @@ pub enum ParserValue {
     Number(String),
     String(String),
     Array(Vec<ParserValue>),
-    Record(Vec<(String, ParserValue)>),
+    Record(SortedMap<String, ParserValue>),
 }

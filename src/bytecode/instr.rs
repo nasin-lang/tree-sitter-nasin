@@ -55,7 +55,9 @@ impl Display for Instr {
             Instr::GetField(field_name) => write!(f, "get_field {field_name}")?,
             Instr::CreateBool(v) => write!(f, "create_bool {v}")?,
             Instr::CreateNumber(v) => write!(f, "create_number {v}")?,
-            Instr::CreateString(v) => write!(f, "create_string {v}")?,
+            Instr::CreateString(v) => {
+                write!(f, "create_string {}", utils::encode_string_lit(v))?
+            }
             Instr::CreateArray(len) => write!(f, "create_array {len}")?,
             Instr::CreateRecord(fields) => {
                 write!(f, "create_record")?;

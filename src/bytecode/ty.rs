@@ -1,12 +1,20 @@
-use std::collections::HashSet;
 use std::fmt;
 use std::fmt::Display;
+use std::hash::Hash;
+use std::iter::zip;
 
-use crate::utils;
+use super::TypeDef;
+use crate::utils::{self, SortedMap};
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub enum Type {
     Bool,
+    // FIXME: use interface/trait for this
+    AnyNumber,
+    // FIXME: use interface/trait for this
+    AnySignedNumber,
+    // FIXME: use interface/trait for this
+    AnyFloat,
     I8,
     I16,
     I32,
@@ -26,7 +34,9 @@ pub enum Type {
 
 impl Type {
     pub fn unknown() -> Self {
-        Type::Infer(InferType { properties: vec![] })
+        Type::Infer(InferType {
+            properties: SortedMap::new(),
+        })
     }
 
     pub fn is_unknown(&self) -> bool {
@@ -53,7 +63,10 @@ impl Type {
     }
 
     pub fn is_number(&self) -> bool {
-        self.is_signed_int() || self.is_unsigned_int() || self.is_float()
+        matches!(self, Type::AnyNumber | Type::AnySignedNumber)
+            || self.is_signed_int()
+            || self.is_unsigned_int()
+            || self.is_float()
     }
 
     pub fn is_signed_int(&self) -> bool {
@@ -68,7 +81,109 @@ impl Type {
     }
 
     pub fn is_float(&self) -> bool {
-        matches!(self, Type::F32 | Type::F64)
+        matches!(self, Type::AnyFloat | Type::F32 | Type::F64)
+    }
+
+    pub fn property(&self, name: &str, typedefs: &[TypeDef]) -> Option<Type> {
+        match self {
+            Type::Infer(v) => v.properties.get(&name.to_string()).cloned(),
+            Type::TypeRef(_) => todo!(),
+            _ => None,
+        }
+    }
+
+    pub fn intersection(&self, other: &Type, typedefs: &[TypeDef]) -> Option<Type> {
+        if self.extends(other, typedefs) {
+            return Some(self.clone());
+        }
+        if other.extends(self, typedefs) {
+            return Some(other.clone());
+        }
+
+        if let (Type::Infer(a), Type::Infer(b)) = (self, other) {
+            let mut properties = a.properties.clone();
+            for (name, b_ty) in &b.properties {
+                match properties.get_mut(name) {
+                    Some(a_ty) => *a_ty = a_ty.intersection(b_ty, typedefs)?,
+                    None => return None,
+                }
+            }
+            return Some(Type::Infer(InferType { properties }));
+        }
+
+        None
+    }
+
+    pub fn common_type(&self, other: &Type, typedefs: &[TypeDef]) -> Option<Type> {
+        if self == other {
+            return Some(self.clone());
+        }
+
+        match (self, other) {
+            (Type::String(a), Type::String(b)) => Some(Type::String(StringType {
+                len: if a.len == b.len { a.len.clone() } else { None },
+            })),
+            (Type::Array(a), Type::Array(b)) => Some(Type::Array(ArrayType {
+                item: a.item.common_type(&b.item, typedefs)?.into(),
+                len: if a.len == b.len { a.len.clone() } else { None },
+            })),
+            (Type::Infer(a), Type::Infer(b)) => {
+                let mut props = SortedMap::new();
+                for ((a_key, a_value), (b_key, b_value)) in
+                    zip(&a.properties, &b.properties)
+                {
+                    if a_key != b_key {
+                        todo!()
+                    }
+                    props.insert(
+                        a_key.to_string(),
+                        a_value.common_type(b_value, typedefs)?,
+                    );
+                }
+                Some(Type::Infer(InferType { properties: props }))
+            }
+            (a, b) => a.intersection(b, typedefs),
+        }
+    }
+
+    pub fn extends(&self, other: &Type, typedefs: &[TypeDef]) -> bool {
+        if other.is_unknown() {
+            return true;
+        }
+        match (self, other) {
+            (Type::U8, Type::AnyNumber)
+            | (Type::U16, Type::AnyNumber)
+            | (Type::U32, Type::AnyNumber)
+            | (Type::U64, Type::AnyNumber)
+            | (Type::USize, Type::AnyNumber)
+            | (Type::I8, Type::AnyNumber)
+            | (Type::I16, Type::AnyNumber)
+            | (Type::I32, Type::AnyNumber)
+            | (Type::I64, Type::AnyNumber)
+            | (Type::F32, Type::AnyNumber)
+            | (Type::F64, Type::AnyNumber)
+            | (Type::I8, Type::AnySignedNumber)
+            | (Type::I16, Type::AnySignedNumber)
+            | (Type::I32, Type::AnySignedNumber)
+            | (Type::I64, Type::AnySignedNumber)
+            | (Type::F32, Type::AnySignedNumber)
+            | (Type::F64, Type::AnySignedNumber)
+            | (Type::F32, Type::AnyFloat)
+            | (Type::F64, Type::AnyFloat) => true,
+            (Type::String(a), Type::String(b)) => a.len == b.len || b.len.is_none(),
+            (Type::Array(a), Type::Array(b)) => {
+                a.item.extends(&b.item, typedefs) && (a.len == b.len || b.len.is_none())
+            }
+            (a, Type::Infer(b)) => {
+                b.properties
+                    .iter()
+                    .all(|(name, b_ty)| match a.property(name, typedefs) {
+                        Some(a_ty) => a_ty.extends(b_ty, typedefs),
+                        None => false,
+                    })
+            }
+            (a, b) => a == b,
+        }
     }
 }
 
@@ -76,6 +191,9 @@ impl Display for Type {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self {
             Type::Bool => write!(f, "bool"),
+            Type::AnyNumber => write!(f, "AnyNumber"),
+            Type::AnySignedNumber => write!(f, "AnySignedNumber"),
+            Type::AnyFloat => write!(f, "AnyFloat"),
             Type::I8 => write!(f, "i8"),
             Type::I16 => write!(f, "i16"),
             Type::I32 => write!(f, "i32"),
@@ -116,9 +234,9 @@ impl Display for Type {
     }
 }
 
-#[derive(Debug, Clone, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct InferType {
-    pub properties: Vec<(String, Type)>,
+    pub properties: SortedMap<String, Type>,
 }
 
 impl InferType {
@@ -126,19 +244,6 @@ impl InferType {
         Self {
             properties: properties.into_iter().collect(),
         }
-    }
-}
-
-impl PartialEq for InferType {
-    fn eq(&self, other: &Self) -> bool {
-        if self.properties.len() != other.properties.len() {
-            return false;
-        }
-
-        let a_set: HashSet<_> = self.properties.iter().collect();
-        let b_set: HashSet<_> = other.properties.iter().collect();
-
-        a_set == b_set
     }
 }
 

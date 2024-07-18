@@ -1,8 +1,10 @@
 use std::fs;
 use std::path::PathBuf;
+use std::process::exit;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use torvo::parser::parse_module;
+use torvo::typecheck::type_check_module;
 use tree_sitter as ts;
 
 #[derive(Parser, Debug)]
@@ -81,7 +83,14 @@ fn main() {
 
             let module = parse_module(&src, root_node);
 
-            if dump_bytecode {
+            let (module, errors) = type_check_module(module);
+
+            if errors.len() > 0 {
+                for err in errors {
+                    eprintln!("{err}");
+                }
+                exit(1);
+            } else if dump_bytecode {
                 println!("{}", module);
             }
 

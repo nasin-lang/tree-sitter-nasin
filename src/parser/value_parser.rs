@@ -129,8 +129,6 @@ impl<'a> ValueParser<'a> {
                 self.push_value(&cond_value, false);
                 self.stack_len -= 1; // consume condition
 
-                dbg!(self.stack_len);
-
                 let then_block = if let Some(then_node) = node.field("then") {
                     self.with_scoped_parser(1, |p| {
                         let then_value = p.add_value_node(then_node);
@@ -139,8 +137,6 @@ impl<'a> ValueParser<'a> {
                 } else {
                     vec![]
                 };
-
-                dbg!(self.stack_len);
 
                 let else_block = if let Some(else_node) = node.field("else") {
                     self.with_scoped_parser(1, |p| {
@@ -151,12 +147,9 @@ impl<'a> ValueParser<'a> {
                     vec![]
                 };
 
-                dbg!(self.stack_len);
-
                 let idx =
                     self.add_instr_with_result(0, b::Instr::If(then_block, else_block));
 
-                dbg!(self.stack_len);
                 ParserValue::Local(idx)
             }
             k => panic!("Found unexpected expression `{}`", k),
@@ -219,7 +212,7 @@ impl<'a> ValueParser<'a> {
                 for (_, value) in fields {
                     self.push_value(value, true);
                 }
-                let fields: Vec<_> = fields.iter().map(|field| field.0.clone()).collect();
+                let fields: Vec<_> = fields.keys().cloned().collect();
                 self.add_instr_with_result(fields.len(), b::Instr::CreateRecord(fields));
             }
         }

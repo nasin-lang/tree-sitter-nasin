@@ -3,6 +3,7 @@ write(f: i32, buf: str, len: usize): i32
 
 true_msg  = "it's true!\n"
 false_msg = "it's false\n"
+len = 11
 
 get_msg(cond) =
     if cond then
@@ -11,6 +12,6 @@ get_msg(cond) =
         false_msg
 
 main: i32 =
-    _ = write(1 get_msg(true) 11)
-    _ = write(1 get_msg(false) 11)
+    _ = write(1, get_msg(true), len)
+    _ = write(1, get_msg(false), len)
     0

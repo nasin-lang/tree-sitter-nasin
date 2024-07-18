@@ -67,12 +67,16 @@ impl<'a> TypeParser<'a> {
         let fields = match body_node.kind() {
             "record_type" => body_node
                 .iter_field("fields")
-                .map(|field_node| b::RecordTypeField {
-                    name: field_node
-                        .required_field("name")
-                        .get_text(self.src)
-                        .to_string(),
-                    ty: self.parse_type(field_node.required_field("type")),
+                .map(|field_node| {
+                    (
+                        field_node
+                            .required_field("name")
+                            .get_text(self.src)
+                            .to_string(),
+                        b::RecordTypeField {
+                            ty: self.parse_type(field_node.required_field("type")),
+                        },
+                    )
                 })
                 .collect(),
             v => panic!("Unexpected type body kind: {v}"),

@@ -4,6 +4,7 @@ use std::fmt::Display;
 use super::instr::*;
 use super::ty::*;
 use crate::utils;
+use crate::utils::SortedMap;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Module {
@@ -22,13 +23,8 @@ impl Display for Module {
             match &typedef.body {
                 TypeDefBody::Record(v) => {
                     write!(f, " (record")?;
-                    for field in &v.fields {
-                        write!(
-                            f,
-                            "\n    (field {} {})",
-                            utils::encode_string_lit(&field.name),
-                            &field.ty
-                        )?;
+                    for (name, field) in &v.fields {
+                        write!(f, "\n    {}: (field {})", name, &field.ty)?;
                     }
                     write!(f, ")")?;
                 }
@@ -99,12 +95,11 @@ pub enum TypeDefBody {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct RecordType {
-    pub fields: Vec<RecordTypeField>,
+    pub fields: SortedMap<String, RecordTypeField>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct RecordTypeField {
-    pub name: String,
     pub ty: Type,
 }
 
