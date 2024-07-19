@@ -1,6 +1,6 @@
 use std::fmt::Debug;
 
-use crate::bytecode::{JumpCount, RelativeValue};
+use crate::bytecode::RelativeValue;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ValueStack<V, B> {
@@ -21,14 +21,14 @@ impl<V, B> ValueStack<V, B> {
     }
 
     pub fn block_len(&self) -> usize {
-        self.stack.len()
+        self.block_stack.len()
     }
 
     pub fn get(&self, pos: RelativeValue) -> Option<&V> {
         self.stack.get(self.idx(pos))
     }
 
-    pub fn get_block(&self, pos: JumpCount) -> Option<&B> {
+    pub fn get_block(&self, pos: RelativeValue) -> Option<&B> {
         self.block_stack.get(self.block_idx(pos))
     }
 
@@ -77,7 +77,7 @@ impl<V, B> ValueStack<V, B> {
         self.stack.len() - pos as usize - 1
     }
 
-    fn block_idx(&self, pos: JumpCount) -> usize {
+    fn block_idx(&self, pos: RelativeValue) -> usize {
         self.block_stack.len() - pos as usize - 1
     }
 }

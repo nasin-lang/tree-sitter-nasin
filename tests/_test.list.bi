@@ -54,9 +54,9 @@ it's false
 :i returncode 101
 :b stdout 0
 
-:b stderr 190
-thread 'main' panicked at src/typecheck/module_checker.rs:105:9:
-assertion failed: stack.len() <= input_len + 1
+:b stderr 178
+thread 'main' panicked at src/typecheck/module_checker.rs:111:9:
+assertion failed: stack.len() == 1
 note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
 
 :b shell 82

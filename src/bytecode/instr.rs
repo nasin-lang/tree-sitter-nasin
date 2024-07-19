@@ -7,13 +7,10 @@ pub type RelativeValue = u16;
 pub type GlobalIdx = u32;
 pub type FuncIdx = u32;
 
-pub type InstrBlock = Vec<Instr>;
-pub type JumpCount = u8;
-
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Instr {
     Pull(RelativeValue),
-    Dup(RelativeValue),
+    Ref(RelativeValue),
     Drop(RelativeValue),
 
     GetGlobal(GlobalIdx),
@@ -40,16 +37,18 @@ pub enum Instr {
 
     Call(FuncIdx),
 
-    If(InstrBlock, InstrBlock),
-    Loop(InstrBlock),
-    Continue(JumpCount),
+    If,
+    Else,
+    Loop,
+    End,
+    Continue,
 }
 
 impl Display for Instr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self {
             Instr::Pull(v) => write!(f, "pull {v}")?,
-            Instr::Dup(v) => write!(f, "dup {v}")?,
+            Instr::Ref(v) => write!(f, "ref {v}")?,
             Instr::Drop(v) => write!(f, "drop {v}")?,
             Instr::GetGlobal(idx) => write!(f, "get_global {idx}")?,
             Instr::GetField(field_name) => write!(f, "get_field {field_name}")?,
@@ -78,22 +77,11 @@ impl Display for Instr {
             Instr::Lt => write!(f, "lt")?,
             Instr::Lte => write!(f, "lte")?,
             Instr::Call(idx) => write!(f, "call {idx}")?,
-            Instr::If(then_bl, else_bl) => {
-                write!(f, "if:")?;
-                if then_bl.len() > 0 {
-                    write!(f, "\n{}", utils::indented(4, then_bl))?;
-                }
-                if else_bl.len() > 0 {
-                    write!(f, "\nelse:\n{}", utils::indented(4, else_bl))?;
-                }
-            }
-            Instr::Loop(bl) => {
-                write!(f, "loop:")?;
-                if bl.len() > 0 {
-                    write!(f, "\n{}", utils::indented(4, bl))?;
-                }
-            }
-            Instr::Continue(c) => write!(f, "continue {c}")?,
+            Instr::If => writeln!(f, "if")?,
+            Instr::Else => writeln!(f, "else")?,
+            Instr::Loop => writeln!(f, "loop")?,
+            Instr::End => writeln!(f, "end")?,
+            Instr::Continue => writeln!(f, "continue")?,
         }
         Ok(())
     }

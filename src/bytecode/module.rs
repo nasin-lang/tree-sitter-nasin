@@ -15,10 +15,10 @@ pub struct Module {
 
 impl Display for Module {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "module:")?;
+        writeln!(f, "module:")?;
 
         for (i, typedef) in self.typedefs.iter().enumerate() {
-            write!(f, "\ntype {}:", i)?;
+            write!(f, "type {}:", i)?;
 
             match &typedef.body {
                 TypeDefBody::Record(v) => {
@@ -29,20 +29,17 @@ impl Display for Module {
                     write!(f, ")")?;
                 }
             }
+
+            writeln!(f)?;
         }
 
         for (i, global) in self.globals.iter().enumerate() {
-            write!(f, "\nglobal {}:", i)?;
-
-            write!(f, " {}", global.ty)?;
-
-            if global.body.len() > 0 {
-                write!(f, "\n{}", utils::indented(4, &global.body))?;
-            }
+            writeln!(f, "global {}: {}", i, global.ty)?;
+            write_body(f, &global.body, 4)?;
         }
 
         for (i, func) in self.funcs.iter().enumerate() {
-            write!(f, "\nfunc {}:", i)?;
+            write!(f, "func {}:", i)?;
 
             if let Some(Extern { name }) = &func.extn {
                 write!(f, " (extern \"{}\")", name)?;
@@ -56,11 +53,9 @@ impl Display for Module {
                 write!(f, ")")?;
             }
 
-            write!(f, " (returns {})", &func.ret)?;
+            writeln!(f, " (returns {})", &func.ret)?;
 
-            if func.body.len() > 0 {
-                write!(f, "\n{}", utils::indented(4, &func.body))?;
-            }
+            write_body(f, &func.body, 4)?;
         }
 
         write!(f, "\n")?;
@@ -111,4 +106,21 @@ pub struct Param {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Extern {
     pub name: String,
+}
+
+fn write_body(
+    f: &mut fmt::Formatter<'_>,
+    body: &[Instr],
+    mut indent: usize,
+) -> fmt::Result {
+    for instr in body {
+        if matches!(instr, Instr::Else | Instr::End) {
+            indent -= 4;
+        }
+        writeln!(f, "{}", utils::indented(indent, [instr]))?;
+        if matches!(instr, Instr::If | Instr::Else | Instr::Loop) {
+            indent += 4;
+        }
+    }
+    Ok(())
 }

@@ -5,8 +5,10 @@ use tree_sitter as ts;
 use super::module_parser::ModuleParser;
 use super::parser_value::ParserValue;
 use crate::bytecode::GlobalIdx;
-use crate::utils::TreeSitterUtils;
+use crate::utils::{TreeSitterUtils, ValueStack};
 use crate::{bytecode as b, utils};
+
+type Stack<'a> = ValueStack<(), Block<'a>>;
 
 pub struct ValueParser<'a> {
     pub module_parser: ModuleParser<'a>,
@@ -15,8 +17,8 @@ pub struct ValueParser<'a> {
     pub idents: HashMap<&'a str, ParserValue>,
     src: &'a str,
     func_idx: Option<usize>,
+    stack: Stack<'a>,
     loaded_globals: HashMap<usize, usize>,
-    stack_len: usize,
 }
 
 impl<'a> ValueParser<'a> {
@@ -28,10 +30,10 @@ impl<'a> ValueParser<'a> {
     ) -> Self {
         let mut idents = module_parser.idents.clone();
 
-        let mut input_count: usize = 0;
+        let mut stack = Stack::new();
         for (i, ident) in input_idents.into_iter().enumerate() {
             idents.insert(ident, ParserValue::Local(i));
-            input_count += 1;
+            stack.push(());
         }
 
         ValueParser {
@@ -42,7 +44,7 @@ impl<'a> ValueParser<'a> {
             instrs: vec![],
             is_loop: false,
             loaded_globals: HashMap::new(),
-            stack_len: input_count,
+            stack,
         }
     }
 
@@ -127,28 +129,47 @@ impl<'a> ValueParser<'a> {
             "if" => {
                 let cond_value = self.add_value_node(node.required_field("cond"));
                 self.push_value(&cond_value, false);
-                self.stack_len -= 1; // consume condition
+                self.stack.pop(); // consume condition
 
-                let then_block = if let Some(then_node) = node.field("then") {
-                    self.with_scoped_parser(1, |p| {
-                        let then_value = p.add_value_node(then_node);
-                        p.push_value(&then_value, true);
-                    })
+                let stack_len = self.stack.len();
+                let block_len = self.stack.block_len();
+
+                self.stack.push_block(Block {
+                    stack: self.stack.clone(),
+                    idents: self.idents.clone(),
+                });
+
+                self.instrs.push(b::Instr::If);
+                let then_value = self.add_value_node(node.required_field("then"));
+                self.push_value(&then_value, true);
+
+                assert!(self.stack.len() >= stack_len + 1);
+                self.trim_stack(stack_len, 1);
+
+                if let Some(else_node) = node.field("else") {
+                    assert!(self.stack.block_len() >= block_len + 1);
+                    let block = self.stack.pop_block();
+                    self.stack = block.stack.clone();
+                    self.idents = block.idents.clone();
+
+                    self.stack.push_block(block);
+
+                    self.instrs.push(b::Instr::Else);
+                    let then_value = self.add_value_node(else_node);
+                    self.push_value(&then_value, true);
+
+                    assert!(self.stack.len() >= stack_len + 1);
+                    self.trim_stack(stack_len, 1);
                 } else {
-                    vec![]
-                };
+                    todo!("if without else");
+                }
 
-                let else_block = if let Some(else_node) = node.field("else") {
-                    self.with_scoped_parser(1, |p| {
-                        let then_value = p.add_value_node(else_node);
-                        p.push_value(&then_value, true);
-                    })
-                } else {
-                    vec![]
-                };
+                assert!(self.stack.block_len() >= block_len + 1);
+                let block = self.stack.pop_block();
+                self.stack = block.stack;
+                self.idents = block.idents;
 
-                let idx =
-                    self.add_instr_with_result(0, b::Instr::If(then_block, else_block));
+                let idx = self.add_instr_with_result(0, b::Instr::End);
 
                 ParserValue::Local(idx)
             }
@@ -163,9 +184,9 @@ impl<'a> ValueParser<'a> {
                 panic!("access of moved value")
             }
             ParserValue::Local(idx) => {
-                assert!(*idx <= self.stack_len - 1);
+                assert!(*idx <= self.stack.len() - 1);
 
-                let rel_value = (self.stack_len - idx - 1) as b::RelativeValue;
+                let rel_value = (self.stack.len() - idx - 1) as b::RelativeValue;
 
                 if will_move && rel_value == 0 {
                     return;
@@ -175,8 +196,8 @@ impl<'a> ValueParser<'a> {
                     self.instrs.push(b::Instr::Pull(rel_value));
                     self.remove_value(*idx);
                 } else {
-                    self.instrs.push(b::Instr::Dup(rel_value));
-                    self.stack_len += 1;
+                    self.instrs.push(b::Instr::Ref(rel_value));
+                    self.stack.push(());
                 }
             }
             ParserValue::Global(idx) => {
@@ -184,7 +205,7 @@ impl<'a> ValueParser<'a> {
                     self.push_value(&ParserValue::Local(*local_idx), will_move);
                 } else {
                     if !will_move {
-                        self.loaded_globals.insert(*idx, self.stack_len);
+                        self.loaded_globals.insert(*idx, self.stack.len());
                     }
                     self.add_instr_with_result(0, b::Instr::GetGlobal(*idx as GlobalIdx));
                 }
@@ -235,13 +256,16 @@ impl<'a> ValueParser<'a> {
                 self.loaded_globals.insert(g, stored_idx - 1);
             }
         }
-        self.stack_len -= 1;
+        self.stack.pop();
     }
 
     fn add_instr_with_result(&mut self, input_count: usize, instr: b::Instr) -> usize {
         self.instrs.push(instr);
-        self.stack_len = self.stack_len - input_count + 1;
-        self.stack_len - 1
+        for _ in 0..input_count {
+            self.stack.pop();
+        }
+        self.stack.push(());
+        self.stack.len() - 1
     }
 
     fn add_bin_op(
@@ -308,7 +332,7 @@ impl<'a> ValueParser<'a> {
                 ParserValue::Local(_) | ParserValue::Bool(_) | ParserValue::Number(_)
             ) {
                 self.push_value(arg, true);
-                *arg = ParserValue::Local(self.stack_len - 1);
+                *arg = ParserValue::Local(self.stack.len() - 1);
             }
         }
         for arg in &args {
@@ -347,47 +371,24 @@ impl<'a> ValueParser<'a> {
         }
     }
 
-    fn with_scoped_parser(
-        &mut self,
-        result_len: usize,
-        f: impl FnOnce(&mut ValueParser<'a>),
-    ) -> Vec<b::Instr> {
-        utils::replace_with(self, |mut this| {
-            let mut scoped_parser = ValueParser {
-                src: this.src,
-                module_parser: this.module_parser,
-                idents: this.idents.clone(),
-                func_idx: this.func_idx,
-                instrs: vec![],
-                is_loop: this.is_loop,
-                loaded_globals: this.loaded_globals.clone(),
-                stack_len: this.stack_len,
-            };
-
-            f(&mut scoped_parser);
-
-            scoped_parser.trim_stack(this.stack_len, result_len);
-
-            this.module_parser = scoped_parser.module_parser;
-            this.is_loop = scoped_parser.is_loop;
-
-            (this, scoped_parser.instrs)
-        })
-    }
-
     fn trim_stack(&mut self, bottom_len: usize, top_len: usize) {
         let len = bottom_len + top_len;
 
-        if self.stack_len < len {
+        if self.stack.len() < len {
             return;
         }
 
-        let delete_count = self.stack_len - len;
+        let delete_count = self.stack.len() - len;
         for _ in 0..delete_count {
             self.instrs
                 .push(b::Instr::Drop(top_len as b::RelativeValue));
+            self.stack.pop();
         }
-
-        self.stack_len = len;
     }
+}
+
+#[derive(Debug, Clone)]
+struct Block<'a> {
+    stack: Stack<'a>,
+    idents: HashMap<&'a str, ParserValue>,
 }

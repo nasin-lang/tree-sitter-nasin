@@ -33,7 +33,7 @@ impl TypeChecker {
     }
 
     pub fn check_module(&mut self, mut module: b::Module) -> (b::Module, Vec<TypeError>) {
-        for (i, func) in enumerate(&mut module.funcs) {
+        for func in &mut module.funcs {
             let params_idxs: Vec<_> = func
                 .params
                 .iter()
@@ -42,7 +42,7 @@ impl TypeChecker {
             let ret_idx = self.add_entry_from_type(func.ret.clone());
             self.funcs.push((params_idxs, ret_idx));
         }
-        for (i, global) in enumerate(&module.globals) {
+        for global in &module.globals {
             let idx = self.add_entry_from_type(global.ty.clone());
             self.globals.push(idx);
         }
@@ -51,12 +51,8 @@ impl TypeChecker {
             let (params, ret) = self.funcs[i].clone();
 
             if func.body.len() > 0 {
-                let mut stack = Stack::new();
-                for param in &params {
-                    stack.push(*param);
-                }
-                self.add_block(&func.body, &mut stack, Some(i as b::FuncIdx));
-                self.merge_entries(&[stack.pop(), ret]);
+                let res = self.add_body(&func.body, &params, Some(i as b::FuncIdx));
+                self.merge_entries(&[res, ret]);
             }
         }
         for (i, global) in enumerate(&module.globals) {
@@ -65,9 +61,8 @@ impl TypeChecker {
             }
             let entry = self.globals[i];
 
-            let mut stack = Stack::new();
-            self.add_block(&global.body, &mut stack, None);
-            self.merge_entries(&[stack.pop(), entry]);
+            let res = self.add_body(&global.body, &[], None);
+            self.merge_entries(&[res, entry]);
         }
 
         let errors = self.validate();
@@ -87,22 +82,35 @@ impl TypeChecker {
         (module, errors)
     }
 
-    fn add_block(
+    fn add_body(
         &mut self,
-        block: &b::InstrBlock,
-        stack: &mut Stack,
+        body: &[b::Instr],
+        inputs: &[TypeCheckEntryIdx],
         func_idx: Option<b::FuncIdx>,
-    ) {
-        assert!(block.len() >= 1);
+    ) -> TypeCheckEntryIdx {
+        assert!(body.len() >= 1);
 
-        let input_len = stack.len();
-        for instr in block {
-            if !self.add_instr(instr, stack, func_idx) {
-                todo!("continue");
+        let mut stack = Stack::new();
+        for input in inputs {
+            stack.push(*input);
+        }
+
+        let mut jumped = false;
+        for instr in body {
+            if jumped {
+                // Ignore unreachable code
+                if !matches!(instr, b::Instr::End | b::Instr::Else) {
+                    continue;
+                }
+                jumped = false;
+            }
+            if !self.add_instr(instr, &mut stack, func_idx) {
+                todo!("early things");
             }
         }
-        assert!(stack.len() >= 1);
-        assert!(stack.len() <= input_len + 1);
+        assert!(stack.len() == 1);
+        assert!(stack.block_len() == 0);
+        stack.pop()
     }
 
     fn add_instr(
@@ -113,7 +121,7 @@ impl TypeChecker {
     ) -> bool {
         match instr {
             b::Instr::Pull(v) => stack.pull(*v),
-            b::Instr::Dup(v) => stack.dup(*v),
+            b::Instr::Ref(v) => stack.dup(*v),
             b::Instr::Drop(v) => {
                 stack.drop(*v);
             }
@@ -217,51 +225,58 @@ impl TypeChecker {
 
                 stack.push(entry);
             }
-            b::Instr::If(then_bl, else_bl) => {
+            b::Instr::If => {
                 let cond = stack.pop();
                 self.add_constraint(cond, Constraint::Is(b::Type::Bool));
 
                 let entry = self.add_entry();
 
-                let mut then_stack = stack.clone();
-                self.add_block(then_bl, &mut then_stack, func_idx);
-                let then_entry = then_stack.pop();
-
-                let mut else_stack = stack.clone();
-                self.add_block(else_bl, &mut else_stack, func_idx);
-                let else_entry = else_stack.pop();
-
-                self.merge_entries(&[then_entry, entry]);
-                self.merge_entries(&[else_entry, entry]);
-
-                assert!(then_stack == else_stack);
-
-                *stack = then_stack;
-                stack.push(entry);
+                stack.push_block(BlockEntry {
+                    stack: stack.clone(),
+                    result: entry,
+                });
             }
-            b::Instr::Loop(bl) => {
+            b::Instr::Else => {
+                assert!(stack.block_len() >= 1);
+                let block = stack.pop_block();
+
+                assert!(stack.len() == block.stack.len() + 1);
+                let res = stack.pop();
+                self.merge_entries(&[res, block.result]);
+
+                *stack = block.stack.clone();
+                stack.push_block(block);
+            }
+            b::Instr::End => {
+                assert!(stack.block_len() >= 1);
+                let block = stack.pop_block();
+
+                assert!(stack.len() >= 1);
+                let res = stack.pop();
+                self.merge_entries(&[res, block.result]);
+
+                *stack = block.stack;
+                stack.push(block.result);
+            }
+            b::Instr::Loop => {
                 let entry = self.add_entry();
 
                 stack.push_block(BlockEntry {
-                    result: entry,
                     stack: stack.clone(),
+                    result: entry,
                 });
-                self.add_block(bl, stack, func_idx);
-                let entry = self.merge_entries(&[stack.pop(), entry]);
-                stack.push(entry);
             }
-            b::Instr::Continue(count) => {
-                assert!(stack.block_len() >= *count as usize);
-                let block = stack.get_block(*count).unwrap();
+            b::Instr::Continue => {
+                assert!(stack.block_len() >= 1);
+                let block = stack.get_block(1).unwrap();
                 assert!(block.stack.len() == stack.len());
 
                 for (old, curr) in izip!(&block.stack, stack as &Stack) {
-                    self.merge_entries(&[*old, *curr]);
+                    if old != curr {
+                        self.merge_entries(&[*old, *curr]);
+                    }
                 }
 
-                for _ in 0..(count - 1) {
-                    stack.pop_block();
-                }
                 return false;
             }
         }
