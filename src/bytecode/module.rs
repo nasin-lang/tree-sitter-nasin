@@ -118,7 +118,7 @@ fn write_body(
             indent -= 4;
         }
         writeln!(f, "{}", utils::indented(indent, [instr]))?;
-        if matches!(instr, Instr::If | Instr::Else | Instr::Loop) {
+        if matches!(instr, Instr::If | Instr::Else | Instr::Loop(_)) {
             indent += 4;
         }
     }

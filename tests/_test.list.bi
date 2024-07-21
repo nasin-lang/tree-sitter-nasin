@@ -54,9 +54,9 @@ it's false
 :i returncode 101
 :b stdout 0
 
-:b stderr 178
-thread 'main' panicked at src/typecheck/module_checker.rs:104:9:
-assertion failed: stack.len() == 1
+:b stderr 150
+thread 'main' panicked at src/bytecode/ty.rs:90:33:
+not yet implemented
 note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
 
 :b shell 82

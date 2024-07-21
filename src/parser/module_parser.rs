@@ -108,7 +108,7 @@ impl<'a> ModuleParser<'a> {
                     ValueParser::new(self.src, this, Some(func_idx), params_names);
 
                 let value = value_parser.add_value_node(return_node, true);
-                value_parser.push_values([&value]);
+                value_parser.push_values([&value], true);
 
                 value_parser.finish()
             });
@@ -132,7 +132,7 @@ impl<'a> ModuleParser<'a> {
             let mut value_parser = ValueParser::new(self.src, this, None, []);
 
             let value = value_parser.add_value_node(node.required_field("value"), true);
-            value_parser.push_values([&value]);
+            value_parser.push_values([&value], true);
             value_parser.finish()
         });
     }

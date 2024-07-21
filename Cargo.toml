@@ -17,6 +17,8 @@ cranelift-codegen = "0.104.1"
 cranelift-frontend = "0.104.1"
 cranelift-module = "0.104.1"
 cranelift-object = "0.104.1"
+derive-new = "0.6.0"
+derive_more = { version = "^1.0.0-beta.6", features = ["display", "into_iterator", "full"] }
 itertools = "0.12.1"
 target-lexicon = "0.12.13"
 thiserror = "1.0.62"

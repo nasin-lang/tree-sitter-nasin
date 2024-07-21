@@ -1,20 +1,23 @@
+use std::cmp::min;
 use std::fmt::Debug;
+
+use derive_more::IntoIterator;
+use derive_new::new;
 
 use crate::bytecode::RelativeValue;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ValueStack<V, B> {
+#[derive(Debug, Clone, PartialEq, Eq, IntoIterator)]
+pub struct ValueStack<V, S> {
+    #[into_iterator(owned, ref, ref_mut)]
     stack: Vec<V>,
-    block_stack: Vec<B>,
-    pub unreachable: bool,
+    scopes: Vec<Scope<S>>,
 }
 
-impl<V, B> ValueStack<V, B> {
-    pub fn new() -> Self {
+impl<V, S> ValueStack<V, S> {
+    pub fn new(initial_payload: S) -> Self {
         Self {
             stack: vec![],
-            block_stack: vec![],
-            unreachable: false,
+            scopes: vec![Scope::new(initial_payload, 0)],
         }
     }
 
@@ -22,27 +25,8 @@ impl<V, B> ValueStack<V, B> {
         self.stack.len()
     }
 
-    pub fn block_len(&self) -> usize {
-        self.block_stack.len()
-    }
-
     pub fn get(&self, pos: RelativeValue) -> Option<&V> {
         self.stack.get(self.idx(pos))
-    }
-
-    pub fn get_block(&self, pos: RelativeValue) -> Option<&B> {
-        self.block_stack.get(self.block_idx(pos))
-    }
-
-    pub fn find_block(&self, pred: impl Fn(&B) -> bool) -> Option<&B> {
-        let mut i = self.block_stack.len();
-        while i > 0 {
-            i -= 1;
-            if pred(&self.block_stack[i]) {
-                return Some(&self.block_stack[i]);
-            }
-        }
-        None
     }
 
     pub fn get_mut(&mut self, pos: RelativeValue) -> Option<&mut V> {
@@ -54,20 +38,21 @@ impl<V, B> ValueStack<V, B> {
         self.stack.push(value);
     }
 
-    pub fn push_block(&mut self, block: B) {
-        self.block_stack.push(block);
-    }
-
     pub fn pop(&mut self) -> V {
+        assert!(
+            self.stack.len() > self.get_scope().start,
+            "should not pop under the current scope start"
+        );
         self.stack.pop().unwrap()
     }
 
-    pub fn pop_block(&mut self) -> B {
-        self.block_stack.pop().unwrap()
-    }
-
     pub fn pop_many(&mut self, len: usize) -> Vec<V> {
-        self.stack.drain(self.stack.len() - len..).collect()
+        let at = self.stack.len() - len;
+        assert!(
+            at >= self.get_scope().start,
+            "should not pop under the current scope start"
+        );
+        self.stack.split_off(at)
     }
 
     pub fn dup(&mut self, pos: RelativeValue)
@@ -77,39 +62,99 @@ impl<V, B> ValueStack<V, B> {
         self.stack.push(self.stack[self.idx(pos)].clone());
     }
 
-    pub fn drop(&mut self, pos: RelativeValue) {
-        self.stack.remove(self.idx(pos));
+    pub fn scope_len(&self) -> usize {
+        self.scopes.len()
+    }
+
+    pub fn get_scope(&self) -> &Scope<S> {
+        self.scopes.last().unwrap()
+    }
+
+    pub fn get_scope_mut(&mut self) -> &mut Scope<S> {
+        self.scopes.last_mut().unwrap()
+    }
+
+    pub fn get_loop_scope(&self) -> Option<&Scope<S>> {
+        self.scopes.iter().rev().find(|scope| scope.is_loop)
+    }
+
+    pub fn get_loop_scope_mut(&mut self) -> Option<&mut Scope<S>> {
+        self.scopes.iter_mut().rev().find(|scope| scope.is_loop)
+    }
+
+    pub fn create_scope(&mut self, payload: S) -> &mut Scope<S> {
+        self.scopes.push(Scope::new(payload, self.stack.len()));
+        self.scopes.last_mut().unwrap()
+    }
+
+    pub fn branch_scope(&mut self) -> (&mut Scope<S>, Vec<V>)
+    where
+        V: Clone,
+    {
+        assert!(
+            self.scopes.len() > 1,
+            "should not brach the first scope of function"
+        );
+        let scope = self.scopes.last_mut().unwrap();
+        scope.branches += 1;
+        scope.is_never = false;
+        let removed = self.stack.split_off(min(scope.start, self.stack.len()));
+        (scope, removed)
+    }
+
+    pub fn end_scope(&mut self) -> (Scope<S>, Vec<V>) {
+        assert!(
+            self.scopes.len() > 1,
+            "should not end the first scope of function"
+        );
+        let scope = self.scopes.pop().unwrap();
+        let removed = self.stack.split_off(min(scope.start, self.stack.len()));
+
+        if scope.never_branches == scope.branches {
+            self.get_scope_mut().mark_as_never();
+        }
+
+        (scope, removed)
     }
 
     fn idx(&self, pos: RelativeValue) -> usize {
         self.stack.len() - pos as usize - 1
     }
+}
 
-    fn block_idx(&self, pos: RelativeValue) -> usize {
-        self.block_stack.len() - pos as usize - 1
+impl<V, S> Extend<V> for ValueStack<V, S> {
+    fn extend<I: IntoIterator<Item = V>>(&mut self, iter: I) {
+        self.stack.extend(iter);
     }
 }
 
-impl<V, B> IntoIterator for ValueStack<V, B> {
-    type Item = V;
-    type IntoIter = <Vec<V> as IntoIterator>::IntoIter;
-    fn into_iter(self) -> Self::IntoIter {
-        self.stack.into_iter()
-    }
+#[derive(Debug, Clone, PartialEq, Eq, new)]
+pub struct Scope<P> {
+    pub payload: P,
+    #[new(value = "false")]
+    pub is_loop: bool,
+    #[new(value = "0")]
+    pub loop_arity: u8,
+    #[new(value = "1")]
+    branches: usize,
+    #[new(value = "0")]
+    never_branches: usize,
+    #[new(value = "false")]
+    is_never: bool,
+    start: usize,
 }
 
-impl<'a, V, B> IntoIterator for &'a ValueStack<V, B> {
-    type Item = &'a V;
-    type IntoIter = <&'a Vec<V> as IntoIterator>::IntoIter;
-    fn into_iter(self) -> Self::IntoIter {
-        (&self.stack).into_iter()
+impl<B> Scope<B> {
+    pub fn start(&self) -> usize {
+        self.start
     }
-}
 
-impl<'a, V, B> IntoIterator for &'a mut ValueStack<V, B> {
-    type Item = &'a mut V;
-    type IntoIter = <&'a mut Vec<V> as IntoIterator>::IntoIter;
-    fn into_iter(self) -> Self::IntoIter {
-        (&mut self.stack).into_iter()
+    pub fn is_never(&self) -> bool {
+        self.is_never
+    }
+
+    pub fn mark_as_never(&mut self) {
+        self.is_never = true;
+        self.never_branches += 1;
     }
 }

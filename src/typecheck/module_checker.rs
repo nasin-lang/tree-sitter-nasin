@@ -1,6 +1,7 @@
 use std::collections::HashSet;
-use std::mem;
+use std::{mem, usize};
 
+use derive_new::new;
 use itertools::{enumerate, izip};
 
 use super::entry::{Constraint, TypeCheckEntry, TypeCheckEntryIdx};
@@ -8,16 +9,7 @@ use super::TypeError;
 use crate::utils::SortedMap;
 use crate::{bytecode as b, utils};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct BlockEntry {
-    result: TypeCheckEntryIdx,
-    stack: Stack,
-    is_loop: bool,
-    branches: usize,
-    never_branches: usize,
-}
-
-type Stack = utils::ValueStack<TypeCheckEntryIdx, BlockEntry>;
+type Stack = utils::ValueStack<TypeCheckEntryIdx, ScopePayload>;
 
 #[derive(Debug, Clone)]
 pub struct TypeChecker {
@@ -54,18 +46,14 @@ impl TypeChecker {
             let (params, ret) = self.funcs[i].clone();
 
             if func.body.len() > 0 {
-                let res = self.add_body(&func.body, &params, Some(i as b::FuncIdx));
-                self.merge_entries(&[res, ret]);
+                self.add_body(&func.body, &params, ret, Some(i as b::FuncIdx));
             }
         }
         for (i, global) in enumerate(&module.globals) {
             if global.body.len() == 0 {
                 continue;
             }
-            let entry = self.globals[i];
-
-            let res = self.add_body(&global.body, &[], None);
-            self.merge_entries(&[res, entry]);
+            self.add_body(&global.body, &[], self.globals[i], None);
         }
 
         let errors = self.validate();
@@ -89,11 +77,12 @@ impl TypeChecker {
         &mut self,
         body: &[b::Instr],
         inputs: &[TypeCheckEntryIdx],
+        result: TypeCheckEntryIdx,
         func_idx: Option<b::FuncIdx>,
-    ) -> TypeCheckEntryIdx {
+    ) {
         assert!(body.len() >= 1);
 
-        let mut stack = Stack::new();
+        let mut stack = Stack::new(ScopePayload::new(result));
         for input in inputs {
             stack.push(*input);
         }
@@ -101,9 +90,9 @@ impl TypeChecker {
         for instr in body {
             self.add_instr(instr, &mut stack, func_idx);
         }
-        assert!(stack.len() == 1);
-        assert!(stack.block_len() == 0);
-        stack.pop()
+        assert!(stack.len() >= 1);
+        assert!(stack.scope_len() == 1);
+        self.merge_entries(&[stack.pop(), result]);
     }
 
     fn add_instr(
@@ -114,9 +103,6 @@ impl TypeChecker {
     ) {
         match instr {
             b::Instr::Dup(v) => stack.dup(*v),
-            b::Instr::Drop(v) => {
-                stack.drop(*v);
-            }
             b::Instr::GetGlobal(v) => {
                 stack.push(self.globals[*v as usize]);
             }
@@ -223,83 +209,61 @@ impl TypeChecker {
 
                 let entry = self.add_entry();
 
-                stack.push_block(BlockEntry {
-                    stack: stack.clone(),
-                    result: entry,
-                    is_loop: false,
-                    branches: 2,
-                    never_branches: 0,
-                });
+                stack.create_scope(ScopePayload::new(entry));
             }
             b::Instr::Else => {
-                assert!(stack.block_len() >= 1);
-                let mut block = stack.pop_block();
+                assert!(stack.scope_len() > 1);
+                let is_never = stack.get_scope().is_never();
+                let (scope, mut removed) = stack.branch_scope();
 
-                if !stack.unreachable {
-                    assert!(stack.len() == block.stack.len() + 1);
-                    let res = stack.pop();
-                    self.merge_entries(&[res, block.result]);
-
-                    for (old, curr) in izip!(&block.stack, stack as &Stack) {
-                        if old != curr {
-                            self.merge_entries(&[*old, *curr]);
-                        }
-                    }
-                } else {
-                    block.never_branches += 1;
+                if !is_never {
+                    assert!(removed.len() >= 1);
+                    let res = removed.pop().unwrap();
+                    self.merge_entries(&[res, scope.payload.result]);
                 }
-
-                *stack = block.stack.clone();
-                stack.push_block(block);
             }
             b::Instr::End => {
-                assert!(stack.block_len() >= 1);
-                let mut block = stack.pop_block();
+                assert!(stack.scope_len() >= 1);
+                let (scope, mut removed) = stack.end_scope();
 
-                if !stack.unreachable {
-                    assert!(stack.len() == block.stack.len() + 1);
-                    let res = stack.pop();
-                    self.merge_entries(&[res, block.result]);
-
-                    for (old, curr) in izip!(&block.stack, stack as &Stack) {
-                        if old != curr {
-                            self.merge_entries(&[*old, *curr]);
-                        }
-                    }
-                } else {
-                    block.never_branches += 1;
+                if !scope.is_never() {
+                    assert!(removed.len() >= 1);
+                    let res = removed.pop().unwrap();
+                    self.merge_entries(&[res, scope.payload.result]);
                 }
 
-                *stack = block.stack;
-                stack.push(block.result);
-
-                if block.branches == block.never_branches {
-                    stack.unreachable = true;
-                }
+                stack.push(scope.payload.result);
             }
-            b::Instr::Loop => {
-                let entry = self.add_entry();
+            b::Instr::Loop(n) => {
+                assert!(stack.len() >= *n as usize);
+                let loop_args = stack.pop_many(*n as usize);
 
-                stack.push_block(BlockEntry {
-                    stack: stack.clone(),
-                    result: entry,
-                    is_loop: true,
-                    branches: 0,
-                    never_branches: 0,
-                });
+                let entry = self.add_entry();
+                let scope = stack.create_scope(ScopePayload::new(entry));
+                scope.is_loop = true;
+                scope.loop_arity = *n;
+                scope.payload.loop_args = loop_args.clone();
+
+                stack.extend(loop_args);
             }
             b::Instr::Continue => {
-                assert!(stack.block_len() >= 1);
-                let block = stack.find_block(|b| b.is_loop).unwrap();
-                assert!(block.stack.len() == stack.len());
+                assert!(stack.scope_len() >= 1);
+                let scope = stack
+                    .get_loop_scope()
+                    .expect("continue should be inside a loop scope")
+                    .clone();
+                assert!(stack.len() >= scope.start() + scope.loop_arity as usize);
 
-                for (old, curr) in izip!(&block.stack, stack as &Stack) {
+                for (old, curr) in izip!(
+                    scope.payload.loop_args,
+                    stack.pop_many(scope.loop_arity as usize)
+                ) {
                     if old != curr {
-                        self.merge_entries(&[*old, *curr]);
+                        self.merge_entries(&[old, curr]);
                     }
                 }
 
-                stack.unreachable = true;
+                stack.get_scope_mut().mark_as_never();
             }
             b::Instr::CompileError => {
                 let entry = self.add_entry_from_type(b::Type::unknown());
@@ -314,8 +278,6 @@ impl TypeChecker {
     }
 
     fn add_entry_from_type(&mut self, ty: b::Type) -> TypeCheckEntryIdx {
-        let ty_str = ty.to_string();
-
         let mut entry = TypeCheckEntry::new(ty.clone());
 
         if let b::Type::Infer(b::InferType { properties }) = ty {
@@ -473,4 +435,11 @@ impl TypeChecker {
 
         errors
     }
+}
+
+#[derive(Debug, Clone, new)]
+struct ScopePayload {
+    result: TypeCheckEntryIdx,
+    #[new(default)]
+    loop_args: Vec<TypeCheckEntryIdx>,
 }

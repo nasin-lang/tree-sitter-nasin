@@ -82,6 +82,7 @@ fn main() {
             }
 
             let module = parse_module(&src, root_node);
+            //eprintln!("{}", module);
 
             let (module, errors) = type_check_module(module);
 
