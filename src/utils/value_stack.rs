@@ -6,6 +6,7 @@ use crate::bytecode::RelativeValue;
 pub struct ValueStack<V, B> {
     stack: Vec<V>,
     block_stack: Vec<B>,
+    pub unreachable: bool,
 }
 
 impl<V, B> ValueStack<V, B> {
@@ -13,6 +14,7 @@ impl<V, B> ValueStack<V, B> {
         Self {
             stack: vec![],
             block_stack: vec![],
+            unreachable: false,
         }
     }
 
@@ -30,6 +32,17 @@ impl<V, B> ValueStack<V, B> {
 
     pub fn get_block(&self, pos: RelativeValue) -> Option<&B> {
         self.block_stack.get(self.block_idx(pos))
+    }
+
+    pub fn find_block(&self, pred: impl Fn(&B) -> bool) -> Option<&B> {
+        let mut i = self.block_stack.len();
+        while i > 0 {
+            i -= 1;
+            if pred(&self.block_stack[i]) {
+                return Some(&self.block_stack[i]);
+            }
+        }
+        None
     }
 
     pub fn get_mut(&mut self, pos: RelativeValue) -> Option<&mut V> {
@@ -55,11 +68,6 @@ impl<V, B> ValueStack<V, B> {
 
     pub fn pop_many(&mut self, len: usize) -> Vec<V> {
         self.stack.drain(self.stack.len() - len..).collect()
-    }
-
-    pub fn pull(&mut self, pos: RelativeValue) {
-        let value = self.stack.remove(self.idx(pos));
-        self.stack.push(value);
     }
 
     pub fn dup(&mut self, pos: RelativeValue)

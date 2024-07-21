@@ -18,7 +18,6 @@ pub struct ValueParser<'a> {
     src: &'a str,
     func_idx: Option<usize>,
     stack: Stack<'a>,
-    loaded_globals: HashMap<usize, usize>,
 }
 
 impl<'a> ValueParser<'a> {
@@ -43,17 +42,24 @@ impl<'a> ValueParser<'a> {
             func_idx,
             instrs: vec![],
             is_loop: false,
-            loaded_globals: HashMap::new(),
             stack,
         }
     }
 
-    pub fn finish(mut self, result_len: usize) -> (ModuleParser<'a>, Vec<b::Instr>) {
-        self.trim_stack(0, result_len);
+    pub fn finish(mut self) -> (ModuleParser<'a>, Vec<b::Instr>) {
+        assert!(self.stack.block_len() == 0);
+
+        if self.is_loop {
+            self.instrs.insert(0, b::Instr::Loop);
+            let params = &self.module_parser.funcs[self.func_idx.unwrap()].params;
+            self.trim_stack(params.len(), 1);
+            self.instrs.push(b::Instr::End);
+        }
+        self.trim_stack(0, 1);
         (self.module_parser, self.instrs)
     }
 
-    pub fn add_value_node(&mut self, node: ts::Node<'a>) -> ParserValue {
+    pub fn add_value_node(&mut self, node: ts::Node<'a>, returning: bool) -> ParserValue {
         match node.kind() {
             "true" => ParserValue::Bool(true),
             "false" => ParserValue::Bool(false),
@@ -70,7 +76,7 @@ impl<'a> ValueParser<'a> {
             "array_lit" => {
                 let items = node
                     .iter_field("items")
-                    .map(|item_node| self.add_value_node(item_node))
+                    .map(|item_node| self.add_value_node(item_node, false))
                     .collect();
                 ParserValue::Array(items)
             }
@@ -80,8 +86,8 @@ impl<'a> ValueParser<'a> {
                     .map(|field_node| {
                         let field_name =
                             field_node.required_field("name").get_text(self.src);
-                        let field_value =
-                            self.add_value_node(field_node.required_field("value"));
+                        let field_value = self
+                            .add_value_node(field_node.required_field("value"), false);
                         (field_name.to_string(), field_value)
                     })
                     .collect();
@@ -97,22 +103,22 @@ impl<'a> ValueParser<'a> {
             }
             "bin_op" => {
                 let op = node.required_field("op").get_text(self.src);
-                let left = self.add_value_node(node.required_field("left"));
-                let right = self.add_value_node(node.required_field("right"));
+                let left = self.add_value_node(node.required_field("left"), false);
+                let right = self.add_value_node(node.required_field("right"), false);
                 self.add_bin_op(op, left, right)
             }
             "get_prop" => {
-                let parent = self.add_value_node(node.required_field("parent"));
+                let parent = self.add_value_node(node.required_field("parent"), false);
                 let prop_name = node.required_field("prop_name").get_text(self.src);
                 self.add_get_prop(parent, prop_name)
             }
             "call" => {
-                let callee = self.add_value_node(node.required_field("callee"));
+                let callee = self.add_value_node(node.required_field("callee"), false);
                 let args: Vec<_> = node
                     .iter_field("args")
-                    .map(|arg_node| self.add_value_node(arg_node))
+                    .map(|arg_node| self.add_value_node(arg_node, false))
                     .collect();
-                self.add_call(callee, args)
+                self.add_call(callee, args, returning)
             }
             "block" => {
                 let old_idents = self.idents.clone();
@@ -120,15 +126,15 @@ impl<'a> ValueParser<'a> {
                 for stmt_node in node.iter_field("body") {
                     self.add_stmt_node(stmt_node);
                 }
-                let value = self.add_value_node(node.required_field("value"));
+                let value = self.add_value_node(node.required_field("value"), returning);
 
                 self.idents = old_idents;
 
                 value
             }
             "if" => {
-                let cond_value = self.add_value_node(node.required_field("cond"));
-                self.push_value(&cond_value, false);
+                let cond_value = self.add_value_node(node.required_field("cond"), false);
+                self.push_values([&cond_value]);
                 self.stack.pop(); // consume condition
 
                 let stack_len = self.stack.len();
@@ -140,13 +146,16 @@ impl<'a> ValueParser<'a> {
                 });
 
                 self.instrs.push(b::Instr::If);
-                let then_value = self.add_value_node(node.required_field("then"));
-                self.push_value(&then_value, true);
+                let then_value =
+                    self.add_value_node(node.required_field("then"), returning);
 
-                assert!(self.stack.len() >= stack_len + 1);
-                self.trim_stack(stack_len, 1);
+                if !then_value.is_never() {
+                    self.push_values([&then_value]);
+                    assert!(self.stack.len() >= stack_len + 1);
+                    self.trim_stack(stack_len, 1);
+                }
 
-                if let Some(else_node) = node.field("else") {
+                let else_value = if let Some(else_node) = node.field("else") {
                     assert!(self.stack.block_len() >= block_len + 1);
                     let block = self.stack.pop_block();
                     self.stack = block.stack.clone();
@@ -155,108 +164,99 @@ impl<'a> ValueParser<'a> {
                     self.stack.push_block(block);
 
                     self.instrs.push(b::Instr::Else);
-                    let then_value = self.add_value_node(else_node);
-                    self.push_value(&then_value, true);
+                    let else_value = self.add_value_node(else_node, returning);
 
-                    assert!(self.stack.len() >= stack_len + 1);
-                    self.trim_stack(stack_len, 1);
+                    if !else_value.is_never() {
+                        self.push_values([&else_value]);
+                        assert!(self.stack.len() >= stack_len + 1);
+                        self.trim_stack(stack_len, 1);
+                    }
+
+                    else_value
                 } else {
                     todo!("if without else");
-                }
+                };
 
                 assert!(self.stack.block_len() >= block_len + 1);
                 let block = self.stack.pop_block();
                 self.stack = block.stack;
                 self.idents = block.idents;
 
-                let idx = self.add_instr_with_result(0, b::Instr::End);
-
-                ParserValue::Local(idx)
+                if !then_value.is_never() || !else_value.is_never() {
+                    let idx = self.add_instr_with_result(0, b::Instr::End);
+                    ParserValue::Local(idx)
+                } else {
+                    self.stack.unreachable = true;
+                    ParserValue::Never
+                }
             }
             k => panic!("Found unexpected expression `{}`", k),
         }
     }
 
-    pub fn push_value(&mut self, value: &ParserValue, will_move: bool) {
-        match value {
-            ParserValue::MovedLocal => {
-                // TODO: better error handling
-                panic!("access of moved value")
-            }
-            ParserValue::Local(idx) => {
-                assert!(*idx <= self.stack.len() - 1);
-
-                let rel_value = (self.stack.len() - idx - 1) as b::RelativeValue;
-
-                if will_move && rel_value == 0 {
-                    return;
+    pub fn push_values<'v>(&mut self, values: impl IntoIterator<Item = &'v ParserValue>) {
+        let mut values: Vec<_> = values.into_iter().cloned().collect();
+        // Values that need to be constructed need to be prepared first so they don't mess
+        // with the stack
+        for value in &mut values {
+            let local_idx = match value {
+                ParserValue::Global(_)
+                | ParserValue::Local(_)
+                | ParserValue::Number(_)
+                | ParserValue::Bool(_)
+                | ParserValue::Never => {
+                    continue;
                 }
-
-                if will_move {
-                    self.instrs.push(b::Instr::Pull(rel_value));
-                    self.remove_value(*idx);
-                } else {
-                    self.instrs.push(b::Instr::Ref(rel_value));
-                    self.stack.push(());
+                ParserValue::Func(_) => todo!("func as value"),
+                ParserValue::String(v) => {
+                    self.add_instr_with_result(0, b::Instr::CreateString(v.clone()))
                 }
-            }
-            ParserValue::Global(idx) => {
-                if let Some(local_idx) = self.loaded_globals.get(idx) {
-                    self.push_value(&ParserValue::Local(*local_idx), will_move);
-                } else {
-                    if !will_move {
-                        self.loaded_globals.insert(*idx, self.stack.len());
-                    }
-                    self.add_instr_with_result(0, b::Instr::GetGlobal(*idx as GlobalIdx));
+                ParserValue::Array(vs) => {
+                    self.push_values(vs as &_);
+                    self.add_instr_with_result(
+                        vs.len(),
+                        b::Instr::CreateArray(vs.len() as u32),
+                    )
                 }
-            }
-            ParserValue::Func(_) => todo!("func as value"),
-            ParserValue::Bool(v) => {
-                self.add_instr_with_result(0, b::Instr::CreateBool(*v));
-            }
-            ParserValue::Number(v) => {
-                self.add_instr_with_result(0, b::Instr::CreateNumber(v.clone()));
-            }
-            ParserValue::String(v) => {
-                self.add_instr_with_result(0, b::Instr::CreateString(v.clone()));
-            }
-            ParserValue::Array(vs) => {
-                for item in vs {
-                    self.push_value(item, true);
+                ParserValue::Record(fields) => {
+                    self.push_values(fields.values());
+                    let fields: Vec<_> = fields.keys().cloned().collect();
+                    self.add_instr_with_result(
+                        fields.len(),
+                        b::Instr::CreateRecord(fields),
+                    )
                 }
-                self.add_instr_with_result(
-                    vs.len(),
-                    b::Instr::CreateArray(vs.len() as u32),
-                );
-            }
-            ParserValue::Record(fields) => {
-                for (_, value) in fields {
-                    self.push_value(value, true);
-                }
-                let fields: Vec<_> = fields.keys().cloned().collect();
-                self.add_instr_with_result(fields.len(), b::Instr::CreateRecord(fields));
-            }
+            };
+            *value = ParserValue::Local(local_idx);
         }
-    }
-
-    fn remove_value(&mut self, idx: usize) {
-        for (_, v) in &mut self.idents {
-            if let ParserValue::Local(stored_idx) = v {
-                if *stored_idx == idx {
-                    *v = ParserValue::MovedLocal;
-                } else if *stored_idx > idx {
-                    *stored_idx -= 1;
+        for value in values {
+            match value {
+                ParserValue::Global(idx) => {
+                    self.add_instr_with_result(0, b::Instr::GetGlobal(idx as GlobalIdx));
+                }
+                ParserValue::Local(idx) => {
+                    assert!(idx <= self.stack.len() - 1);
+                    let rel_value = (self.stack.len() - idx - 1) as b::RelativeValue;
+                    self.add_instr_with_result(0, b::Instr::Dup(rel_value));
+                }
+                ParserValue::Bool(v) => {
+                    self.add_instr_with_result(0, b::Instr::CreateBool(v));
+                }
+                ParserValue::Number(v) => {
+                    self.add_instr_with_result(0, b::Instr::CreateNumber(v));
+                }
+                ParserValue::Never => {
+                    self.add_instr_with_result(0, b::Instr::CompileError);
+                }
+                ParserValue::Global(_)
+                | ParserValue::Func(_)
+                | ParserValue::String(_)
+                | ParserValue::Array(_)
+                | ParserValue::Record(_) => {
+                    unreachable!();
                 }
             }
         }
-        for (g, stored_idx) in self.loaded_globals.clone() {
-            if stored_idx == idx {
-                self.loaded_globals.remove(&g);
-            } else if stored_idx > idx {
-                self.loaded_globals.insert(g, stored_idx - 1);
-            }
-        }
-        self.stack.pop();
     }
 
     fn add_instr_with_result(&mut self, input_count: usize, instr: b::Instr) -> usize {
@@ -274,8 +274,7 @@ impl<'a> ValueParser<'a> {
         left: ParserValue,
         right: ParserValue,
     ) -> ParserValue {
-        self.push_value(&left, false);
-        self.push_value(&right, false);
+        self.push_values([&left, &right]);
         let idx = self.add_instr_with_result(
             2,
             match op {
@@ -311,7 +310,7 @@ impl<'a> ValueParser<'a> {
                 field_value
             }
             _ => {
-                self.push_value(&parent, false);
+                self.push_values([&parent]);
                 let idx = self
                     .add_instr_with_result(1, b::Instr::GetField(prop_name.to_string()));
                 ParserValue::Local(idx)
@@ -323,26 +322,28 @@ impl<'a> ValueParser<'a> {
         &mut self,
         callee: ParserValue,
         args: impl IntoIterator<Item = ParserValue>,
+        returning: bool,
     ) -> ParserValue {
         let mut args: Vec<_> = args.into_iter().collect();
-        for arg in &mut args {
-            // only if value wont move
-            if !matches!(
-                arg,
-                ParserValue::Local(_) | ParserValue::Bool(_) | ParserValue::Number(_)
-            ) {
-                self.push_value(arg, true);
-                *arg = ParserValue::Local(self.stack.len() - 1);
-            }
-        }
-        for arg in &args {
-            self.push_value(arg, false);
-        }
         match callee {
             ParserValue::Func(idx) => {
-                let idx = self
-                    .add_instr_with_result(args.len(), b::Instr::Call(idx as b::FuncIdx));
-                ParserValue::Local(idx)
+                self.push_values(&args);
+
+                if self.func_idx.is_some_and(|i| i == idx) && returning {
+                    self.is_loop = true;
+                    self.stack.unreachable = true;
+
+                    self.trim_stack(0, self.module_parser.funcs[idx].params.len());
+
+                    self.instrs.push(b::Instr::Continue);
+                    ParserValue::Never
+                } else {
+                    let idx = self.add_instr_with_result(
+                        args.len(),
+                        b::Instr::Call(idx as b::FuncIdx),
+                    );
+                    ParserValue::Local(idx)
+                }
             }
             ParserValue::Local(_) | ParserValue::Global(_) | ParserValue::Record(_) => {
                 todo!("inderect call")
@@ -357,7 +358,7 @@ impl<'a> ValueParser<'a> {
     fn add_stmt_node(&mut self, node: ts::Node<'a>) {
         match node.kind() {
             "var_decl" => {
-                let value = self.add_value_node(node.required_field("value"));
+                let value = self.add_value_node(node.required_field("value"), false);
                 let pat_node = node.required_field("pat");
                 match pat_node.kind() {
                     "ident" => {
@@ -372,6 +373,11 @@ impl<'a> ValueParser<'a> {
     }
 
     fn trim_stack(&mut self, bottom_len: usize, top_len: usize) {
+        if let Some(b::Instr::Dup(0)) = self.instrs.last() {
+            self.stack.pop();
+            self.instrs.pop();
+        }
+
         let len = bottom_len + top_len;
 
         if self.stack.len() < len {

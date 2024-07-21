@@ -85,15 +85,16 @@ fn main() {
 
             let (module, errors) = type_check_module(module);
 
+            if dump_bytecode {
+                println!("{}", module);
+            }
+
             if errors.len() > 0 {
                 for err in errors {
                     eprintln!("{err}");
                 }
                 exit(1);
-            } else if dump_bytecode {
-                println!("{}", module);
             }
-
             //let cfg = BuildConfig {
             //    out: out.unwrap_or(name.clone().into()),
             //    silent,

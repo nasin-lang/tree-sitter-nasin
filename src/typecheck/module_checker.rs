@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::mem;
 
-use itertools::{enumerate, izip, Itertools};
+use itertools::{enumerate, izip};
 
 use super::entry::{Constraint, TypeCheckEntry, TypeCheckEntryIdx};
 use super::TypeError;
@@ -12,6 +12,9 @@ use crate::{bytecode as b, utils};
 struct BlockEntry {
     result: TypeCheckEntryIdx,
     stack: Stack,
+    is_loop: bool,
+    branches: usize,
+    never_branches: usize,
 }
 
 type Stack = utils::ValueStack<TypeCheckEntryIdx, BlockEntry>;
@@ -95,18 +98,8 @@ impl TypeChecker {
             stack.push(*input);
         }
 
-        let mut jumped = false;
         for instr in body {
-            if jumped {
-                // Ignore unreachable code
-                if !matches!(instr, b::Instr::End | b::Instr::Else) {
-                    continue;
-                }
-                jumped = false;
-            }
-            if !self.add_instr(instr, &mut stack, func_idx) {
-                todo!("early things");
-            }
+            self.add_instr(instr, &mut stack, func_idx);
         }
         assert!(stack.len() == 1);
         assert!(stack.block_len() == 0);
@@ -118,10 +111,9 @@ impl TypeChecker {
         instr: &b::Instr,
         stack: &mut Stack,
         func_idx: Option<b::FuncIdx>,
-    ) -> bool {
+    ) {
         match instr {
-            b::Instr::Pull(v) => stack.pull(*v),
-            b::Instr::Ref(v) => stack.dup(*v),
+            b::Instr::Dup(v) => stack.dup(*v),
             b::Instr::Drop(v) => {
                 stack.drop(*v);
             }
@@ -234,29 +226,56 @@ impl TypeChecker {
                 stack.push_block(BlockEntry {
                     stack: stack.clone(),
                     result: entry,
+                    is_loop: false,
+                    branches: 2,
+                    never_branches: 0,
                 });
             }
             b::Instr::Else => {
                 assert!(stack.block_len() >= 1);
-                let block = stack.pop_block();
+                let mut block = stack.pop_block();
 
-                assert!(stack.len() == block.stack.len() + 1);
-                let res = stack.pop();
-                self.merge_entries(&[res, block.result]);
+                if !stack.unreachable {
+                    assert!(stack.len() == block.stack.len() + 1);
+                    let res = stack.pop();
+                    self.merge_entries(&[res, block.result]);
+
+                    for (old, curr) in izip!(&block.stack, stack as &Stack) {
+                        if old != curr {
+                            self.merge_entries(&[*old, *curr]);
+                        }
+                    }
+                } else {
+                    block.never_branches += 1;
+                }
 
                 *stack = block.stack.clone();
                 stack.push_block(block);
             }
             b::Instr::End => {
                 assert!(stack.block_len() >= 1);
-                let block = stack.pop_block();
+                let mut block = stack.pop_block();
 
-                assert!(stack.len() >= 1);
-                let res = stack.pop();
-                self.merge_entries(&[res, block.result]);
+                if !stack.unreachable {
+                    assert!(stack.len() == block.stack.len() + 1);
+                    let res = stack.pop();
+                    self.merge_entries(&[res, block.result]);
+
+                    for (old, curr) in izip!(&block.stack, stack as &Stack) {
+                        if old != curr {
+                            self.merge_entries(&[*old, *curr]);
+                        }
+                    }
+                } else {
+                    block.never_branches += 1;
+                }
 
                 *stack = block.stack;
                 stack.push(block.result);
+
+                if block.branches == block.never_branches {
+                    stack.unreachable = true;
+                }
             }
             b::Instr::Loop => {
                 let entry = self.add_entry();
@@ -264,11 +283,14 @@ impl TypeChecker {
                 stack.push_block(BlockEntry {
                     stack: stack.clone(),
                     result: entry,
+                    is_loop: true,
+                    branches: 0,
+                    never_branches: 0,
                 });
             }
             b::Instr::Continue => {
                 assert!(stack.block_len() >= 1);
-                let block = stack.get_block(1).unwrap();
+                let block = stack.find_block(|b| b.is_loop).unwrap();
                 assert!(block.stack.len() == stack.len());
 
                 for (old, curr) in izip!(&block.stack, stack as &Stack) {
@@ -277,10 +299,13 @@ impl TypeChecker {
                     }
                 }
 
-                return false;
+                stack.unreachable = true;
+            }
+            b::Instr::CompileError => {
+                let entry = self.add_entry_from_type(b::Type::unknown());
+                stack.push(entry);
             }
         }
-        true
     }
 
     fn add_entry(&mut self) -> TypeCheckEntryIdx {

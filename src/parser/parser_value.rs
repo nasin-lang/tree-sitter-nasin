@@ -5,10 +5,16 @@ pub enum ParserValue {
     Func(usize),
     Global(usize),
     Local(usize),
-    MovedLocal,
     Bool(bool),
     Number(String),
     String(String),
     Array(Vec<ParserValue>),
     Record(SortedMap<String, ParserValue>),
+    Never,
+}
+
+impl ParserValue {
+    pub fn is_never(&self) -> bool {
+        matches!(self, ParserValue::Never)
+    }
 }

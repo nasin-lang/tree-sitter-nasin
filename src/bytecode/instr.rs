@@ -9,8 +9,7 @@ pub type FuncIdx = u32;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Instr {
-    Pull(RelativeValue),
-    Ref(RelativeValue),
+    Dup(RelativeValue),
     Drop(RelativeValue),
 
     GetGlobal(GlobalIdx),
@@ -42,13 +41,14 @@ pub enum Instr {
     Loop,
     End,
     Continue,
+
+    CompileError,
 }
 
 impl Display for Instr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self {
-            Instr::Pull(v) => write!(f, "pull {v}")?,
-            Instr::Ref(v) => write!(f, "ref {v}")?,
+            Instr::Dup(v) => write!(f, "dup {v}")?,
             Instr::Drop(v) => write!(f, "drop {v}")?,
             Instr::GetGlobal(idx) => write!(f, "get_global {idx}")?,
             Instr::GetField(field_name) => write!(f, "get_field {field_name}")?,
@@ -82,6 +82,7 @@ impl Display for Instr {
             Instr::Loop => writeln!(f, "loop")?,
             Instr::End => writeln!(f, "end")?,
             Instr::Continue => writeln!(f, "continue")?,
+            Instr::CompileError => writeln!(f, "compile_error")?,
         }
         Ok(())
     }

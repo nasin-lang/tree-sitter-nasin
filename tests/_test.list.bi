@@ -55,7 +55,7 @@ it's false
 :b stdout 0
 
 :b stderr 178
-thread 'main' panicked at src/typecheck/module_checker.rs:111:9:
+thread 'main' panicked at src/typecheck/module_checker.rs:104:9:
 assertion failed: stack.len() == 1
 note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
 
