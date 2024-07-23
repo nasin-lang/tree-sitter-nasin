@@ -75,12 +75,12 @@ impl Display for Instr {
             Instr::Lt => write!(f, "lt")?,
             Instr::Lte => write!(f, "lte")?,
             Instr::Call(idx) => write!(f, "call {idx}")?,
-            Instr::If => writeln!(f, "if")?,
-            Instr::Else => writeln!(f, "else")?,
-            Instr::Loop(n) => writeln!(f, "loop {n}")?,
-            Instr::End => writeln!(f, "end")?,
-            Instr::Continue => writeln!(f, "continue")?,
-            Instr::CompileError => writeln!(f, "compile_error")?,
+            Instr::If => write!(f, "if")?,
+            Instr::Else => write!(f, "else")?,
+            Instr::Loop(n) => write!(f, "loop {n}")?,
+            Instr::End => write!(f, "end")?,
+            Instr::Continue => write!(f, "continue")?,
+            Instr::CompileError => write!(f, "compile_error")?,
         }
         Ok(())
     }

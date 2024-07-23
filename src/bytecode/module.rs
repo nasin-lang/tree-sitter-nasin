@@ -1,6 +1,8 @@
 use std::fmt;
 use std::fmt::Display;
 
+use itertools::Itertools;
+
 use super::instr::*;
 use super::ty::*;
 use crate::utils;
@@ -113,14 +115,44 @@ fn write_body(
     body: &[Instr],
     mut indent: usize,
 ) -> fmt::Result {
+    let mut buffer = vec![];
     for instr in body {
+        if matches!(
+            instr,
+            Instr::Dup(_)
+                | Instr::GetGlobal(_)
+                | Instr::CreateNumber(_)
+                | Instr::CreateBool(_)
+                | Instr::CompileError
+        ) {
+            buffer.push(instr);
+        } else if buffer.is_empty()
+            || matches!(instr, Instr::CreateString(_) | Instr::Else | Instr::End)
+        {
+            for instr in buffer.drain(..) {
+                writeln!(f, "{}{instr}", " ".repeat(indent))?;
+            }
+
         if matches!(instr, Instr::Else | Instr::End) {
             indent -= 4;
         }
-        writeln!(f, "{}", utils::indented(indent, [instr]))?;
+
+            writeln!(f, "{}{instr}", " ".repeat(indent))?;
+        } else {
+            write!(f, "{}", " ".repeat(indent))?;
+            for instr in buffer.drain(..) {
+                write!(f, "({instr}) ")?;
+            }
+            write!(f, "{instr}")?;
+            writeln!(f)?;
+        }
+
         if matches!(instr, Instr::If | Instr::Else | Instr::Loop(_)) {
             indent += 4;
         }
+    }
+    for instr in buffer.drain(..) {
+        writeln!(f, "{}{instr}", " ".repeat(indent))?;
     }
     Ok(())
 }
