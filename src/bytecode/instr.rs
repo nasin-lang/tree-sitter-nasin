@@ -1,6 +1,7 @@
 use std::fmt;
 use std::fmt::Display;
 
+use super::Type;
 use crate::utils;
 
 pub type RelativeValue = u16;
@@ -14,10 +15,10 @@ pub enum Instr {
     GetGlobal(GlobalIdx),
     GetField(String),
     CreateBool(bool),
-    CreateNumber(String),
+    CreateNumber(Type, String),
     CreateString(String),
     CreateArray(u32),
-    CreateRecord(Vec<String>),
+    CreateRecord(Type, Vec<String>),
 
     Add,
     Sub,
@@ -51,13 +52,13 @@ impl Display for Instr {
             Instr::GetGlobal(idx) => write!(f, "get_global {idx}")?,
             Instr::GetField(field_name) => write!(f, "get_field {field_name}")?,
             Instr::CreateBool(v) => write!(f, "create_bool {v}")?,
-            Instr::CreateNumber(v) => write!(f, "create_number {v}")?,
+            Instr::CreateNumber(ty, v) => write!(f, "create_number {ty} {v}")?,
             Instr::CreateString(v) => {
                 write!(f, "create_string {}", utils::encode_string_lit(v))?
             }
             Instr::CreateArray(len) => write!(f, "create_array {len}")?,
-            Instr::CreateRecord(fields) => {
-                write!(f, "create_record")?;
+            Instr::CreateRecord(ty, fields) => {
+                write!(f, "create_record {ty}")?;
                 for name in fields {
                     write!(f, " {name}")?;
                 }

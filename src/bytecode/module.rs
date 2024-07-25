@@ -1,11 +1,8 @@
 use std::fmt;
 use std::fmt::Display;
 
-use itertools::Itertools;
-
 use super::instr::*;
 use super::ty::*;
-use crate::utils;
 use crate::utils::SortedMap;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -121,7 +118,7 @@ fn write_body(
             instr,
             Instr::Dup(_)
                 | Instr::GetGlobal(_)
-                | Instr::CreateNumber(_)
+                | Instr::CreateNumber(_, _)
                 | Instr::CreateBool(_)
                 | Instr::CompileError
         ) {
@@ -133,9 +130,9 @@ fn write_body(
                 writeln!(f, "{}{instr}", " ".repeat(indent))?;
             }
 
-        if matches!(instr, Instr::Else | Instr::End) {
-            indent -= 4;
-        }
+            if matches!(instr, Instr::Else | Instr::End) {
+                indent -= 4;
+            }
 
             writeln!(f, "{}{instr}", " ".repeat(indent))?;
         } else {

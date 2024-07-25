@@ -102,7 +102,10 @@ impl<'a> ValueParser<'a> {
                 self.push_values(fields.values(), false);
                 let local_idx = self.add_instr_with_result(
                     fields.len(),
-                    b::Instr::CreateRecord(fields.keys().cloned().collect()),
+                    b::Instr::CreateRecord(
+                        b::Type::unknown(),
+                        fields.keys().cloned().collect(),
+                    ),
                 );
                 ParserValue::Local(local_idx)
             }
@@ -221,7 +224,15 @@ impl<'a> ValueParser<'a> {
                     self.add_instr_with_result(0, b::Instr::CreateBool(*v));
                 }
                 ParserValue::Number(v) => {
-                    self.add_instr_with_result(0, b::Instr::CreateNumber(v.clone()));
+                    // TODO: use better type
+                    let ty = if v.contains('.') {
+                        b::Type::AnyFloat
+                    } else if v.starts_with('-') {
+                        b::Type::AnySignedNumber
+                    } else {
+                        b::Type::AnyNumber
+                    };
+                    self.add_instr_with_result(0, b::Instr::CreateNumber(ty, v.clone()));
                 }
                 ParserValue::Never => {
                     self.add_instr_with_result(0, b::Instr::CompileError);

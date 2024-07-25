@@ -11,11 +11,26 @@ use crate::{bytecode as b, utils};
 
 type Stack = utils::ValueStack<TypeCheckEntryIdx, ScopePayload>;
 
+#[derive(Debug, Clone, new)]
+struct GlobalEntry {
+    result: TypeCheckEntryIdx,
+    #[new(default)]
+    instrs: Vec<Option<TypeCheckEntryIdx>>,
+}
+
+#[derive(Debug, Clone, new)]
+struct FuncEntry {
+    params: Vec<TypeCheckEntryIdx>,
+    ret: TypeCheckEntryIdx,
+    #[new(default)]
+    instrs: Vec<Option<TypeCheckEntryIdx>>,
+}
+
 #[derive(Debug, Clone)]
 pub struct TypeChecker {
     entries: Vec<TypeCheckEntry>,
-    globals: Vec<TypeCheckEntryIdx>,
-    funcs: Vec<(Vec<TypeCheckEntryIdx>, TypeCheckEntryIdx)>,
+    globals: Vec<GlobalEntry>,
+    funcs: Vec<FuncEntry>,
 }
 
 impl TypeChecker {
@@ -35,39 +50,53 @@ impl TypeChecker {
                 .map(|p| self.add_entry_from_type(p.ty.clone()))
                 .collect();
             let ret_idx = self.add_entry_from_type(func.ret.clone());
-            self.funcs.push((params_idxs, ret_idx));
+            self.funcs.push(FuncEntry::new(params_idxs, ret_idx));
         }
         for global in &module.globals {
             let idx = self.add_entry_from_type(global.ty.clone());
-            self.globals.push(idx);
+            self.globals.push(GlobalEntry::new(idx));
         }
 
         for (i, func) in enumerate(&mut module.funcs) {
-            let (params, ret) = self.funcs[i].clone();
-
-            if func.body.len() > 0 {
-                self.add_body(&func.body, &params, ret, Some(i as b::FuncIdx));
-            }
+            let entry = &self.funcs[i];
+            self.funcs[i].instrs = self.add_body(
+                &func.body,
+                &entry.params.clone(),
+                entry.ret,
+                Some(i as b::FuncIdx),
+            );
         }
         for (i, global) in enumerate(&module.globals) {
-            if global.body.len() == 0 {
-                continue;
-            }
-            self.add_body(&global.body, &[], self.globals[i], None);
+            self.globals[i].instrs =
+                self.add_body(&global.body, &[], self.globals[i].result, None);
         }
 
         let errors = self.validate();
 
-        for (i, global) in enumerate(&mut module.globals) {
-            let entry = self.globals[i];
-            global.ty = self.entries[entry].ty.clone();
+        for (global, entry) in izip!(&mut module.globals, &self.globals) {
+            global.ty = self.entries[entry.result].ty.clone();
+
+            for (instr, instr_entry) in izip!(&mut global.body, &entry.instrs) {
+                if let b::Instr::CreateNumber(ty, _) | b::Instr::CreateRecord(ty, _) =
+                    instr
+                {
+                    *ty = self.entries[instr_entry.unwrap()].ty.clone();
+                }
+            }
         }
-        for (i, func) in enumerate(&mut module.funcs) {
-            let (params, ret) = &self.funcs[i];
-            for (param, param_entry) in izip!(&mut func.params, params) {
+        for (func, entry) in izip!(&mut module.funcs, &self.funcs) {
+            for (param, param_entry) in izip!(&mut func.params, &entry.params) {
                 param.ty = self.entries[*param_entry].ty.clone();
             }
-            func.ret = self.entries[*ret].ty.clone();
+            func.ret = self.entries[entry.ret].ty.clone();
+
+            for (instr, instr_entry) in izip!(&mut func.body, &entry.instrs) {
+                if let b::Instr::CreateNumber(ty, _) | b::Instr::CreateRecord(ty, _) =
+                    instr
+                {
+                    *ty = self.entries[instr_entry.unwrap()].ty.clone();
+                }
+            }
         }
 
         (module, errors)
@@ -79,20 +108,30 @@ impl TypeChecker {
         inputs: &[TypeCheckEntryIdx],
         result: TypeCheckEntryIdx,
         func_idx: Option<b::FuncIdx>,
-    ) {
-        assert!(body.len() >= 1);
+    ) -> Vec<Option<TypeCheckEntryIdx>> {
+        if body.is_empty() {
+            return vec![];
+        }
 
         let mut stack = Stack::new(ScopePayload::new(result));
         for input in inputs {
             stack.push(*input);
         }
 
+        let mut instrs_entries = vec![];
         for instr in body {
-            self.add_instr(instr, &mut stack, func_idx);
+            let entry = self.add_instr(instr, &mut stack, func_idx);
+            instrs_entries.push(entry);
+            if let Some(entry) = entry {
+            stack.push(entry);
+            }
         }
+
         assert!(stack.len() >= 1);
         assert!(stack.scope_len() == 1);
         self.merge_entries(&[stack.pop(), result]);
+
+        instrs_entries
     }
 
     fn add_instr(
@@ -100,43 +139,26 @@ impl TypeChecker {
         instr: &b::Instr,
         stack: &mut Stack,
         func_idx: Option<b::FuncIdx>,
-    ) {
+    ) -> Option<TypeCheckEntryIdx> {
         match instr {
-            b::Instr::Dup(v) => stack.dup(*v),
-            b::Instr::GetGlobal(v) => {
-                stack.push(self.globals[*v as usize]);
-            }
+            b::Instr::Dup(v) => Some(*stack.get(*v).unwrap()),
+            b::Instr::GetGlobal(v) => Some(self.globals[*v as usize].result),
             b::Instr::GetField(v) => {
                 assert!(stack.len() >= 1);
                 let entry = *stack.get(0).unwrap();
                 let parent = &mut self.entries[entry];
-                let prop = parent.property(v).unwrap_or_else(|| {
+                Some(parent.property(v).unwrap_or_else(|| {
                     let idx = self.add_entry();
                     self.add_constraint(entry, Constraint::Property(v.clone(), idx));
                     idx
-                });
-                stack.push(prop)
+                }))
             }
-            b::Instr::CreateBool(_) => {
-                stack.push(self.add_entry_from_type(b::Type::Bool));
-            }
-            b::Instr::CreateNumber(v) => {
-                // TODO: use interface
-                let ty = if v.contains('.') {
-                    b::Type::AnyFloat
-                } else if v.starts_with('-') {
-                    b::Type::AnySignedNumber
-                } else {
-                    b::Type::AnyNumber
-                };
-                let entry = self.add_entry_from_type(ty);
-                stack.push(entry);
-            }
+            b::Instr::CreateBool(_) => Some(self.add_entry_from_type(b::Type::Bool)),
+            b::Instr::CreateNumber(ty, _) => Some(self.add_entry_from_type(ty.clone())),
             b::Instr::CreateString(v) => {
-                let entry = self.add_entry_from_type(b::Type::String(b::StringType {
+                Some(self.add_entry_from_type(b::Type::String(b::StringType {
                     len: Some(v.len()),
-                }));
-                stack.push(entry);
+                })))
             }
             b::Instr::CreateArray(len) => {
                 assert!(stack.len() >= *len as usize);
@@ -146,9 +168,9 @@ impl TypeChecker {
                 let item_entry = self.merge_entries(&stack.pop_many(*len as usize));
                 let entry = self.add_entry();
                 self.add_constraint(entry, Constraint::Array(item_entry));
-                stack.push(entry);
+                Some(entry)
             }
-            b::Instr::CreateRecord(fields) => {
+            b::Instr::CreateRecord(_, fields) => {
                 assert!(stack.len() >= fields.len());
                 if fields.len() == 0 {
                     todo!();
@@ -158,7 +180,7 @@ impl TypeChecker {
                 for (key, value) in izip!(fields, values) {
                     self.add_constraint(entry, Constraint::Property(key.clone(), value));
                 }
-                stack.push(entry);
+                Some(entry)
             }
             b::Instr::Add
             | b::Instr::Sub
@@ -170,7 +192,7 @@ impl TypeChecker {
                 let entry = self.merge_entries(&stack.pop_many(2));
                 // FIXME: use interface/trait
                 self.add_constraint(entry, Constraint::Is(b::Type::AnyNumber));
-                stack.push(entry);
+                Some(entry)
             }
             b::Instr::Eq
             | b::Instr::Neq
@@ -182,26 +204,26 @@ impl TypeChecker {
                 let operand = self.merge_entries(&stack.pop_many(2));
                 // FIXME: use interface/trait
                 self.add_constraint(operand, Constraint::Is(b::Type::AnyNumber));
-                stack.push(self.add_entry_from_type(b::Type::Bool));
+                Some(self.add_entry_from_type(b::Type::Bool))
             }
             b::Instr::Call(idx) => {
-                let (params, ret) = self.funcs[*idx as usize].clone();
-                assert!(stack.len() >= params.len());
+                let func = self.funcs[*idx as usize].clone();
+                assert!(stack.len() >= func.params.len());
 
-                let args = stack.pop_many(params.len());
-                for (param, arg) in izip!(params, args) {
+                let args = stack.pop_many(func.params.len());
+                for (param, arg) in izip!(func.params, args) {
                     self.add_constraint(arg, Constraint::TypeOf(param));
                 }
 
                 let entry = self.add_entry();
 
                 if func_idx.is_some_and(|i| i == *idx) {
-                    self.merge_entries(&[entry, ret]);
+                    self.merge_entries(&[entry, func.ret]);
                 } else {
-                    self.add_constraint(entry, Constraint::TypeOf(ret));
+                    self.add_constraint(entry, Constraint::TypeOf(func.ret));
                 }
 
-                stack.push(entry);
+                Some(entry)
             }
             b::Instr::If => {
                 let cond = stack.pop();
@@ -210,6 +232,7 @@ impl TypeChecker {
                 let entry = self.add_entry();
 
                 stack.create_scope(ScopePayload::new(entry));
+                None
             }
             b::Instr::Else => {
                 assert!(stack.scope_len() > 1);
@@ -221,6 +244,8 @@ impl TypeChecker {
                     let res = removed.pop().unwrap();
                     self.merge_entries(&[res, scope.payload.result]);
                 }
+
+                None
             }
             b::Instr::End => {
                 assert!(stack.scope_len() >= 1);
@@ -232,7 +257,7 @@ impl TypeChecker {
                     self.merge_entries(&[res, scope.payload.result]);
                 }
 
-                stack.push(scope.payload.result);
+                Some(scope.payload.result)
             }
             b::Instr::Loop(n) => {
                 assert!(stack.len() >= *n as usize);
@@ -245,6 +270,7 @@ impl TypeChecker {
                 scope.payload.loop_args = loop_args.clone();
 
                 stack.extend(loop_args);
+                None
             }
             b::Instr::Continue => {
                 assert!(stack.scope_len() >= 1);
@@ -264,11 +290,9 @@ impl TypeChecker {
                 }
 
                 stack.get_scope_mut().mark_as_never();
+                None
             }
-            b::Instr::CompileError => {
-                let entry = self.add_entry_from_type(b::Type::unknown());
-                stack.push(entry);
-            }
+            b::Instr::CompileError => Some(self.add_entry_from_type(b::Type::unknown())),
         }
     }
 
