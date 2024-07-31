@@ -8,7 +8,7 @@ use target_lexicon::Triple;
 use self::func::FuncCodegen;
 use self::globals::Globals;
 use super::traits::Codegen;
-use crate::utils::enumerate;
+use crate::utils::{self, enumerate};
 use crate::{bytecode as b, config};
 
 enumerate!(pub FuncNS: u32 {
@@ -21,25 +21,24 @@ enumerate!(pub BuiltinFunc: u32 {
     Exit = 1,
 });
 
-pub struct FuncBinding<'a> {
+pub struct FuncBinding {
     pub is_extern: bool,
     pub symbol_name: String,
     pub func_id: cl::FuncId,
-    pub params: &'a [b::Param],
-    pub ret: &'a b::Type,
+    pub params: Vec<b::Param>,
+    pub ret: b::Type,
 }
 
-pub struct BinaryCodegen<'a> {
+pub struct BinaryCodegen {
     pub module: cl::ObjectModule,
     module_ctx: cl::Context,
-    typedefs: Vec<&'a b::TypeDef>,
-    globals: Globals<'a>,
-    funcs: Vec<FuncBinding<'a>>,
+    typedefs: Vec<b::TypeDef>,
+    globals: Globals,
+    funcs: Vec<FuncBinding>,
     declared_funcs: Vec<cl::Function>,
     dump_clif: bool,
 }
-
-impl<'a> BinaryCodegen<'a> {
+impl BinaryCodegen {
     pub fn new(triple: Triple, cfg: &config::BuildConfig) -> Self {
         let settings_builder = cl::settings::builder();
         let flags = cl::settings::Flags::new(settings_builder);
@@ -63,13 +62,12 @@ impl<'a> BinaryCodegen<'a> {
         }
     }
 }
-
-impl<'a> Codegen<'a> for BinaryCodegen<'a> {
-    fn declare_typedef(&mut self, _idx: usize, decl: &'a b::TypeDef) {
-        self.typedefs.push(decl);
+impl Codegen<'_> for BinaryCodegen {
+    fn declare_typedef(&mut self, _idx: usize, decl: &b::TypeDef) {
+        self.typedefs.push(decl.clone());
     }
 
-    fn declare_function(&mut self, idx: usize, decl: &'a b::Func) {
+    fn declare_function(&mut self, idx: usize, decl: &b::Func) {
         let mut sig = self.module.make_signature();
 
         for param in &decl.params {
@@ -115,36 +113,43 @@ impl<'a> Codegen<'a> for BinaryCodegen<'a> {
             symbol_name,
             is_extern: decl.extn.is_some(),
             func_id,
-            params: &decl.params,
-            ret: &decl.ret,
+            params: decl.params.clone(),
+            ret: decl.ret.clone(),
         });
         self.declared_funcs.push(func);
     }
 
-    fn declare_global(&mut self, idx: usize, decl: &'a b::Global) {
+    fn declare_global(&mut self, idx: usize, decl: &b::Global) {
         self.globals
-            .insert_global(idx, decl, &mut self.module, &self.typedefs);
+            .insert_global(idx, decl, &mut self.module, self.typedefs.clone());
     }
 
-    fn build_function(&mut self, idx: usize, decl: &'a b::Func) {
-        let mut func_ctx = cl::FunctionBuilderContext::new();
-        let mut func =
-            cl::FunctionBuilder::new(&mut self.declared_funcs[idx], &mut func_ctx);
-        let mut codegen = FuncCodegen::new(
-            Some(&mut func),
-            &mut self.module,
-            &mut self.globals,
-            &self.funcs,
-            &self.typedefs,
-        );
-        codegen.create_initial_block(&decl.params);
+    fn build_function(&mut self, idx: usize, decl: &b::Func) {
+        utils::replace_with(self, |mut this| {
+            let mut func_ctx = cl::FunctionBuilderContext::new();
+            let func =
+                cl::FunctionBuilder::new(&mut this.declared_funcs[idx], &mut func_ctx);
+            let mut codegen = FuncCodegen::new(
+                Some(func),
+                this.module,
+                this.globals,
+                this.funcs,
+                this.typedefs.clone(),
+            );
+            codegen.create_initial_block(&decl.params);
 
-        for instr in &decl.body {
-            codegen.add_instr(instr);
-        }
+            for instr in &decl.body {
+                codegen.add_instr(instr);
+            }
+
+            this.module = codegen.module;
+            this.globals = codegen.globals;
+            this.funcs = codegen.funcs;
+            this
+        })
     }
 
-    fn write_to_file(self, file: &std::path::Path) {
+    fn write_to_file(self, _file: &std::path::Path) {
         todo!()
     }
 }

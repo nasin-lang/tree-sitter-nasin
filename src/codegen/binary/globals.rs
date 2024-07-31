@@ -1,89 +1,93 @@
-use std::borrow::Cow;
 use std::collections::HashMap;
 
-use cl::Module;
 use cranelift_shim::{self as cl};
 use derive_new::new;
 use itertools::repeat_n;
 
 use super::func::FuncCodegen;
 use super::types;
-use crate::bytecode as b;
+use crate::{bytecode as b, utils};
 
 #[derive(Debug, Clone)]
-pub struct GlobalBinding<'a> {
+pub struct GlobalBinding {
     pub symbol_name: String,
-    pub value: types::RuntimeValue<'a>,
-    pub ty: &'a b::Type,
-    pub init: Option<&'a [b::Instr]>,
+    pub value: types::RuntimeValue,
+    pub ty: b::Type,
+    pub init: Option<Vec<b::Instr>>,
 }
 
 /// Describe all static data that is present in the module and which values they represent
 #[derive(Debug, new)]
-pub struct Globals<'a> {
+pub struct Globals {
     #[new(default)]
-    strings: HashMap<&'a str, cl::DataId>,
+    strings: HashMap<String, cl::DataId>,
     #[new(default)]
-    tuples: HashMap<Vec<types::RuntimeValue<'a>>, cl::DataId>,
+    tuples: HashMap<Vec<types::RuntimeValue>, cl::DataId>,
     #[new(default)]
-    globals: Vec<GlobalBinding<'a>>,
+    globals: Vec<GlobalBinding>,
 }
-impl<'a> Globals<'a> {
-    pub fn get_global(&self, idx: usize) -> Option<&GlobalBinding<'a>> {
+impl Globals {
+    pub fn get_global(&self, idx: usize) -> Option<&GlobalBinding> {
         self.globals.get(idx)
     }
 
-    pub fn insert_global<'s>(
-        &'s mut self,
+    pub fn insert_global<M: cl::Module>(
+        &mut self,
         idx: usize,
-        global: &'a b::Global,
-        module: &'s mut cl::ObjectModule,
-        typedefs: &'s [&'a b::TypeDef],
-    ) where
-        'a: 's,
-    {
+        global: &b::Global,
+        module: M,
+        typedefs: Vec<b::TypeDef>,
+    ) -> M {
         assert!(idx == self.globals.len());
 
         // TODO: improve name mangling
         let symbol_name = format!("$global{idx}");
 
-        let (value, is_const) = 'parse_static_body: {
-            let mut codegen = FuncCodegen::new(None, module, self, &[], typedefs);
+        let (value, is_const, module) = utils::replace_with(self, |s| {
+            let mut codegen = FuncCodegen::new(None, module, s, vec![], typedefs.clone());
 
             for instr in &global.body {
                 if let Some(value) = codegen.value_from_instr(instr) {
                     codegen.stack.push(value);
                 } else {
-                    let data_id = codegen
-                        .globals
-                        .create_writable_for_type(&global.ty, typedefs, module);
+                    let (data_id, module) = codegen.globals.create_writable_for_type(
+                        &global.ty,
+                        &typedefs,
+                        codegen.module,
+                    );
                     let value = types::RuntimeValue::new(
-                        Cow::Borrowed(&global.ty),
+                        global.ty.clone(),
                         types::ValueSource::Data(data_id),
                     );
-                    break 'parse_static_body (value, false);
+                    return (codegen.globals, (value, false, module));
                 }
             }
 
             assert!(codegen.stack.len() == 1);
-            (codegen.stack.pop(), true)
-        };
+            (codegen.globals, (codegen.stack.pop(), true, codegen.module))
+        });
 
         self.globals.push(GlobalBinding {
             symbol_name,
             value,
-            ty: &global.ty,
-            init: if is_const { None } else { Some(&global.body) },
+            ty: global.ty.clone(),
+            init: if is_const {
+                None
+            } else {
+                Some(global.body.clone())
+            },
         });
+
+        module
     }
 
-    pub fn data_for_string(
+    pub fn data_for_string<M: cl::Module>(
         &mut self,
-        value: &'a str,
-        module: &mut cl::ObjectModule,
-    ) -> cl::DataId {
+        value: &str,
+        mut module: M,
+    ) -> (cl::DataId, M) {
         if let Some(id) = self.strings.get(value) {
-            return *id;
+            return (*id, module);
         }
 
         let data_id = module.declare_anonymous_data(false, false).unwrap();
@@ -96,17 +100,17 @@ impl<'a> Globals<'a> {
         desc.define(bytes.into());
         module.define_data(data_id, &desc).unwrap();
 
-        self.strings.insert(value, data_id);
-        data_id
+        self.strings.insert(value.to_string(), data_id);
+        (data_id, module)
     }
 
-    pub fn data_for_tuple(
+    pub fn data_for_tuple<M: cl::Module>(
         &mut self,
-        values: Vec<types::RuntimeValue<'a>>,
-        module: &mut cl::ObjectModule,
-    ) -> Option<cl::DataId> {
+        values: Vec<types::RuntimeValue>,
+        mut module: M,
+    ) -> (Option<cl::DataId>, M) {
         if let Some(id) = self.tuples.get(&values) {
-            return Some(*id);
+            return (Some(*id), module);
         }
 
         let data_id = module.declare_anonymous_data(false, false).unwrap();
@@ -126,7 +130,7 @@ impl<'a> Globals<'a> {
                 desc.write_data_addr(offset as u32, field_gv.clone(), 0);
             } else {
                 if let Err(()) = item.serialize(&mut bytes, module.isa().endianness()) {
-                    return None;
+                    return (None, module);
                 }
             }
         }
@@ -135,28 +139,28 @@ impl<'a> Globals<'a> {
         module.define_data(data_id, &desc).unwrap();
 
         self.tuples.insert(values, data_id);
-        Some(data_id)
+        (Some(data_id), module)
     }
 
-    pub fn create_writable_for_type(
+    pub fn create_writable_for_type<M: cl::Module>(
         &mut self,
         ty: &b::Type,
-        typedefs: &[&b::TypeDef],
-        module: &mut cl::ObjectModule,
-    ) -> cl::DataId {
+        typedefs: &[b::TypeDef],
+        mut module: M,
+    ) -> (cl::DataId, M) {
         let ptr = module.isa().pointer_bytes() as usize;
 
         let size = match ty {
             b::Type::String(s) => s.len.map_or(ptr, |len| len + 1),
             b::Type::Array(a) => a.len.map_or(ptr, |len| {
-                len * types::get_type(&a.item, typedefs, module).bytes() as usize
+                len * types::get_type(&a.item, typedefs, &module).bytes() as usize
             }),
             b::Type::TypeRef(i) => match &typedefs[*i as usize].body {
                 b::TypeDefBody::Record(rec) => rec
                     .fields
                     .values()
                     .map(|field| {
-                        types::get_type(&field.ty, typedefs, module).bytes() as usize
+                        types::get_type(&field.ty, typedefs, &module).bytes() as usize
                     })
                     .sum(),
             },
@@ -171,7 +175,7 @@ impl<'a> Globals<'a> {
             | b::Type::U64
             | b::Type::USize
             | b::Type::F32
-            | b::Type::F64 => types::get_type(ty, typedefs, module).bytes() as usize,
+            | b::Type::F64 => types::get_type(ty, typedefs, &module).bytes() as usize,
             b::Type::AnyNumber
             | b::Type::AnySignedNumber
             | b::Type::AnyFloat
@@ -183,6 +187,6 @@ impl<'a> Globals<'a> {
         desc.define_zeroinit(size);
         module.define_data(data_id, &desc).unwrap();
 
-        data_id
+        (data_id, module)
     }
 }

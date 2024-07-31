@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::collections::HashMap;
 use std::mem;
 
@@ -8,14 +7,14 @@ use derive_new::new;
 use crate::bytecode as b;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, new)]
-pub struct RuntimeValue<'a> {
-    pub ty: Cow<'a, b::Type>,
+pub struct RuntimeValue {
+    pub ty: b::Type,
     pub src: ValueSource,
 }
-impl<'a> RuntimeValue<'a> {
+impl RuntimeValue {
     pub fn native_type(
         &self,
-        typedefs: &[&'a b::TypeDef],
+        typedefs: &[b::TypeDef],
         module: &impl cl::Module,
     ) -> cl::Type {
         get_type(&self.ty, typedefs, module)
@@ -115,10 +114,10 @@ impl From<f64> for F64Bits {
 }
 
 pub fn tuple_from_record<'a>(
-    fields: impl Iterator<Item = (&'a String, RuntimeValue<'a>)> + 'a,
+    fields: impl Iterator<Item = (&'a String, RuntimeValue)> + 'a,
     ty: &b::Type,
-    typedefs: &[&'a b::TypeDef],
-) -> Vec<RuntimeValue<'a>> {
+    typedefs: &[b::TypeDef],
+) -> Vec<RuntimeValue> {
     let fields: HashMap<_, _> = fields.collect();
 
     match ty {
@@ -157,7 +156,7 @@ pub fn tuple_from_record<'a>(
 
 pub fn get_type(
     ty: &b::Type,
-    typedefs: &[&b::TypeDef],
+    typedefs: &[b::TypeDef],
     module: &impl cl::Module,
 ) -> cl::Type {
     match &ty {
