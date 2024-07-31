@@ -26,22 +26,17 @@ struct FuncEntry {
     instrs: Vec<Option<TypeCheckEntryIdx>>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, new)]
 pub struct TypeChecker {
+    #[new(default)]
     entries: Vec<TypeCheckEntry>,
+    #[new(default)]
     globals: Vec<GlobalEntry>,
+    #[new(default)]
     funcs: Vec<FuncEntry>,
 }
 
 impl TypeChecker {
-    pub fn new() -> Self {
-        Self {
-            entries: vec![],
-            globals: vec![],
-            funcs: vec![],
-        }
-    }
-
     pub fn check_module(&mut self, mut module: b::Module) -> (b::Module, Vec<TypeError>) {
         for func in &mut module.funcs {
             let params_idxs: Vec<_> = func
@@ -73,30 +68,31 @@ impl TypeChecker {
 
         let errors = self.validate();
 
+        macro_rules! finish_body {
+            ($body:expr, $entry:expr) => {
+                for (instr, instr_entry) in izip!(&mut ($body), &($entry).instrs) {
+                    if let b::Instr::CreateNumber(ty, _)
+                    | b::Instr::CreateArray(ty, _)
+                    | b::Instr::CreateRecord(ty, _)
+                    | b::Instr::If(ty)
+                    | b::Instr::Loop(ty, _) = instr
+                    {
+                        *ty = self.entries[instr_entry.unwrap()].ty.clone();
+                    }
+                }
+            };
+        }
+
         for (global, entry) in izip!(&mut module.globals, &self.globals) {
             global.ty = self.entries[entry.result].ty.clone();
-
-            for (instr, instr_entry) in izip!(&mut global.body, &entry.instrs) {
-                if let b::Instr::CreateNumber(ty, _) | b::Instr::CreateRecord(ty, _) =
-                    instr
-                {
-                    *ty = self.entries[instr_entry.unwrap()].ty.clone();
-                }
-            }
+            finish_body!(global.body, entry);
         }
         for (func, entry) in izip!(&mut module.funcs, &self.funcs) {
             for (param, param_entry) in izip!(&mut func.params, &entry.params) {
                 param.ty = self.entries[*param_entry].ty.clone();
             }
             func.ret = self.entries[entry.ret].ty.clone();
-
-            for (instr, instr_entry) in izip!(&mut func.body, &entry.instrs) {
-                if let b::Instr::CreateNumber(ty, _) | b::Instr::CreateRecord(ty, _) =
-                    instr
-                {
-                    *ty = self.entries[instr_entry.unwrap()].ty.clone();
-                }
-            }
+            finish_body!(func.body, entry);
         }
 
         (module, errors)
@@ -123,7 +119,7 @@ impl TypeChecker {
             let entry = self.add_instr(instr, &mut stack, func_idx);
             instrs_entries.push(entry);
             if let Some(entry) = entry {
-            stack.push(entry);
+                stack.push(entry);
             }
         }
 
@@ -160,23 +156,25 @@ impl TypeChecker {
                     len: Some(v.len()),
                 })))
             }
-            b::Instr::CreateArray(len) => {
+            b::Instr::CreateArray(ty, len) => {
                 assert!(stack.len() >= *len as usize);
                 if *len == 0 {
                     todo!();
                 }
                 let item_entry = self.merge_entries(&stack.pop_many(*len as usize));
                 let entry = self.add_entry();
+                self.add_constraint(entry, Constraint::Is(ty.clone()));
                 self.add_constraint(entry, Constraint::Array(item_entry));
                 Some(entry)
             }
-            b::Instr::CreateRecord(_, fields) => {
+            b::Instr::CreateRecord(ty, fields) => {
                 assert!(stack.len() >= fields.len());
                 if fields.len() == 0 {
                     todo!();
                 }
                 let values = stack.pop_many(fields.len());
                 let entry = self.add_entry();
+                self.add_constraint(entry, Constraint::Is(ty.clone()));
                 for (key, value) in izip!(fields, values) {
                     self.add_constraint(entry, Constraint::Property(key.clone(), value));
                 }
@@ -186,8 +184,7 @@ impl TypeChecker {
             | b::Instr::Sub
             | b::Instr::Mul
             | b::Instr::Div
-            | b::Instr::Mod
-            | b::Instr::Pow => {
+            | b::Instr::Mod => {
                 assert!(stack.len() >= 2);
                 let entry = self.merge_entries(&stack.pop_many(2));
                 // FIXME: use interface/trait
@@ -225,7 +222,7 @@ impl TypeChecker {
 
                 Some(entry)
             }
-            b::Instr::If => {
+            b::Instr::If(_) => {
                 let cond = stack.pop();
                 self.add_constraint(cond, Constraint::Is(b::Type::Bool));
 
@@ -259,7 +256,7 @@ impl TypeChecker {
 
                 Some(scope.payload.result)
             }
-            b::Instr::Loop(n) => {
+            b::Instr::Loop(_, n) => {
                 assert!(stack.len() >= *n as usize);
                 let loop_args = stack.pop_many(*n as usize);
 
@@ -431,7 +428,7 @@ impl TypeChecker {
                 }
                 Constraint::Array(target) => {
                     let ty = self.entries[*target].ty.clone();
-                    b::Type::Array(b::ArrayType::new(ty, None))
+                    b::Type::Array(b::ArrayType::new(ty.into(), None))
                 }
                 Constraint::Property(key, target) => {
                     let ty = self.entries[*target].ty.clone();

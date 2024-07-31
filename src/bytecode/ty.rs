@@ -3,6 +3,8 @@ use std::fmt::Display;
 use std::hash::Hash;
 use std::iter::zip;
 
+use derive_new::new;
+
 use super::TypeDef;
 use crate::utils::{self, SortedMap};
 
@@ -64,16 +66,20 @@ impl Type {
 
     pub fn is_number(&self) -> bool {
         matches!(self, Type::AnyNumber | Type::AnySignedNumber)
-            || self.is_signed_int()
-            || self.is_unsigned_int()
+            || self.is_sint()
+            || self.is_uint()
             || self.is_float()
     }
 
-    pub fn is_signed_int(&self) -> bool {
+    pub fn is_int(&self) -> bool {
+        self.is_sint() || self.is_uint()
+    }
+
+    pub fn is_sint(&self) -> bool {
         matches!(self, Type::I8 | Type::I16 | Type::I32 | Type::I64)
     }
 
-    pub fn is_unsigned_int(&self) -> bool {
+    pub fn is_uint(&self) -> bool {
         matches!(
             self,
             Type::U8 | Type::U16 | Type::U32 | Type::U64 | Type::USize
@@ -247,22 +253,13 @@ impl InferType {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, new)]
 pub struct StringType {
     pub len: Option<usize>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, new)]
 pub struct ArrayType {
     pub item: Box<Type>,
     pub len: Option<usize>,
-}
-
-impl ArrayType {
-    pub fn new(item: Type, len: Option<usize>) -> Self {
-        Self {
-            item: Box::new(item),
-            len,
-        }
-    }
 }

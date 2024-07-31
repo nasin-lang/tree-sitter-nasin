@@ -6,13 +6,13 @@ use std::fs;
 use target_lexicon::Triple;
 use traits::Codegen;
 
+use crate::bytecode as b;
 use crate::config::BuildConfig;
-use crate::mir;
 
-pub fn compile_program(program: &mir::Module, cfg: &BuildConfig) {
+pub fn compile_program(program: &b::Module, cfg: &BuildConfig) {
     // TODO: get the target from some kind of configuration
     let triple = Triple::host();
-    let mut codegen = binary::BinaryCodegen::new(triple, program.name.clone(), cfg);
+    let mut codegen = binary::BinaryCodegen::new(triple, cfg);
 
     for (i, typedef) in program.typedefs.iter().enumerate() {
         codegen.declare_typedef(i, typedef);
@@ -31,10 +31,6 @@ pub fn compile_program(program: &mir::Module, cfg: &BuildConfig) {
             continue;
         }
         codegen.build_function(i, func);
-    }
-
-    if let Some(init) = &program.init {
-        codegen.build_module_init(init);
     }
 
     fs::create_dir_all(cfg.out.parent().unwrap()).unwrap();

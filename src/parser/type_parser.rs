@@ -54,7 +54,7 @@ impl<'a> TypeParser<'a> {
                         .parse::<usize>()
                         .expect("Cannot cast length to integer")
                 });
-                b::Type::Array(b::ArrayType::new(item_ty, len))
+                b::Type::Array(b::ArrayType::new(item_ty.into(), len))
             }
             k => panic!("Found unexpected type `{}`", k),
         }

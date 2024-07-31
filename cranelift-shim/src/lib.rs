@@ -3,6 +3,7 @@ pub extern crate cranelift_frontend as frontend;
 pub extern crate cranelift_module as module;
 pub extern crate cranelift_object as object;
 
+pub use codegen::ir::condcodes::*;
 pub use codegen::ir::*;
 pub use codegen::{isa, settings, Context};
 pub use frontend::{

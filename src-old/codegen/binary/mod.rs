@@ -37,7 +37,6 @@ pub struct BinaryCodegen {
     declared_funcs: Vec<Function>,
     dump_clif: bool,
 }
-
 impl BinaryCodegen {
     pub fn new<V: Into<Vec<u8>>>(triple: Triple, name: V, cfg: &BuildConfig) -> Self {
         let settings_builder = settings::builder();
@@ -61,7 +60,6 @@ impl BinaryCodegen {
         }
     }
 }
-
 impl Codegen for BinaryCodegen {
     fn declare_typedef(&mut self, _idx: usize, decl: &mir::TypeDef) {
         self.typedefs.push(decl.clone());

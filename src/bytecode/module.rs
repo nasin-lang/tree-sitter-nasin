@@ -11,7 +11,6 @@ pub struct Module {
     pub globals: Vec<Global>,
     pub funcs: Vec<Func>,
 }
-
 impl Display for Module {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "module:")?;
@@ -144,7 +143,7 @@ fn write_body(
             writeln!(f)?;
         }
 
-        if matches!(instr, Instr::If | Instr::Else | Instr::Loop(_)) {
+        if matches!(instr, Instr::If(..) | Instr::Else | Instr::Loop(..)) {
             indent += 4;
         }
     }

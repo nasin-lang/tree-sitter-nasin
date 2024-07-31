@@ -53,8 +53,10 @@ impl<'a> ValueParser<'a> {
 
         if self.is_loop {
             let func = &self.module_parser.funcs[self.func_idx.unwrap()];
-            self.instrs
-                .insert(0, b::Instr::Loop(func.params.len() as u8));
+            self.instrs.insert(
+                0,
+                b::Instr::Loop(b::Type::unknown(), func.params.len() as u8),
+            );
             self.instrs.push(b::Instr::End);
         }
         (self.module_parser, self.instrs)
@@ -84,7 +86,13 @@ impl<'a> ValueParser<'a> {
                 self.push_values(&items, false);
                 let local_idx = self.add_instr_with_result(
                     items.len(),
-                    b::Instr::CreateArray(items.len() as u32),
+                    b::Instr::CreateArray(
+                        b::Type::Array(b::ArrayType::new(
+                            b::Type::unknown().into(),
+                            Some(items.len()),
+                        )),
+                        items.len() as u32,
+                    ),
                 );
                 ParserValue::Local(local_idx)
             }
@@ -159,7 +167,7 @@ impl<'a> ValueParser<'a> {
                 self.stack
                     .create_scope(ScopePayload::new(self.idents.clone()));
 
-                self.instrs.push(b::Instr::If);
+                self.instrs.push(b::Instr::If(b::Type::unknown()));
                 let then_value =
                     self.add_value_node(node.required_field("then"), returning);
 
@@ -265,7 +273,7 @@ impl<'a> ValueParser<'a> {
                 "%" => b::Instr::Mod,
                 "*" => b::Instr::Mul,
                 "/" => b::Instr::Div,
-                "**" => b::Instr::Pow,
+                "**" => todo!("pow"),
                 "==" => b::Instr::Eq,
                 "!=" => b::Instr::Neq,
                 ">" => b::Instr::Gt,

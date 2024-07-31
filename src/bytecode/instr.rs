@@ -17,7 +17,7 @@ pub enum Instr {
     CreateBool(bool),
     CreateNumber(Type, String),
     CreateString(String),
-    CreateArray(u32),
+    CreateArray(Type, u32),
     CreateRecord(Type, Vec<String>),
 
     Add,
@@ -25,7 +25,6 @@ pub enum Instr {
     Mul,
     Div,
     Mod,
-    Pow,
 
     Eq,
     Neq,
@@ -36,15 +35,14 @@ pub enum Instr {
 
     Call(FuncIdx),
 
-    If,
+    If(Type),
     Else,
-    Loop(u8),
+    Loop(Type, u8),
     End,
     Continue,
 
     CompileError,
 }
-
 impl Display for Instr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self {
@@ -56,7 +54,7 @@ impl Display for Instr {
             Instr::CreateString(v) => {
                 write!(f, "create_string {}", utils::encode_string_lit(v))?
             }
-            Instr::CreateArray(len) => write!(f, "create_array {len}")?,
+            Instr::CreateArray(ty, len) => write!(f, "create_array {ty} {len}")?,
             Instr::CreateRecord(ty, fields) => {
                 write!(f, "create_record {ty}")?;
                 for name in fields {
@@ -68,7 +66,6 @@ impl Display for Instr {
             Instr::Mul => write!(f, "mul")?,
             Instr::Div => write!(f, "div")?,
             Instr::Mod => write!(f, "mod")?,
-            Instr::Pow => write!(f, "pow")?,
             Instr::Eq => write!(f, "eq")?,
             Instr::Neq => write!(f, "neq")?,
             Instr::Gt => write!(f, "gt")?,
@@ -76,9 +73,9 @@ impl Display for Instr {
             Instr::Lt => write!(f, "lt")?,
             Instr::Lte => write!(f, "lte")?,
             Instr::Call(idx) => write!(f, "call {idx}")?,
-            Instr::If => write!(f, "if")?,
+            Instr::If(ty) => write!(f, "if {ty}")?,
             Instr::Else => write!(f, "else")?,
-            Instr::Loop(n) => write!(f, "loop {n}")?,
+            Instr::Loop(ty, n) => write!(f, "loop {ty} {n}")?,
             Instr::End => write!(f, "end")?,
             Instr::Continue => write!(f, "continue")?,
             Instr::CompileError => write!(f, "compile_error")?,
