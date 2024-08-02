@@ -1,10 +1,10 @@
-use std::fs;
 use std::path::PathBuf;
 use std::process::exit;
+use std::{env, fs};
 
 use clap::{Parser, Subcommand, ValueEnum};
-use torvo::parser::parse_module;
-use torvo::typecheck::type_check_module;
+use torvo::config::BuildConfig;
+use torvo::{codegen, parser, typecheck};
 use tree_sitter as ts;
 
 #[derive(Parser, Debug)]
@@ -67,6 +67,18 @@ fn main() {
             dump_clif,
         } => {
             let src = fs::read_to_string(&file).expect("failed to read file");
+            let cfg = BuildConfig {
+                out: out.unwrap_or_else(|| {
+                    env::current_dir()
+                        .unwrap()
+                        .to_owned()
+                        .join(file.file_stem().unwrap())
+                }),
+                silent,
+                dump_ast,
+                dump_bytecode,
+                dump_clif,
+            };
 
             let mut ts_parser = ts::Parser::new();
             ts_parser
@@ -81,10 +93,10 @@ fn main() {
                 println!("{}", root_node.to_sexp());
             }
 
-            let module = parse_module(&src, root_node);
+            let module = parser::parse_module(&src, root_node);
             //eprintln!("{}", module);
 
-            let (module, errors) = type_check_module(module);
+            let (module, errors) = typecheck::check_module(module);
 
             if dump_bytecode {
                 println!("{}", module);
@@ -96,15 +108,8 @@ fn main() {
                 }
                 exit(1);
             }
-            //let cfg = BuildConfig {
-            //    out: out.unwrap_or(name.clone().into()),
-            //    silent,
-            //    dump_ast,
-            //    dump_mir,
-            //    dump_clif,
-            //};
-            //
-            //build_file(&name, &src, &cfg);
+
+            codegen::compile_program(&module, &cfg);
         }
         CliCommand::Dump { target, file } => {
             //let src = fs::read_to_string(&file).expect("failed to read file");

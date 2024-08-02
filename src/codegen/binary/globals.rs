@@ -14,17 +14,20 @@ pub struct GlobalBinding {
     pub value: types::RuntimeValue,
     pub ty: b::Type,
     pub init: Option<Vec<b::Instr>>,
+    pub entry: bool,
 }
 
 /// Describe all static data that is present in the module and which values they represent
 #[derive(Debug, new)]
 pub struct Globals {
     #[new(default)]
+    pub data: HashMap<cl::DataId, cl::DataDescription>,
+    #[new(default)]
     strings: HashMap<String, cl::DataId>,
     #[new(default)]
     tuples: HashMap<Vec<types::RuntimeValue>, cl::DataId>,
     #[new(default)]
-    globals: Vec<GlobalBinding>,
+    pub globals: Vec<GlobalBinding>,
 }
 impl Globals {
     pub fn get_global(&self, idx: usize) -> Option<&GlobalBinding> {
@@ -57,7 +60,7 @@ impl Globals {
                     );
                     let value = types::RuntimeValue::new(
                         global.ty.clone(),
-                        types::ValueSource::Data(data_id),
+                        data_id.into(),
                     );
                     return (codegen.globals, (value, false, module));
                 }
@@ -76,6 +79,7 @@ impl Globals {
             } else {
                 Some(global.body.clone())
             },
+            entry: global.entry,
         });
 
         module
@@ -100,6 +104,7 @@ impl Globals {
         desc.define(bytes.into());
         module.define_data(data_id, &desc).unwrap();
 
+        self.data.insert(data_id, desc);
         self.strings.insert(value.to_string(), data_id);
         (data_id, module)
     }
@@ -138,6 +143,7 @@ impl Globals {
         desc.define(bytes.into());
         module.define_data(data_id, &desc).unwrap();
 
+        self.data.insert(data_id, desc);
         self.tuples.insert(values, data_id);
         (Some(data_id), module)
     }
@@ -187,6 +193,7 @@ impl Globals {
         desc.define_zeroinit(size);
         module.define_data(data_id, &desc).unwrap();
 
+        self.data.insert(data_id, desc);
         (data_id, module)
     }
 }

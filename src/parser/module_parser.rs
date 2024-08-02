@@ -125,7 +125,11 @@ impl<'a> ModuleParser<'a> {
 
         let global_idx = self.globals.len();
 
-        self.globals.push(b::Global { ty, body: vec![] });
+        self.globals.push(b::Global {
+            ty,
+            body: vec![],
+            entry: name == "main",
+        });
         self.idents.insert(name, ParserValue::Global(global_idx));
 
         self.globals[global_idx].body = utils::replace_with(self, |this| {

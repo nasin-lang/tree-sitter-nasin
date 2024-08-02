@@ -6,8 +6,8 @@ use cranelift_shim as cl;
 use derive_new::new;
 use itertools::{izip, Itertools};
 
-use super::globals::Globals;
-use super::types::{self, get_type};
+use super::globals::{GlobalBinding, Globals};
+use super::types::{self, get_type, RuntimeValue};
 use super::FuncBinding;
 use crate::{bytecode as b, utils};
 
@@ -21,7 +21,7 @@ pub struct FuncCodegen<'a, M: cl::Module> {
     #[new(value = "utils::ValueStack::new(ScopePayload::default())")]
     pub stack: utils::ValueStack<types::RuntimeValue, ScopePayload>,
     #[new(default)]
-    func_refs: HashMap<b::FuncIdx, cl::FuncRef>,
+    declared_funcs: HashMap<cl::FuncId, cl::FuncRef>,
 }
 macro_rules! expect_func {
     ($self:expr) => {{
@@ -40,16 +40,13 @@ impl<M: cl::Module> FuncCodegen<'_, M> {
         let block = func.create_block();
         func.append_block_params_for_function_params(block);
         for (param, value) in izip!(params, func.block_params(block)) {
-            self.stack.push(types::RuntimeValue::new(
-                param.ty.clone(),
-                types::ValueSource::Value(*value),
-            ));
+            self.stack
+                .push(types::RuntimeValue::new(param.ty.clone(), (*value).into()));
         }
 
         func.switch_to_block(block);
         self.stack.get_scope_mut().payload.block = Some(block);
     }
-
     pub fn add_instr(&mut self, instr: &b::Instr) {
         if self.stack.get_scope().is_never()
             && !matches!(instr, b::Instr::End | b::Instr::Else)
@@ -184,9 +181,10 @@ impl<M: cl::Module> FuncCodegen<'_, M> {
                 self.stack.get_scope_mut().payload.block = Some(next_block);
 
                 self.stack.create_scope(ScopePayload {
+                    start_block: Some(then_block),
                     block: Some(then_block),
                     branches: vec![else_block],
-                    next: Some(next_block),
+                    next_block: Some(next_block),
                     ty: Some(ty.clone()),
                 });
             }
@@ -195,11 +193,12 @@ impl<M: cl::Module> FuncCodegen<'_, M> {
 
                 let (scope, values) = self.stack.branch_scope();
                 let else_block = scope.payload.branches.pop().unwrap();
+                scope.payload.start_block = Some(else_block);
                 scope.payload.block = Some(else_block);
 
                 if !scope.is_never() {
                     let value = values.last().unwrap().add_to_func(&self.module, func);
-                    func.ins().jump(scope.payload.next.unwrap(), &[value]);
+                    func.ins().jump(scope.payload.next_block.unwrap(), &[value]);
                 }
 
                 func.switch_to_block(else_block);
@@ -208,14 +207,17 @@ impl<M: cl::Module> FuncCodegen<'_, M> {
                 let func = expect_func!(self);
                 let args = self.stack.pop_many(*n as usize);
                 let mut args_values = vec![];
+                let mut loop_params = vec![];
 
                 let loop_block = func.create_block();
-                for arg in args {
-                    func.append_block_param(
+                for arg in &args {
+                    let value = func.append_block_param(
                         loop_block,
                         get_type(&arg.ty, &self.typedefs, &self.module),
                     );
                     args_values.push(arg.add_to_func(&mut self.module, func));
+                    loop_params
+                        .push(types::RuntimeValue::new(arg.ty.clone(), value.into()))
                 }
 
                 func.ins().jump(loop_block, &args_values);
@@ -230,19 +232,22 @@ impl<M: cl::Module> FuncCodegen<'_, M> {
                 self.stack.get_scope_mut().payload.block = Some(next_block);
 
                 let scope = self.stack.create_scope(ScopePayload {
+                    start_block: Some(loop_block),
                     block: Some(loop_block),
-                    next: Some(next_block),
+                    next_block: Some(next_block),
                     ty: Some(ty.clone()),
                     branches: vec![],
                 });
                 scope.is_loop = true;
                 scope.loop_arity = *n;
+
+                self.stack.extend(loop_params);
             }
             b::Instr::End => {
                 let func = expect_func!(self);
 
                 let (scope, values) = self.stack.end_scope();
-                let next_block = scope.payload.next.unwrap();
+                let next_block = scope.payload.next_block.unwrap();
 
                 if !scope.is_never() {
                     let value = values.last().unwrap().add_to_func(&self.module, func);
@@ -250,6 +255,17 @@ impl<M: cl::Module> FuncCodegen<'_, M> {
                 }
 
                 func.switch_to_block(next_block);
+
+                let block_params = func.block_params(next_block);
+                assert!(block_params.len() <= 1);
+                assert!(block_params.is_empty() == scope.payload.ty.is_none());
+
+                if let [value] = block_params {
+                    self.stack.push(types::RuntimeValue::new(
+                        scope.payload.ty.unwrap().clone(),
+                        (*value).into(),
+                    ));
+                }
             }
             b::Instr::Continue => {
                 let func = expect_func!(self);
@@ -258,7 +274,7 @@ impl<M: cl::Module> FuncCodegen<'_, M> {
                         .stack
                         .get_loop_scope()
                         .expect("continue instruction should be called in a loop");
-                    (scope.payload.block.unwrap(), scope.loop_arity)
+                    (scope.payload.start_block.unwrap(), scope.loop_arity)
                 };
 
                 let values = self
@@ -269,23 +285,12 @@ impl<M: cl::Module> FuncCodegen<'_, M> {
                     .collect_vec();
 
                 func.ins().jump(block, &values);
-                self.stack.get_loop_scope_mut().unwrap().mark_as_never();
+                self.stack.get_scope_mut().mark_as_never();
             }
             b::Instr::Call(idx) => {
                 let func = expect_func!(self);
                 let func_binding = &self.funcs[*idx as usize];
-
-                let func_ref = match self.func_refs.get(idx) {
-                    Some(func_ref) => *func_ref,
-                    None => {
-                        let func_ref = self.module.declare_func_in_func(
-                            func_binding.func_id.clone(),
-                            func.func,
-                        );
-                        self.func_refs.insert(*idx, func_ref);
-                        func_ref
-                    }
-                };
+                let ret = func_binding.ret.clone();
 
                 let args = self
                     .stack
@@ -293,14 +298,10 @@ impl<M: cl::Module> FuncCodegen<'_, M> {
                     .into_iter()
                     .map(|arg| arg.add_to_func(&mut self.module, func))
                     .collect_vec();
-                let instr = func.ins().call(func_ref, &args);
-                let results = func.inst_results(instr);
-                assert!(results.len() == 1);
 
-                self.stack.push(types::RuntimeValue::new(
-                    func_binding.ret.clone(),
-                    types::ValueSource::Value(results[0]),
-                ));
+                if let Some(value) = self.call(func_binding.func_id, &args) {
+                    self.stack.push(types::RuntimeValue::new(ret, value.into()));
+                }
             }
             b::Instr::GetField(name) => {
                 let func = expect_func!(self);
@@ -335,10 +336,8 @@ impl<M: cl::Module> FuncCodegen<'_, M> {
                     source_value,
                     offset as i32,
                 );
-                self.stack.push(types::RuntimeValue::new(
-                    field.ty.clone(),
-                    types::ValueSource::Value(value),
-                ));
+                self.stack
+                    .push(types::RuntimeValue::new(field.ty.clone(), value.into()));
             }
             b::Instr::CompileError => panic!("never should try to compile CompileError"),
             b::Instr::Dup(..)
@@ -350,7 +349,21 @@ impl<M: cl::Module> FuncCodegen<'_, M> {
             | b::Instr::GetGlobal(..) => unreachable!(),
         }
     }
+    pub fn return_value(mut self) -> (M, Globals, Vec<FuncBinding>) {
+        let func = expect_func!(self);
 
+        let value = self.stack.pop().add_to_func(&mut self.module, func);
+        func.ins().return_(&[value]);
+
+        (self.module, self.globals, self.funcs)
+    }
+    pub fn return_never(mut self) -> (M, Globals, Vec<FuncBinding>) {
+        let func = expect_func!(self);
+
+        func.ins().trap(cl::TrapCode::UnreachableCodeReached);
+
+        (self.module, self.globals, self.funcs)
+    }
     pub fn value_from_instr(&mut self, instr: &b::Instr) -> Option<types::RuntimeValue> {
         utils::replace_with(self, |mut this| {
             let v = 'match_b: {
@@ -395,16 +408,15 @@ impl<M: cl::Module> FuncCodegen<'_, M> {
                             | b::Type::AnyFloat => panic!("Cannot parse {n} as {ty}"),
                         }
                     }
-                    b::Instr::CreateBool(b) => Some(types::RuntimeValue::new(
-                        b::Type::Bool,
-                        types::ValueSource::I8(*b as u8),
-                    )),
+                    b::Instr::CreateBool(b) => {
+                        Some(types::RuntimeValue::new(b::Type::Bool, (*b as u8).into()))
+                    }
                     b::Instr::CreateString(s) => {
                         let (data, module) = this.globals.data_for_string(s, this.module);
                         this.module = module;
                         Some(types::RuntimeValue::new(
                             b::Type::String(b::StringType::new(Some(s.len()))),
-                            types::ValueSource::Data(data),
+                            data.into(),
                         ))
                     }
                     b::Instr::CreateArray(ty, n) => {
@@ -413,9 +425,9 @@ impl<M: cl::Module> FuncCodegen<'_, M> {
                             this.globals.data_for_tuple(values.clone(), this.module);
                         this.module = module;
                         let src = if let Some(data) = data {
-                            types::ValueSource::Data(data)
+                            data.into()
                         } else if this.func.is_some() {
-                            types::ValueSource::StackSlot(this.create_stack_slot(&values))
+                            this.create_stack_slot(&values).into()
                         } else {
                             break 'match_b None;
                         };
@@ -431,9 +443,9 @@ impl<M: cl::Module> FuncCodegen<'_, M> {
                             this.globals.data_for_tuple(values.clone(), this.module);
                         this.module = module;
                         let src = if let Some(data) = data {
-                            types::ValueSource::Data(data)
+                            data.into()
                         } else if this.func.is_some() {
-                            types::ValueSource::StackSlot(this.create_stack_slot(&values))
+                            this.create_stack_slot(&values).into()
                         } else {
                             break 'match_b None;
                         };
@@ -452,6 +464,43 @@ impl<M: cl::Module> FuncCodegen<'_, M> {
 
             (this, v)
         })
+    }
+    pub fn store_global(&mut self, value: RuntimeValue, global: &GlobalBinding) {
+        let types::ValueSource::Data(data_id) = &global.value.src else {
+            panic!("should never try to store a global that is a const");
+        };
+
+        let func = expect_func!(self);
+
+        let value = value.add_to_func(&mut self.module, func);
+        let gv = self.module.declare_data_in_func(*data_id, &mut func.func);
+        let ptr = func.ins().global_value(
+            types::get_type(&global.ty, &self.typedefs, &self.module),
+            gv,
+        );
+        func.ins().store(cl::MemFlags::new(), value, ptr, 0);
+    }
+    pub fn call(&mut self, func_id: cl::FuncId, args: &[cl::Value]) -> Option<cl::Value> {
+        let func = expect_func!(self);
+
+        let func_ref = match self.declared_funcs.get(&func_id) {
+            Some(func_ref) => *func_ref,
+            None => {
+                let func_ref = self.module.declare_func_in_func(func_id, func.func);
+                self.declared_funcs.insert(func_id, func_ref);
+                func_ref
+            }
+        };
+
+        let instr = func.ins().call(func_ref, &args);
+        let results = func.inst_results(instr);
+        assert!(results.len() <= 1);
+
+        if results.is_empty() {
+            None
+        } else {
+            Some(results[0])
+        }
     }
 
     fn create_stack_slot(&mut self, values: &[types::RuntimeValue]) -> cl::StackSlot {
@@ -477,7 +526,6 @@ impl<M: cl::Module> FuncCodegen<'_, M> {
 
         ss
     }
-
     fn push_bin_op(
         &mut self,
         f: impl FnOnce(&mut cl::FunctionBuilder, cl::Value, cl::Value, &b::Type) -> cl::Value,
@@ -491,15 +539,16 @@ impl<M: cl::Module> FuncCodegen<'_, M> {
         let value = f(expect_func!(self), lhs, rhs, &operands[0].ty);
         self.stack.push(types::RuntimeValue::new(
             operands[0].ty.clone(),
-            types::ValueSource::Value(value),
+            value.into(),
         ));
     }
 }
 
 #[derive(Debug, Default)]
 pub struct ScopePayload {
+    pub start_block: Option<cl::Block>,
     pub block: Option<cl::Block>,
-    pub next: Option<cl::Block>,
+    pub next_block: Option<cl::Block>,
     pub branches: Vec<cl::Block>,
     pub ty: Option<b::Type>,
 }

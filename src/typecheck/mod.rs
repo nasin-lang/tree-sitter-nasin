@@ -17,6 +17,6 @@ pub enum TypeError {
     TypeMisatch(Vec<b::Type>),
 }
 
-pub fn type_check_module(module: b::Module) -> (b::Module, Vec<TypeError>) {
+pub fn check_module(module: b::Module) -> (b::Module, Vec<TypeError>) {
     TypeChecker::new().check_module(module)
 }

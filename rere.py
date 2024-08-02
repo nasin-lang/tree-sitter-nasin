@@ -126,6 +126,7 @@ if __name__ == '__main__':
             print(f"NOTE: You may want to do `{program_name} record {test_list_path}` to update {test_list_path}.bi")
             exit(1)
 
+        failed_count = 0
         for (shell, snapshot) in zip(shells, snapshots):
             print(f"REPLAYING: {shell}")
             snapshot_shell = snapshot['shell'].decode('utf-8')
@@ -158,7 +159,13 @@ if __name__ == '__main__':
                     print(line, end='')
                 failed = True
             if failed:
-                exit(1)
+                failed_count += 1
+                print()
+
+        if failed_count > 0:
+            print(f"{failed_count} TESTS FAILED");
+            exit(1)
+
         print('OK')
     else:
         print(f'ERROR: unknown subcommand {subcommand}');

@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::mem;
 
 use cranelift_shim::{self as cl, InstBuilder};
+use derive_more::From;
 use derive_new::new;
 
 use crate::bytecode as b;
@@ -74,7 +75,7 @@ impl RuntimeValue {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, From)]
 pub enum ValueSource {
     I8(u8),
     I16(u16),
