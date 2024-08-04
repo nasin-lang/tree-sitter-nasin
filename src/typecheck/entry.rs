@@ -19,17 +19,6 @@ impl TypeCheckEntry {
             same_of: HashSet::new(),
         }
     }
-
-    pub fn property(&self, name: &str) -> Option<TypeCheckEntryIdx> {
-        for item in &self.constraints {
-            if let Constraint::Property(prop_name, idx) = item {
-                if prop_name == name {
-                    return Some(*idx);
-                }
-            }
-        }
-        None
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

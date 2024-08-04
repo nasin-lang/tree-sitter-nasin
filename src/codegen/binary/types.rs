@@ -151,7 +151,7 @@ pub fn tuple_from_record<'a>(
         | b::Type::F64
         | b::Type::String(_)
         | b::Type::Array(_)
-        | b::Type::Infer(_) => panic!("type is not a record type"),
+        | b::Type::Inferred(_) => panic!("type is not a record type"),
     }
 }
 
@@ -181,6 +181,6 @@ pub fn get_type(
         b::Type::AnyNumber
         | b::Type::AnySignedNumber
         | b::Type::AnyFloat
-        | b::Type::Infer(_) => panic!("Type must be resolved before codegen"),
+        | b::Type::Inferred(_) => panic!("Type must be resolved before codegen"),
     }
 }

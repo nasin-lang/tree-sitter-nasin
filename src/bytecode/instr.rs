@@ -46,9 +46,9 @@ pub enum Instr {
 impl Display for Instr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self {
-            Instr::Dup(v) => write!(f, "dup {v}")?,
+            Instr::Dup(v) => write!(f, "dup ^{v}")?,
             Instr::GetGlobal(idx) => write!(f, "get_global {idx}")?,
-            Instr::GetField(field_name) => write!(f, "get_field {field_name}")?,
+            Instr::GetField(field) => write!(f, "get_field .{field}")?,
             Instr::CreateBool(v) => write!(f, "create_bool {v}")?,
             Instr::CreateNumber(ty, v) => write!(f, "create_number {ty} {v}")?,
             Instr::CreateString(v) => {
@@ -57,8 +57,8 @@ impl Display for Instr {
             Instr::CreateArray(ty, len) => write!(f, "create_array {ty} {len}")?,
             Instr::CreateRecord(ty, fields) => {
                 write!(f, "create_record {ty}")?;
-                for name in fields {
-                    write!(f, " {name}")?;
+                for field in fields {
+                    write!(f, " .{field}")?;
                 }
             }
             Instr::Add => write!(f, "add")?,

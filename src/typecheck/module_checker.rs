@@ -1,8 +1,8 @@
 use std::collections::HashSet;
-use std::{mem, usize};
+use std::{cmp, mem, usize};
 
 use derive_new::new;
-use itertools::{enumerate, izip};
+use itertools::{enumerate, izip, Itertools};
 
 use super::entry::{Constraint, TypeCheckEntry, TypeCheckEntryIdx};
 use super::TypeError;
@@ -66,7 +66,7 @@ impl TypeChecker {
                 self.add_body(&global.body, &[], self.globals[i].result, None);
         }
 
-        let errors = self.validate();
+        let errors = self.validate(&module.typedefs);
 
         macro_rules! finish_body {
             ($body:expr, $entry:expr) => {
@@ -146,15 +146,9 @@ impl TypeChecker {
             }
             b::Instr::GetField(v) => {
                 assert!(stack.len() >= 1);
-                let entry = *stack.get(0).unwrap();
-                let parent = &mut self.entries[entry];
-                let property = parent.property(v).unwrap_or_else(|| {
-                    let idx = self.add_entry();
-                    self.add_constraint(entry, Constraint::Property(v.clone(), idx));
-                    idx
-                });
+                let property = self.property(stack.pop(), v);
                 stack.push(property);
-                Some(property)
+                None
             }
             b::Instr::CreateBool(_) => {
                 let entry = self.add_entry_from_type(b::Type::Bool);
@@ -326,7 +320,7 @@ impl TypeChecker {
     fn add_entry_from_type(&mut self, ty: b::Type) -> TypeCheckEntryIdx {
         let mut entry = TypeCheckEntry::new(ty.clone());
 
-        if let b::Type::Infer(b::InferType { properties }) = ty {
+        if let b::Type::Inferred(b::InferType { properties }) = ty {
             for (prop_name, prop_ty) in properties {
                 let prop_idx = self.add_entry_from_type(prop_ty);
                 entry
@@ -379,12 +373,12 @@ impl TypeChecker {
         head
     }
 
-    fn validate(&mut self) -> Vec<TypeError> {
+    fn validate(&mut self, typedefs: &[b::TypeDef]) -> Vec<TypeError> {
         let mut errors = vec![];
         let mut visited = HashSet::new();
 
         for entry in 0..self.entries.len() {
-            errors.extend(self.validate_entry(entry, &mut visited));
+            errors.extend(self.validate_entry(entry, typedefs, &mut visited));
         }
 
         errors
@@ -393,6 +387,7 @@ impl TypeChecker {
     fn validate_entry(
         &mut self,
         idx: TypeCheckEntryIdx,
+        typedefs: &[b::TypeDef],
         visited: &mut HashSet<TypeCheckEntryIdx>,
     ) -> Vec<TypeError> {
         if visited.contains(&idx) {
@@ -408,7 +403,7 @@ impl TypeChecker {
                 .clone()
                 .into_iter()
                 .map(|same_of| {
-                    errors.extend(self.validate_entry(same_of, visited));
+                    errors.extend(self.validate_entry(same_of, typedefs, visited));
                     let ty = self.entries[same_of].ty.clone();
                     ty
                 })
@@ -420,7 +415,7 @@ impl TypeChecker {
 
             let mut result_ty = tys[0].clone();
             for ty in &tys[1..] {
-                if let Some(ty) = result_ty.common_type(ty, &[]) {
+                if let Some(ty) = result_ty.common_type(ty, typedefs) {
                     result_ty = ty;
                 } else {
                     return vec![TypeError::TypeMisatch(tys)];
@@ -439,10 +434,10 @@ impl TypeChecker {
                 Constraint::Is(_) => continue,
             };
 
-            errors.extend(self.validate_entry(dep, visited));
+            errors.extend(self.validate_entry(dep, typedefs, visited));
         }
 
-        let merge_with: Vec<_> = self.entries[idx]
+        let mut merge_with = self.entries[idx]
             .constraints
             .iter()
             .map(|cons| match cons {
@@ -457,16 +452,23 @@ impl TypeChecker {
                 }
                 Constraint::Property(key, target) => {
                     let ty = self.entries[*target].ty.clone();
-                    b::Type::Infer(b::InferType {
+                    b::Type::Inferred(b::InferType {
                         properties: SortedMap::from([(key.clone(), ty)]),
                     })
                 }
             })
-            .collect();
+            .collect_vec();
+        merge_with.sort_by(|a, b| match (a, b) {
+            (b::Type::Inferred(_), _) => cmp::Ordering::Less,
+            (b::Type::AnyNumber | b::Type::AnySignedNumber | b::Type::AnyFloat, _) => {
+                cmp::Ordering::Greater
+            }
+            _ => cmp::Ordering::Equal,
+        });
 
         for ty in merge_with {
             let entry_ty = &self.entries[idx].ty;
-            match entry_ty.intersection(&ty, &[]) {
+            match entry_ty.intersection(&ty, typedefs) {
                 Some(res) => {
                     self.entries[idx].ty = res;
                 }
@@ -480,6 +482,34 @@ impl TypeChecker {
         }
 
         errors
+    }
+
+    pub fn property(&mut self, idx: TypeCheckEntryIdx, name: &str) -> TypeCheckEntryIdx {
+        let entry = &self.entries[idx];
+
+        for item in &entry.constraints {
+            if let Constraint::Property(prop_name, prop_idx) = item {
+                if prop_name == name {
+                    return *prop_idx;
+                }
+            }
+        }
+
+        let res = match entry.same_of.len() {
+            0 => self.add_entry(),
+            1 => self.property(*entry.same_of.iter().next().unwrap(), name),
+            _ => {
+                let res = self.add_entry();
+                for i in self.entries[idx].same_of.clone() {
+                    let prop = self.property(i, name);
+                    self.entries[res].same_of.insert(prop);
+                }
+                res
+            }
+        };
+
+        self.add_constraint(idx, Constraint::Property(name.to_string(), res));
+        res
     }
 }
 

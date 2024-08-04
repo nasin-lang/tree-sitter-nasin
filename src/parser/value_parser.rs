@@ -111,6 +111,12 @@ impl<'a> ValueParser<'a> {
                 let local_idx = self.add_instr_with_result(
                     fields.len(),
                     b::Instr::CreateRecord(
+                        //b::Type::Infer(b::InferType {
+                        //    properties: fields
+                        //        .keys()
+                        //        .map(|k| (k.clone(), b::Type::unknown()))
+                        //        .collect(),
+                        //}),
                         b::Type::unknown(),
                         fields.keys().cloned().collect(),
                     ),

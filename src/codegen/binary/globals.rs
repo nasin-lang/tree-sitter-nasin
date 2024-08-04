@@ -58,15 +58,13 @@ impl Globals {
                         &typedefs,
                         codegen.module,
                     );
-                    let value = types::RuntimeValue::new(
-                        global.ty.clone(),
-                        data_id.into(),
-                    );
+                    let value =
+                        types::RuntimeValue::new(global.ty.clone(), data_id.into());
                     return (codegen.globals, (value, false, module));
                 }
             }
 
-            assert!(codegen.stack.len() == 1);
+            assert!(codegen.stack.len() >= 1);
             (codegen.globals, (codegen.stack.pop(), true, codegen.module))
         });
 
@@ -185,7 +183,7 @@ impl Globals {
             b::Type::AnyNumber
             | b::Type::AnySignedNumber
             | b::Type::AnyFloat
-            | b::Type::Infer(_) => unreachable!(),
+            | b::Type::Inferred(_) => unreachable!(),
         };
 
         let data_id = module.declare_anonymous_data(false, false).unwrap();

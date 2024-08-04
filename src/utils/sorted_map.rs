@@ -1,3 +1,4 @@
+use std::borrow::Borrow;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 
@@ -25,20 +26,32 @@ impl<K: Ord, V> SortedMap<K, V> {
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
-    pub fn get(&self, key: &K) -> Option<&V> {
-        match self.items.binary_search_by(|item| key.cmp(&item.0)) {
+    pub fn get<Q: ?Sized>(&self, key: &Q) -> Option<&V>
+    where
+        K: Borrow<Q>,
+        Q: Ord,
+    {
+        match self.index_for(&key) {
             Ok(idx) => Some(&self.items[idx].1),
             Err(_) => None,
         }
     }
-    pub fn get_mut(&mut self, key: &K) -> Option<&mut V> {
-        match self.items.binary_search_by(|item| key.cmp(&item.0)) {
+    pub fn get_mut<Q: ?Sized>(&mut self, key: &Q) -> Option<&mut V>
+    where
+        K: Borrow<Q>,
+        Q: Ord,
+    {
+        match self.index_for(&key) {
             Ok(idx) => Some(&mut self.items[idx].1),
             Err(_) => None,
         }
     }
-    pub fn contains(&self, key: &K) -> bool {
-        self.items.binary_search_by(|item| key.cmp(&item.0)).is_ok()
+    pub fn contains<Q: ?Sized>(&self, key: &Q) -> bool
+    where
+        K: Borrow<Q>,
+        Q: Ord,
+    {
+        self.index_for(&key).is_ok()
     }
     pub fn iter(&self) -> impl Iterator<Item = &(K, V)> {
         self.items.iter()
@@ -59,16 +72,27 @@ impl<K: Ord, V> SortedMap<K, V> {
         self.items.iter_mut().map(|item| &mut item.1)
     }
     pub fn insert(&mut self, key: K, value: V) {
-        match self.items.binary_search_by(|item| key.cmp(&item.0)) {
+        match self.index_for(&key) {
             Ok(idx) => self.items[idx] = (key, value),
             Err(idx) => self.items.insert(idx, (key, value)),
         }
     }
-    pub fn remove(&mut self, key: K, value: V) {
-        match self.items.binary_search_by(|item| key.cmp(&item.0)) {
-            Ok(idx) => self.items[idx] = (key, value),
-            Err(idx) => self.items.insert(idx, (key, value)),
+    pub fn remove<Q: ?Sized>(&mut self, key: &Q)
+    where
+        K: Borrow<Q>,
+        Q: Ord,
+    {
+        if let Ok(idx) = self.index_for(&key) {
+            self.items.remove(idx);
         }
+    }
+
+    fn index_for<Q: ?Sized>(&self, key: &Q) -> Result<usize, usize>
+    where
+        K: Borrow<Q>,
+        Q: Ord,
+    {
+        self.items.binary_search_by(|item| item.0.borrow().cmp(key))
     }
 }
 
@@ -146,16 +170,18 @@ impl<K: Ord, V> FromIterator<(K, V)> for SortedMap<K, V> {
 
 impl<K: Ord + Debug, V: Debug> Debug for SortedMap<K, V> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "SortedMap(")?;
+        write!(f, "SortedMap {{")?;
         if self.items.len() == 1 {
             let (key, value) = &self.items[0];
-            write!(f, "{key:?} => {value:?}")?;
-        } else {
-            for (key, value) in self.iter() {
-                write!(f, "\n{}", indented(2, [format!("{key:?} => {value:?}")]))?;
-            }
+            write!(f, "{key:?}: {value:?}")?;
+        } else if self.items.len() > 1 {
+            writeln!(
+                f,
+                "\n{}",
+                indented(2, self.iter().map(|(k, v)| format!("{k:?}: {v:?}")))
+            )?;
         }
-        write!(f, ")")?;
+        write!(f, "}}")?;
         Ok(())
     }
 }

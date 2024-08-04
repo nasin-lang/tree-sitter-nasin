@@ -57,13 +57,12 @@ it's false
 
 :b shell 88
 ./bin/torvo b tests/record_type.torv -o tests/out/record_type && ./tests/out/record_type
-:i returncode 101
-:b stdout 0
+:i returncode 18
+:b stdout 60
+Compiled program to tests/out/record_type
+Hello from record
 
-:b stderr 150
-thread 'main' panicked at src/bytecode/ty.rs:96:33:
-not yet implemented
-note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+:b stderr 0
 
 :b shell 82
 ./bin/torvo b tests/recursion.torv -o tests/out/recursion && ./tests/out/recursion
