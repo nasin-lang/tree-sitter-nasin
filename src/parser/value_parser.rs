@@ -6,7 +6,6 @@ use tree_sitter as ts;
 
 use super::module_parser::ModuleParser;
 use super::parser_value::ParserValue;
-use crate::bytecode::GlobalIdx;
 use crate::utils::{TreeSitterUtils, ValueStack};
 use crate::{bytecode as b, utils};
 
@@ -53,10 +52,8 @@ impl<'a> ValueParser<'a> {
 
         if self.is_loop {
             let func = &self.module_parser.funcs[self.func_idx.unwrap()];
-            self.instrs.insert(
-                0,
-                b::Instr::Loop(b::Type::unknown(), func.params.len() as u8),
-            );
+            self.instrs
+                .insert(0, b::Instr::Loop(b::Type::unknown(), func.params.len()));
             self.instrs.push(b::Instr::End);
         }
         (self.module_parser, self.instrs)
@@ -91,7 +88,7 @@ impl<'a> ValueParser<'a> {
                             b::Type::unknown().into(),
                             Some(items.len()),
                         )),
-                        items.len() as u32,
+                        items.len(),
                     ),
                 );
                 ParserValue::Local(local_idx)
@@ -224,12 +221,12 @@ impl<'a> ValueParser<'a> {
         for value in values {
             match value {
                 ParserValue::Global(idx) => {
-                    self.add_instr_with_result(0, b::Instr::GetGlobal(*idx as GlobalIdx));
+                    self.add_instr_with_result(0, b::Instr::GetGlobal(*idx));
                 }
                 ParserValue::Func(_) => todo!("func as value"),
                 ParserValue::Local(idx) => {
                     assert!(*idx <= self.stack.len() - 1);
-                    let rel_value = (self.stack.len() - idx - 1) as b::RelativeValue;
+                    let rel_value = self.stack.len() - idx - 1;
                     if rel_value != 0 || !is_result {
                         self.add_instr_with_result(0, b::Instr::Dup(rel_value));
                     }
@@ -319,10 +316,7 @@ impl<'a> ValueParser<'a> {
                 } else {
                     self.push_values(&args, false);
 
-                    let idx = self.add_instr_with_result(
-                        args.len(),
-                        b::Instr::Call(idx as b::FuncIdx),
-                    );
+                    let idx = self.add_instr_with_result(args.len(), b::Instr::Call(idx));
                     ParserValue::Local(idx)
                 }
             }

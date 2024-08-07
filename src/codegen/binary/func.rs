@@ -213,7 +213,7 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
             }
             b::Instr::Loop(ty, n) => {
                 let builder = expect_builder!(self);
-                let args = self.stack.pop_many(*n as usize);
+                let args = self.stack.pop_many(*n);
                 let mut args_values = vec![];
                 let mut loop_params = vec![];
 
@@ -290,7 +290,7 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
 
                 let values = self
                     .stack
-                    .pop_many(arity as usize)
+                    .pop_many(arity)
                     .iter()
                     .map(|arg| arg.add_to_func(&mut self.obj_module, builder))
                     .collect_vec();
@@ -299,8 +299,8 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
                 self.stack.get_scope_mut().mark_as_never();
             }
             b::Instr::Call(idx) => {
-                let func_id = self.funcs[*idx as usize].func_id;
-                let func = &self.module.funcs[*idx as usize];
+                let func_id = self.funcs[*idx].func_id;
+                let func = &self.module.funcs[*idx];
                 let builder = expect_builder!(self);
 
                 let args = self
@@ -324,8 +324,7 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
                 let b::Type::TypeRef(type_ref) = source.ty.as_ref() else {
                     panic!("type should be a record type");
                 };
-                let b::TypeDefBody::Record(rec) =
-                    &self.module.typedefs[*type_ref as usize].body
+                let b::TypeDefBody::Record(rec) = &self.module.typedefs[*type_ref].body
                 else {
                     panic!("type should be a record type");
                 };
@@ -445,7 +444,7 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
                         ))
                     }
                     b::Instr::CreateArray(ty, n) => {
-                        let values = this.stack.pop_many(*n as usize);
+                        let values = this.stack.pop_many(*n);
                         let (data, module) =
                             this.globals.data_for_tuple(values.clone(), this.obj_module);
                         this.obj_module = module;
@@ -478,7 +477,7 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
                     }
                     b::Instr::GetGlobal(idx) => Some(
                         this.globals
-                            .get_global(*idx as usize)
+                            .get_global(*idx)
                             .expect("global idx out of range")
                             .value
                             .clone(),

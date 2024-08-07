@@ -124,7 +124,7 @@ pub fn tuple_from_record<'a>(
     let fields: HashMap<_, _> = fields.collect();
 
     match ty {
-        b::Type::TypeRef(i) => match &module.typedefs[*i as usize].body {
+        b::Type::TypeRef(i) => match &module.typedefs[*i].body {
             b::TypeDefBody::Record(rec) => rec
                 .fields
                 .keys()
@@ -177,7 +177,7 @@ pub fn get_type(
         b::Type::USize | b::Type::String(_) | b::Type::Array(_) => {
             obj_module.isa().pointer_type()
         }
-        b::Type::TypeRef(i) => match &module.typedefs[*i as usize].body {
+        b::Type::TypeRef(i) => match &module.typedefs[*i].body {
             b::TypeDefBody::Record(_) => obj_module.isa().pointer_type(),
         },
         b::Type::AnyNumber

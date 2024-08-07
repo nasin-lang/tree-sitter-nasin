@@ -152,7 +152,7 @@ impl<'a> Globals<'a> {
             b::Type::Array(a) => a.len.map_or(ptr, |len| {
                 len * types::get_type(&a.item, self.module, &module).bytes() as usize
             }),
-            b::Type::TypeRef(i) => match &&self.module.typedefs[*i as usize].body {
+            b::Type::TypeRef(i) => match &&self.module.typedefs[*i ].body {
                 b::TypeDefBody::Record(rec) => rec
                     .fields
                     .values()

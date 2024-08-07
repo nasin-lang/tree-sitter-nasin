@@ -31,7 +31,7 @@ pub enum Type {
     Inferred(InferType),
     String(StringType),
     Array(ArrayType),
-    TypeRef(u32),
+    TypeRef(usize),
 }
 
 impl Type {
@@ -97,7 +97,7 @@ impl Type {
     ) -> Option<&'a Type> {
         match self {
             Type::Inferred(v) => v.properties.get(name),
-            Type::TypeRef(idx) => match &typedefs.get(*idx as usize)?.body {
+            Type::TypeRef(idx) => match &typedefs.get(*idx)?.body {
                 TypeDefBody::Record(rec) => Some(&rec.fields.get(name)?.ty),
             },
             _ => None,

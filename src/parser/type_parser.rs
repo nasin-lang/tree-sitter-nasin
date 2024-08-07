@@ -86,6 +86,6 @@ impl<'a> TypeParser<'a> {
             body: b::TypeDefBody::Record(b::RecordType { fields }),
         });
         let type_idx = self.typedefs.len() - 1;
-        self.idents.insert(name, b::Type::TypeRef(type_idx as u32));
+        self.idents.insert(name, b::Type::TypeRef(type_idx));
     }
 }

@@ -4,20 +4,16 @@ use std::fmt::Display;
 use super::Type;
 use crate::utils;
 
-pub type RelativeValue = u16;
-pub type GlobalIdx = u32;
-pub type FuncIdx = u32;
-
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Instr {
-    Dup(RelativeValue),
+    Dup(usize),
 
-    GetGlobal(GlobalIdx),
+    GetGlobal(usize),
     GetField(String),
     CreateBool(bool),
     CreateNumber(Type, String),
     CreateString(String),
-    CreateArray(Type, u32),
+    CreateArray(Type, usize),
     CreateRecord(Type, Vec<String>),
 
     Add,
@@ -33,11 +29,11 @@ pub enum Instr {
     Lt,
     Lte,
 
-    Call(FuncIdx),
+    Call(usize),
 
     If(Type),
     Else,
-    Loop(Type, u8),
+    Loop(Type, usize),
     End,
     Continue,
 

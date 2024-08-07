@@ -4,8 +4,6 @@ use std::fmt::Debug;
 use derive_more::IntoIterator;
 use derive_new::new;
 
-use crate::bytecode::RelativeValue;
-
 #[derive(Debug, Clone, PartialEq, Eq, IntoIterator)]
 pub struct ValueStack<V, S> {
     #[into_iterator(owned, ref, ref_mut)]
@@ -25,11 +23,11 @@ impl<V, S> ValueStack<V, S> {
         self.stack.len()
     }
 
-    pub fn get(&self, pos: RelativeValue) -> Option<&V> {
+    pub fn get(&self, pos: usize) -> Option<&V> {
         self.stack.get(self.idx(pos))
     }
 
-    pub fn get_mut(&mut self, pos: RelativeValue) -> Option<&mut V> {
+    pub fn get_mut(&mut self, pos: usize) -> Option<&mut V> {
         let idx = self.idx(pos);
         self.stack.get_mut(idx)
     }
@@ -55,7 +53,7 @@ impl<V, S> ValueStack<V, S> {
         self.stack.split_off(at)
     }
 
-    pub fn dup(&mut self, pos: RelativeValue)
+    pub fn dup(&mut self, pos: usize)
     where
         V: Clone,
     {
@@ -117,8 +115,8 @@ impl<V, S> ValueStack<V, S> {
         (scope, removed)
     }
 
-    fn idx(&self, pos: RelativeValue) -> usize {
-        self.stack.len() - pos as usize - 1
+    fn idx(&self, pos: usize) -> usize {
+        self.stack.len() - pos - 1
     }
 }
 
@@ -134,7 +132,7 @@ pub struct Scope<P> {
     #[new(value = "false")]
     pub is_loop: bool,
     #[new(value = "0")]
-    pub loop_arity: u8,
+    pub loop_arity: usize,
     #[new(value = "1")]
     branches: usize,
     #[new(value = "0")]

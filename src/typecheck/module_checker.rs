@@ -58,7 +58,7 @@ impl TypeChecker {
                 &func.body,
                 &entry.params.clone(),
                 entry.ret,
-                Some(i as b::FuncIdx),
+                Some(i ),
             );
         }
         for (i, global) in enumerate(&module.globals) {
@@ -103,7 +103,7 @@ impl TypeChecker {
         body: &[b::Instr],
         inputs: &[TypeCheckEntryIdx],
         result: TypeCheckEntryIdx,
-        func_idx: Option<b::FuncIdx>,
+        func_idx: Option<usize>,
     ) -> Vec<Option<TypeCheckEntryIdx>> {
         if body.is_empty() {
             return vec![];
@@ -131,7 +131,7 @@ impl TypeChecker {
         &mut self,
         instr: &b::Instr,
         stack: &mut Stack,
-        func_idx: Option<b::FuncIdx>,
+        func_idx: Option<usize>,
     ) -> Option<TypeCheckEntryIdx> {
         match instr {
             b::Instr::Dup(v) => {
@@ -140,7 +140,7 @@ impl TypeChecker {
                 Some(value)
             }
             b::Instr::GetGlobal(v) => {
-                let result = self.globals[*v as usize].result;
+                let result = self.globals[*v ].result;
                 stack.push(result);
                 Some(result)
             }
@@ -168,11 +168,11 @@ impl TypeChecker {
                 Some(entry)
             }
             b::Instr::CreateArray(ty, len) => {
-                assert!(stack.len() >= *len as usize);
+                assert!(stack.len() >= *len );
                 if *len == 0 {
                     todo!();
                 }
-                let item_entry = self.merge_entries(&stack.pop_many(*len as usize));
+                let item_entry = self.merge_entries(&stack.pop_many(*len ));
                 let entry = self.add_entry();
                 self.add_constraint(entry, Constraint::Is(ty.clone()));
                 self.add_constraint(entry, Constraint::Array(item_entry));
@@ -220,7 +220,7 @@ impl TypeChecker {
                 Some(entry)
             }
             b::Instr::Call(idx) => {
-                let func = self.funcs[*idx as usize].clone();
+                let func = self.funcs[*idx ].clone();
                 assert!(stack.len() >= func.params.len());
 
                 let args = stack.pop_many(func.params.len());
@@ -276,8 +276,8 @@ impl TypeChecker {
                 Some(result)
             }
             b::Instr::Loop(_, n) => {
-                assert!(stack.len() >= *n as usize);
-                let loop_args = stack.pop_many(*n as usize);
+                assert!(stack.len() >= *n );
+                let loop_args = stack.pop_many(*n );
 
                 let entry = self.add_entry();
                 let scope = stack.create_scope(ScopePayload::new(entry));
@@ -294,11 +294,11 @@ impl TypeChecker {
                     .get_loop_scope()
                     .expect("continue should be inside a loop scope")
                     .clone();
-                assert!(stack.len() >= scope.start() + scope.loop_arity as usize);
+                assert!(stack.len() >= scope.start() + scope.loop_arity );
 
                 for (old, curr) in izip!(
                     scope.payload.loop_args,
-                    stack.pop_many(scope.loop_arity as usize)
+                    stack.pop_many(scope.loop_arity )
                 ) {
                     if old != curr {
                         self.merge_entries(&[old, curr]);
