@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::mem;
 
@@ -8,17 +9,17 @@ use derive_new::new;
 use crate::bytecode as b;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, new)]
-pub struct RuntimeValue {
-    pub ty: b::Type,
+pub struct RuntimeValue<'a> {
+    pub ty: Cow<'a, b::Type>,
     pub src: ValueSource,
 }
-impl RuntimeValue {
+impl RuntimeValue<'_> {
     pub fn native_type(
         &self,
-        typedefs: &[b::TypeDef],
-        module: &impl cl::Module,
+        module: &b::Module,
+        obj_module: &impl cl::Module,
     ) -> cl::Type {
-        get_type(&self.ty, typedefs, module)
+        get_type(&self.ty, module, obj_module)
     }
     pub fn serialize(
         &self,
@@ -50,7 +51,7 @@ impl RuntimeValue {
     }
     pub fn add_to_func(
         &self,
-        module: &impl cl::Module,
+        obj_module: &impl cl::Module,
         func: &mut cl::FunctionBuilder,
     ) -> cl::Value {
         match self.src {
@@ -64,12 +65,13 @@ impl RuntimeValue {
             ValueSource::F32(n) => func.ins().f32const(n.to_float()),
             ValueSource::F64(n) => func.ins().f64const(n.to_float()),
             ValueSource::Data(data_id) => {
-                let field_gv = module.declare_data_in_func(data_id, &mut func.func);
+                let field_gv = obj_module.declare_data_in_func(data_id, &mut func.func);
                 func.ins()
-                    .global_value(module.isa().pointer_type(), field_gv.clone())
+                    .global_value(obj_module.isa().pointer_type(), field_gv.clone())
             }
             ValueSource::StackSlot(ss) => {
-                func.ins().stack_addr(module.isa().pointer_type(), ss, 0)
+                func.ins()
+                    .stack_addr(obj_module.isa().pointer_type(), ss, 0)
             }
         }
     }
@@ -115,14 +117,14 @@ impl From<f64> for F64Bits {
 }
 
 pub fn tuple_from_record<'a>(
-    fields: impl Iterator<Item = (&'a String, RuntimeValue)> + 'a,
+    fields: impl Iterator<Item = (&'a String, RuntimeValue<'a>)> + 'a,
     ty: &b::Type,
-    typedefs: &[b::TypeDef],
-) -> Vec<RuntimeValue> {
+    module: &b::Module,
+) -> Vec<RuntimeValue<'a>> {
     let fields: HashMap<_, _> = fields.collect();
 
     match ty {
-        b::Type::TypeRef(i) => match &typedefs[*i as usize].body {
+        b::Type::TypeRef(i) => match &module.typedefs[*i as usize].body {
             b::TypeDefBody::Record(rec) => rec
                 .fields
                 .keys()
@@ -157,8 +159,8 @@ pub fn tuple_from_record<'a>(
 
 pub fn get_type(
     ty: &b::Type,
-    typedefs: &[b::TypeDef],
-    module: &impl cl::Module,
+    module: &b::Module,
+    obj_module: &impl cl::Module,
 ) -> cl::Type {
     match &ty {
         b::Type::Bool => cl::types::I8,
@@ -173,10 +175,10 @@ pub fn get_type(
         b::Type::F32 => cl::types::F32,
         b::Type::F64 => cl::types::F64,
         b::Type::USize | b::Type::String(_) | b::Type::Array(_) => {
-            module.isa().pointer_type()
+            obj_module.isa().pointer_type()
         }
-        b::Type::TypeRef(i) => match &typedefs[*i as usize].body {
-            b::TypeDefBody::Record(_) => module.isa().pointer_type(),
+        b::Type::TypeRef(i) => match &module.typedefs[*i as usize].body {
+            b::TypeDefBody::Record(_) => obj_module.isa().pointer_type(),
         },
         b::Type::AnyNumber
         | b::Type::AnySignedNumber

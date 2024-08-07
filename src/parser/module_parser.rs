@@ -128,7 +128,7 @@ impl<'a> ModuleParser<'a> {
         self.globals.push(b::Global {
             ty,
             body: vec![],
-            entry: name == "main",
+            is_entry_point: name == "main",
         });
         self.idents.insert(name, ParserValue::Global(global_idx));
 

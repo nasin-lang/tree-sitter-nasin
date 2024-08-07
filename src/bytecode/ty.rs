@@ -96,7 +96,7 @@ impl Type {
         typedefs: &'a [TypeDef],
     ) -> Option<&'a Type> {
         match self {
-            Type::Inferred(v) => v.properties.get(&name.to_string()),
+            Type::Inferred(v) => v.properties.get(name),
             Type::TypeRef(idx) => match &typedefs.get(*idx as usize)?.body {
                 TypeDefBody::Record(rec) => Some(&rec.fields.get(name)?.ty),
             },

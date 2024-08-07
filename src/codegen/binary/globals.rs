@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 use cranelift_shim::{self as cl};
@@ -9,75 +10,68 @@ use super::types;
 use crate::{bytecode as b, utils};
 
 #[derive(Debug, Clone)]
-pub struct GlobalBinding {
+pub struct GlobalBinding<'a> {
     pub symbol_name: String,
-    pub value: types::RuntimeValue,
-    pub ty: b::Type,
-    pub init: Option<Vec<b::Instr>>,
-    pub entry: bool,
+    pub value: types::RuntimeValue<'a>,
+    pub is_const: bool,
+    pub is_entry_point: bool,
 }
 
 /// Describe all static data that is present in the module and which values they represent
 #[derive(Debug, new)]
-pub struct Globals {
+pub struct Globals<'a> {
+    pub module: &'a b::Module,
     #[new(default)]
     pub data: HashMap<cl::DataId, cl::DataDescription>,
     #[new(default)]
     strings: HashMap<String, cl::DataId>,
     #[new(default)]
-    tuples: HashMap<Vec<types::RuntimeValue>, cl::DataId>,
+    tuples: HashMap<Vec<types::RuntimeValue<'a>>, cl::DataId>,
     #[new(default)]
-    pub globals: Vec<GlobalBinding>,
+    pub globals: Vec<GlobalBinding<'a>>,
 }
-impl Globals {
-    pub fn get_global(&self, idx: usize) -> Option<&GlobalBinding> {
+impl<'a> Globals<'a> {
+    pub fn get_global(&self, idx: usize) -> Option<&GlobalBinding<'a>> {
         self.globals.get(idx)
     }
 
-    pub fn insert_global<M: cl::Module>(
-        &mut self,
-        idx: usize,
-        global: &b::Global,
-        module: M,
-        typedefs: Vec<b::TypeDef>,
-    ) -> M {
+    pub fn insert_global<M: cl::Module>(&mut self, idx: usize, obj_module: M) -> M {
+        let global = &self.module.globals[idx];
         assert!(idx == self.globals.len());
 
         // TODO: improve name mangling
         let symbol_name = format!("$global{idx}");
 
         let (value, is_const, module) = utils::replace_with(self, |s| {
-            let mut codegen = FuncCodegen::new(None, module, s, vec![], typedefs.clone());
+            let mut codegen = FuncCodegen::new(self.module, None, obj_module, s, vec![]);
 
             for instr in &global.body {
                 if let Some(value) = codegen.value_from_instr(instr) {
                     codegen.stack.push(value);
                 } else {
-                    let (data_id, module) = codegen.globals.create_writable_for_type(
-                        &global.ty,
-                        &typedefs,
-                        codegen.module,
+                    let (data_id, module) = codegen
+                        .globals
+                        .create_writable_for_type(&global.ty, codegen.obj_module);
+                    let value = types::RuntimeValue::new(
+                        Cow::Borrowed(&global.ty),
+                        data_id.into(),
                     );
-                    let value =
-                        types::RuntimeValue::new(global.ty.clone(), data_id.into());
                     return (codegen.globals, (value, false, module));
                 }
             }
 
             assert!(codegen.stack.len() >= 1);
-            (codegen.globals, (codegen.stack.pop(), true, codegen.module))
+            (
+                codegen.globals,
+                (codegen.stack.pop(), true, codegen.obj_module),
+            )
         });
 
         self.globals.push(GlobalBinding {
             symbol_name,
             value,
-            ty: global.ty.clone(),
-            init: if is_const {
-                None
-            } else {
-                Some(global.body.clone())
-            },
-            entry: global.entry,
+            is_const,
+            is_entry_point: global.is_entry_point,
         });
 
         module
@@ -109,7 +103,7 @@ impl Globals {
 
     pub fn data_for_tuple<M: cl::Module>(
         &mut self,
-        values: Vec<types::RuntimeValue>,
+        values: Vec<types::RuntimeValue<'a>>,
         mut module: M,
     ) -> (Option<cl::DataId>, M) {
         if let Some(id) = self.tuples.get(&values) {
@@ -149,7 +143,6 @@ impl Globals {
     pub fn create_writable_for_type<M: cl::Module>(
         &mut self,
         ty: &b::Type,
-        typedefs: &[b::TypeDef],
         mut module: M,
     ) -> (cl::DataId, M) {
         let ptr = module.isa().pointer_bytes() as usize;
@@ -157,14 +150,14 @@ impl Globals {
         let size = match ty {
             b::Type::String(s) => s.len.map_or(ptr, |len| len + 1),
             b::Type::Array(a) => a.len.map_or(ptr, |len| {
-                len * types::get_type(&a.item, typedefs, &module).bytes() as usize
+                len * types::get_type(&a.item, self.module, &module).bytes() as usize
             }),
-            b::Type::TypeRef(i) => match &typedefs[*i as usize].body {
+            b::Type::TypeRef(i) => match &&self.module.typedefs[*i as usize].body {
                 b::TypeDefBody::Record(rec) => rec
                     .fields
                     .values()
                     .map(|field| {
-                        types::get_type(&field.ty, typedefs, &module).bytes() as usize
+                        types::get_type(&field.ty, self.module, &module).bytes() as usize
                     })
                     .sum(),
             },
@@ -179,7 +172,7 @@ impl Globals {
             | b::Type::U64
             | b::Type::USize
             | b::Type::F32
-            | b::Type::F64 => types::get_type(ty, typedefs, &module).bytes() as usize,
+            | b::Type::F64 => types::get_type(ty, self.module, &module).bytes() as usize,
             b::Type::AnyNumber
             | b::Type::AnySignedNumber
             | b::Type::AnyFloat

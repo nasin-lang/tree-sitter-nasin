@@ -71,7 +71,7 @@ pub struct TypeDef {
 pub struct Global {
     pub ty: Type,
     pub body: Vec<Instr>,
-    pub entry: bool,
+    pub is_entry_point: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
