@@ -1,10 +1,12 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 use tree_sitter as ts;
 
-use super::parser_value::ParserValue;
+use super::parser_value::Value;
 use super::type_parser::TypeParser;
-use crate::parser::value_parser::ValueParser;
+use crate::parser::expr_parser::ExprParser;
+use crate::parser::parser_value::ValueBody;
 use crate::utils::TreeSitterUtils;
 use crate::{bytecode as b, utils};
 
@@ -12,14 +14,16 @@ pub struct ModuleParser<'a> {
     pub types: TypeParser<'a>,
     pub globals: Vec<b::Global>,
     pub funcs: Vec<b::Func>,
-    pub idents: HashMap<&'a str, ParserValue>,
+    pub idents: HashMap<&'a str, Value>,
     src: &'a str,
+    path: PathBuf,
 }
 
 impl<'a> ModuleParser<'a> {
-    pub fn new(src: &'a str) -> Self {
+    pub fn new(path: PathBuf, src: &'a str) -> Self {
         ModuleParser {
             src,
+            path,
             types: TypeParser::new(src),
             globals: vec![],
             funcs: vec![],
@@ -32,6 +36,7 @@ impl<'a> ModuleParser<'a> {
             typedefs: self.types.typedefs,
             funcs: self.funcs,
             globals: self.globals,
+            sources: vec![b::Source::new(self.path)],
         }
     }
 
@@ -62,16 +67,22 @@ impl<'a> ModuleParser<'a> {
 
                 let param_ty = match param_node.field("type") {
                     Some(ty_node) => self.types.parse_type(ty_node),
-                    None => b::Type::unknown(),
+                    None => b::Type::unknown(None),
                 };
 
-                (b::Param { ty: param_ty }, param_name)
+                (
+                    b::Param {
+                        ty: param_ty,
+                        loc: b::Loc::from_node(0, &param_node),
+                    },
+                    (param_name, b::Loc::from_node(0, &param_name_node)),
+                )
             })
             .unzip();
 
         let ret_ty = match node.field("ret_type") {
             Some(ty_node) => self.types.parse_type(ty_node),
-            None => b::Type::unknown(),
+            None => b::Type::unknown(None),
         };
 
         let mut extn: Option<b::Extern> = None;
@@ -99,15 +110,19 @@ impl<'a> ModuleParser<'a> {
             ret: ret_ty,
             extn,
             body: vec![],
+            loc: b::Loc::from_node(0, &node),
         });
-        self.idents.insert(name, ParserValue::Func(func_idx));
+        self.idents.insert(
+            name,
+            Value::new(ValueBody::Func(func_idx), b::Loc::from_node(0, &node)),
+        );
 
         if let Some(return_node) = node.field("return") {
             self.funcs[func_idx].body = utils::replace_with(self, |this| {
                 let mut value_parser =
-                    ValueParser::new(self.src, this, Some(func_idx), params_names);
+                    ExprParser::new(self.src, this, Some(func_idx), params_names);
 
-                let value = value_parser.add_value_node(return_node, true);
+                let value = value_parser.add_expr_node(return_node, true);
                 value_parser.push_values([&value], true);
 
                 value_parser.finish()
@@ -120,7 +135,7 @@ impl<'a> ModuleParser<'a> {
 
         let ty = match node.field("type") {
             Some(ty_node) => self.types.parse_type(ty_node),
-            None => b::Type::unknown(),
+            None => b::Type::unknown(None),
         };
 
         let global_idx = self.globals.len();
@@ -129,13 +144,17 @@ impl<'a> ModuleParser<'a> {
             ty,
             body: vec![],
             is_entry_point: name == "main",
+            loc: b::Loc::from_node(0, &node),
         });
-        self.idents.insert(name, ParserValue::Global(global_idx));
+        self.idents.insert(
+            name,
+            Value::new(ValueBody::Global(global_idx), b::Loc::from_node(0, &node)),
+        );
 
         self.globals[global_idx].body = utils::replace_with(self, |this| {
-            let mut value_parser = ValueParser::new(self.src, this, None, []);
+            let mut value_parser = ExprParser::new(self.src, this, None, []);
 
-            let value = value_parser.add_value_node(node.required_field("value"), true);
+            let value = value_parser.add_expr_node(node.required_field("value"), true);
             value_parser.push_values([&value], true);
             value_parser.finish()
         });

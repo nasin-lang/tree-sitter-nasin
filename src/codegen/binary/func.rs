@@ -52,7 +52,7 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
     }
     pub fn add_instr(&mut self, instr: &'a b::Instr) {
         if self.stack.get_scope().is_never()
-            && !matches!(instr, b::Instr::End | b::Instr::Else)
+            && !matches!(&instr.body, b::InstrBody::End | b::InstrBody::Else)
         {
             return;
         }
@@ -62,8 +62,8 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
             return;
         }
 
-        match instr {
-            b::Instr::Add => {
+        match &instr.body {
+            b::InstrBody::Add => {
                 self.push_bin_op(|func, lhs, rhs, ty| {
                     if ty.is_int() {
                         func.ins().iadd(lhs, rhs)
@@ -74,7 +74,7 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
                     }
                 });
             }
-            b::Instr::Sub => {
+            b::InstrBody::Sub => {
                 self.push_bin_op(|func, lhs, rhs, ty| {
                     if ty.is_int() {
                         func.ins().isub(lhs, rhs)
@@ -85,7 +85,7 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
                     }
                 });
             }
-            b::Instr::Mul => {
+            b::InstrBody::Mul => {
                 self.push_bin_op(|func, lhs, rhs, ty| {
                     if ty.is_int() {
                         func.ins().imul(lhs, rhs)
@@ -96,7 +96,7 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
                     }
                 });
             }
-            b::Instr::Div => {
+            b::InstrBody::Div => {
                 self.push_bin_op(|func, lhs, rhs, ty| {
                     if ty.is_uint() {
                         func.ins().udiv(lhs, rhs)
@@ -109,7 +109,7 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
                     }
                 });
             }
-            b::Instr::Mod => {
+            b::InstrBody::Mod => {
                 self.push_bin_op(|func, lhs, rhs, ty| {
                     if ty.is_uint() {
                         func.ins().urem(lhs, rhs)
@@ -125,38 +125,42 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
                     }
                 });
             }
-            b::Instr::Eq
-            | b::Instr::Neq
-            | b::Instr::Gt
-            | b::Instr::Lt
-            | b::Instr::Gte
-            | b::Instr::Lte => {
+            b::InstrBody::Eq
+            | b::InstrBody::Neq
+            | b::InstrBody::Gt
+            | b::InstrBody::Lt
+            | b::InstrBody::Gte
+            | b::InstrBody::Lte => {
                 self.push_bin_op(|func, lhs, rhs, ty| {
                     if ty.is_int() {
-                        let cond = match (instr, ty.is_sint()) {
-                            (b::Instr::Eq, _) => cl::IntCC::Equal,
-                            (b::Instr::Neq, _) => cl::IntCC::NotEqual,
-                            (b::Instr::Gt, true) => cl::IntCC::SignedGreaterThan,
-                            (b::Instr::Gt, false) => cl::IntCC::UnsignedGreaterThan,
-                            (b::Instr::Lt, true) => cl::IntCC::SignedLessThan,
-                            (b::Instr::Lt, false) => cl::IntCC::UnsignedLessThan,
-                            (b::Instr::Gte, true) => cl::IntCC::SignedGreaterThanOrEqual,
-                            (b::Instr::Gte, false) => {
+                        let cond = match (&instr.body, ty.is_sint()) {
+                            (b::InstrBody::Eq, _) => cl::IntCC::Equal,
+                            (b::InstrBody::Neq, _) => cl::IntCC::NotEqual,
+                            (b::InstrBody::Gt, true) => cl::IntCC::SignedGreaterThan,
+                            (b::InstrBody::Gt, false) => cl::IntCC::UnsignedGreaterThan,
+                            (b::InstrBody::Lt, true) => cl::IntCC::SignedLessThan,
+                            (b::InstrBody::Lt, false) => cl::IntCC::UnsignedLessThan,
+                            (b::InstrBody::Gte, true) => {
+                                cl::IntCC::SignedGreaterThanOrEqual
+                            }
+                            (b::InstrBody::Gte, false) => {
                                 cl::IntCC::UnsignedGreaterThanOrEqual
                             }
-                            (b::Instr::Lte, true) => cl::IntCC::SignedLessThanOrEqual,
-                            (b::Instr::Lte, false) => cl::IntCC::UnsignedLessThanOrEqual,
+                            (b::InstrBody::Lte, true) => cl::IntCC::SignedLessThanOrEqual,
+                            (b::InstrBody::Lte, false) => {
+                                cl::IntCC::UnsignedLessThanOrEqual
+                            }
                             _ => unreachable!(),
                         };
                         func.ins().icmp(cond, lhs, rhs)
                     } else if ty.is_float() {
-                        let cond = match (instr, ty.is_sint()) {
-                            (b::Instr::Eq, _) => cl::FloatCC::Equal,
-                            (b::Instr::Neq, _) => cl::FloatCC::NotEqual,
-                            (b::Instr::Gt, true) => cl::FloatCC::GreaterThan,
-                            (b::Instr::Lt, true) => cl::FloatCC::LessThan,
-                            (b::Instr::Gte, true) => cl::FloatCC::GreaterThanOrEqual,
-                            (b::Instr::Lte, true) => cl::FloatCC::LessThanOrEqual,
+                        let cond = match (&instr.body, ty.is_sint()) {
+                            (b::InstrBody::Eq, _) => cl::FloatCC::Equal,
+                            (b::InstrBody::Neq, _) => cl::FloatCC::NotEqual,
+                            (b::InstrBody::Gt, true) => cl::FloatCC::GreaterThan,
+                            (b::InstrBody::Lt, true) => cl::FloatCC::LessThan,
+                            (b::InstrBody::Gte, true) => cl::FloatCC::GreaterThanOrEqual,
+                            (b::InstrBody::Lte, true) => cl::FloatCC::LessThanOrEqual,
                             _ => unreachable!(),
                         };
                         func.ins().fcmp(cond, lhs, rhs)
@@ -165,7 +169,7 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
                     }
                 });
             }
-            b::Instr::If(ty) => {
+            b::InstrBody::If(ty) => {
                 let builder = expect_builder!(self);
                 let cond = self.stack.pop().add_to_func(&mut self.obj_module, builder);
 
@@ -191,7 +195,7 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
                     ty: Some(Cow::Borrowed(ty)),
                 });
             }
-            b::Instr::Else => {
+            b::InstrBody::Else => {
                 let builder = expect_builder!(self);
 
                 let (scope, values) = self.stack.branch_scope();
@@ -211,7 +215,7 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
 
                 builder.switch_to_block(else_block);
             }
-            b::Instr::Loop(ty, n) => {
+            b::InstrBody::Loop(ty, n) => {
                 let builder = expect_builder!(self);
                 let args = self.stack.pop_many(*n);
                 let mut args_values = vec![];
@@ -251,7 +255,7 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
 
                 self.stack.extend(loop_params);
             }
-            b::Instr::End => {
+            b::InstrBody::End => {
                 let builder = expect_builder!(self);
 
                 let (scope, values) = self.stack.end_scope();
@@ -278,7 +282,7 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
                     ));
                 }
             }
-            b::Instr::Continue => {
+            b::InstrBody::Continue => {
                 let builder = expect_builder!(self);
                 let (block, arity) = {
                     let scope = self
@@ -298,7 +302,7 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
                 builder.ins().jump(block, &values);
                 self.stack.get_scope_mut().mark_as_never();
             }
-            b::Instr::Call(idx) => {
+            b::InstrBody::Call(idx) => {
                 let func_id = self.funcs[*idx].func_id;
                 let func = &self.module.funcs[*idx];
                 let builder = expect_builder!(self);
@@ -317,11 +321,15 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
                     ));
                 }
             }
-            b::Instr::GetField(name) => {
+            b::InstrBody::GetField(name) => {
                 let builder = expect_builder!(self);
 
                 let source = self.stack.pop();
-                let b::Type::TypeRef(type_ref) = source.ty.as_ref() else {
+                let b::Type {
+                    body: b::TypeBody::TypeRef(type_ref),
+                    ..
+                } = source.ty.as_ref()
+                else {
                     panic!("type should be a record type");
                 };
                 let b::TypeDefBody::Record(rec) = &self.module.typedefs[*type_ref].body
@@ -355,14 +363,16 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
                     value.into(),
                 ));
             }
-            b::Instr::CompileError => panic!("never should try to compile CompileError"),
-            b::Instr::Dup(..)
-            | b::Instr::CreateNumber(..)
-            | b::Instr::CreateBool(..)
-            | b::Instr::CreateString(..)
-            | b::Instr::CreateArray(..)
-            | b::Instr::CreateRecord(..)
-            | b::Instr::GetGlobal(..) => unreachable!(),
+            b::InstrBody::CompileError => {
+                panic!("never should try to compile CompileError")
+            }
+            b::InstrBody::Dup(..)
+            | b::InstrBody::CreateNumber(..)
+            | b::InstrBody::CreateBool(..)
+            | b::InstrBody::CreateString(..)
+            | b::InstrBody::CreateArray(..)
+            | b::InstrBody::CreateRecord(..)
+            | b::InstrBody::GetGlobal(..) => unreachable!(),
         }
     }
     pub fn return_value(mut self) -> (M, Globals<'a>, Vec<FuncBinding>) {
@@ -386,9 +396,9 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
     ) -> Option<types::RuntimeValue<'a>> {
         utils::replace_with(self, |mut this| {
             let v = 'match_b: {
-                match instr {
-                    b::Instr::Dup(n) => Some(this.stack.get(*n).unwrap().clone()),
-                    b::Instr::CreateNumber(ty, n) => {
+                match &instr.body {
+                    b::InstrBody::Dup(n) => Some(this.stack.get(*n).unwrap().clone()),
+                    b::InstrBody::CreateNumber(ty, n) => {
                         macro_rules! parse_num {
                             ($ty:ty, $variant:ident) => {{
                                 let value: $ty = n.parse().unwrap();
@@ -399,51 +409,53 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
                             }};
                         }
 
-                        match ty {
-                            b::Type::I8 => parse_num!(i8, I8),
-                            b::Type::I16 => parse_num!(i16, I16),
-                            b::Type::I32 => parse_num!(i32, I32),
-                            b::Type::I64 => parse_num!(i64, I64),
-                            b::Type::U8 => parse_num!(u8, I8),
-                            b::Type::U16 => parse_num!(u16, I16),
-                            b::Type::U32 => parse_num!(u32, I32),
-                            b::Type::U64 => parse_num!(u64, I64),
-                            b::Type::USize => match this.obj_module.isa().pointer_bytes()
-                            {
-                                1 => parse_num!(u8, I8),
-                                2 => parse_num!(u16, I16),
-                                4 => parse_num!(u32, I32),
-                                8 => parse_num!(u64, I64),
-                                _ => unreachable!(),
-                            },
-                            b::Type::F32 => parse_num!(f32, F32),
-                            b::Type::F64 => parse_num!(f64, F64),
-                            b::Type::Bool
-                            | b::Type::String(_)
-                            | b::Type::TypeRef(_)
-                            | b::Type::Array(_)
-                            | b::Type::Inferred(_)
-                            | b::Type::AnyNumber
-                            | b::Type::AnySignedNumber
-                            | b::Type::AnyFloat => panic!("Cannot parse {n} as {ty}"),
+                        match &ty.body {
+                            b::TypeBody::I8 => parse_num!(i8, I8),
+                            b::TypeBody::I16 => parse_num!(i16, I16),
+                            b::TypeBody::I32 => parse_num!(i32, I32),
+                            b::TypeBody::I64 => parse_num!(i64, I64),
+                            b::TypeBody::U8 => parse_num!(u8, I8),
+                            b::TypeBody::U16 => parse_num!(u16, I16),
+                            b::TypeBody::U32 => parse_num!(u32, I32),
+                            b::TypeBody::U64 => parse_num!(u64, I64),
+                            b::TypeBody::USize => {
+                                match this.obj_module.isa().pointer_bytes() {
+                                    1 => parse_num!(u8, I8),
+                                    2 => parse_num!(u16, I16),
+                                    4 => parse_num!(u32, I32),
+                                    8 => parse_num!(u64, I64),
+                                    _ => unreachable!(),
+                                }
+                            }
+                            b::TypeBody::F32 => parse_num!(f32, F32),
+                            b::TypeBody::F64 => parse_num!(f64, F64),
+                            b::TypeBody::Bool
+                            | b::TypeBody::String(_)
+                            | b::TypeBody::TypeRef(_)
+                            | b::TypeBody::Array(_)
+                            | b::TypeBody::Inferred(_)
+                            | b::TypeBody::AnyNumber
+                            | b::TypeBody::AnySignedNumber
+                            | b::TypeBody::AnyFloat => panic!("Cannot parse {n} as {ty}"),
                         }
                     }
-                    b::Instr::CreateBool(b) => Some(types::RuntimeValue::new(
-                        Cow::Owned(b::Type::Bool),
+                    b::InstrBody::CreateBool(b) => Some(types::RuntimeValue::new(
+                        Cow::Owned(b::Type::new(b::TypeBody::Bool, None)),
                         (*b as u8).into(),
                     )),
-                    b::Instr::CreateString(s) => {
+                    b::InstrBody::CreateString(s) => {
                         let (data, module) =
                             this.globals.data_for_string(s, this.obj_module);
                         this.obj_module = module;
                         Some(types::RuntimeValue::new(
-                            Cow::Owned(b::Type::String(b::StringType::new(Some(
-                                s.len(),
-                            )))),
+                            Cow::Owned(b::Type::new(
+                                b::TypeBody::String(b::StringType::new(Some(s.len()))),
+                                None,
+                            )),
                             data.into(),
                         ))
                     }
-                    b::Instr::CreateArray(ty, n) => {
+                    b::InstrBody::CreateArray(ty, n) => {
                         let values = this.stack.pop_many(*n);
                         let (data, module) =
                             this.globals.data_for_tuple(values.clone(), this.obj_module);
@@ -457,7 +469,7 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
                         };
                         Some(types::RuntimeValue::new(Cow::Borrowed(ty), src))
                     }
-                    b::Instr::CreateRecord(ty, fields) => {
+                    b::InstrBody::CreateRecord(ty, fields) => {
                         let values = types::tuple_from_record(
                             izip!(fields, this.stack.pop_many(fields.len())),
                             ty,
@@ -475,7 +487,7 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
                         };
                         Some(types::RuntimeValue::new(Cow::Borrowed(ty), src))
                     }
-                    b::Instr::GetGlobal(idx) => Some(
+                    b::InstrBody::GetGlobal(idx) => Some(
                         this.globals
                             .get_global(*idx)
                             .expect("global idx out of range")

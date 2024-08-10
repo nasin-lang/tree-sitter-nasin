@@ -1,5 +1,9 @@
+use derive_new::new;
+
+use crate::bytecode as b;
+
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
-pub enum ParserValue {
+pub enum ValueBody {
     Func(usize),
     Global(usize),
     Local(usize),
@@ -8,8 +12,18 @@ pub enum ParserValue {
     Never,
 }
 
-impl ParserValue {
+#[derive(Debug, Clone, Hash, Eq, PartialEq, new)]
+pub struct Value {
+    pub body: ValueBody,
+    pub loc: b::Loc,
+}
+impl Value {
     pub fn is_never(&self) -> bool {
-        matches!(self, ParserValue::Never)
+        matches!(&self.body, ValueBody::Never)
+    }
+    pub fn with_loc(&self, loc: b::Loc) -> Self {
+        let mut new = self.clone();
+        new.loc = loc;
+        new
     }
 }

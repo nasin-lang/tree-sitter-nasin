@@ -123,8 +123,8 @@ pub fn tuple_from_record<'a>(
 ) -> Vec<RuntimeValue<'a>> {
     let fields: HashMap<_, _> = fields.collect();
 
-    match ty {
-        b::Type::TypeRef(i) => match &module.typedefs[*i].body {
+    match &ty.body {
+        b::TypeBody::TypeRef(i) => match &module.typedefs[*i].body {
             b::TypeDefBody::Record(rec) => rec
                 .fields
                 .keys()
@@ -136,24 +136,24 @@ pub fn tuple_from_record<'a>(
                 })
                 .collect(),
         },
-        b::Type::AnyNumber
-        | b::Type::AnySignedNumber
-        | b::Type::AnyFloat
-        | b::Type::Bool
-        | b::Type::I8
-        | b::Type::I16
-        | b::Type::I32
-        | b::Type::I64
-        | b::Type::U8
-        | b::Type::U16
-        | b::Type::U32
-        | b::Type::U64
-        | b::Type::USize
-        | b::Type::F32
-        | b::Type::F64
-        | b::Type::String(_)
-        | b::Type::Array(_)
-        | b::Type::Inferred(_) => panic!("type is not a record type"),
+        b::TypeBody::AnyNumber
+        | b::TypeBody::AnySignedNumber
+        | b::TypeBody::AnyFloat
+        | b::TypeBody::Bool
+        | b::TypeBody::I8
+        | b::TypeBody::I16
+        | b::TypeBody::I32
+        | b::TypeBody::I64
+        | b::TypeBody::U8
+        | b::TypeBody::U16
+        | b::TypeBody::U32
+        | b::TypeBody::U64
+        | b::TypeBody::USize
+        | b::TypeBody::F32
+        | b::TypeBody::F64
+        | b::TypeBody::String(_)
+        | b::TypeBody::Array(_)
+        | b::TypeBody::Inferred(_) => panic!("type is not a record type"),
     }
 }
 
@@ -162,27 +162,27 @@ pub fn get_type(
     module: &b::Module,
     obj_module: &impl cl::Module,
 ) -> cl::Type {
-    match &ty {
-        b::Type::Bool => cl::types::I8,
-        b::Type::I8 => cl::types::I8,
-        b::Type::I16 => cl::types::I16,
-        b::Type::I32 => cl::types::I32,
-        b::Type::I64 => cl::types::I64,
-        b::Type::U8 => cl::types::I8,
-        b::Type::U16 => cl::types::I16,
-        b::Type::U32 => cl::types::I32,
-        b::Type::U64 => cl::types::I64,
-        b::Type::F32 => cl::types::F32,
-        b::Type::F64 => cl::types::F64,
-        b::Type::USize | b::Type::String(_) | b::Type::Array(_) => {
+    match &ty.body {
+        b::TypeBody::Bool => cl::types::I8,
+        b::TypeBody::I8 => cl::types::I8,
+        b::TypeBody::I16 => cl::types::I16,
+        b::TypeBody::I32 => cl::types::I32,
+        b::TypeBody::I64 => cl::types::I64,
+        b::TypeBody::U8 => cl::types::I8,
+        b::TypeBody::U16 => cl::types::I16,
+        b::TypeBody::U32 => cl::types::I32,
+        b::TypeBody::U64 => cl::types::I64,
+        b::TypeBody::F32 => cl::types::F32,
+        b::TypeBody::F64 => cl::types::F64,
+        b::TypeBody::USize | b::TypeBody::String(_) | b::TypeBody::Array(_) => {
             obj_module.isa().pointer_type()
         }
-        b::Type::TypeRef(i) => match &module.typedefs[*i].body {
+        b::TypeBody::TypeRef(i) => match &module.typedefs[*i].body {
             b::TypeDefBody::Record(_) => obj_module.isa().pointer_type(),
         },
-        b::Type::AnyNumber
-        | b::Type::AnySignedNumber
-        | b::Type::AnyFloat
-        | b::Type::Inferred(_) => panic!("Type must be resolved before codegen"),
+        b::TypeBody::AnyNumber
+        | b::TypeBody::AnySignedNumber
+        | b::TypeBody::AnyFloat
+        | b::TypeBody::Inferred(_) => panic!("Type must be resolved before codegen"),
     }
 }

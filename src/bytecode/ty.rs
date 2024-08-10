@@ -5,11 +5,11 @@ use std::hash::Hash;
 
 use derive_new::new;
 
-use super::{TypeDef, TypeDefBody};
+use super::{Loc, TypeDef, TypeDefBody};
 use crate::utils;
 
-#[derive(Debug, Clone, Eq, PartialEq, Hash)]
-pub enum Type {
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum TypeBody {
     Bool,
     // FIXME: use interface/trait for this
     AnyNumber,
@@ -28,32 +28,58 @@ pub enum Type {
     USize,
     F32,
     F64,
-    Inferred(InferType),
+    Inferred(InferredType),
     String(StringType),
     Array(ArrayType),
     TypeRef(usize),
 }
 
+#[derive(Debug, Clone, new)]
+pub struct Type {
+    pub body: TypeBody,
+    pub loc: Option<Loc>,
+}
+
+macro_rules! unordered {
+    ($a:pat, $b:pat) => {
+        ($a, $b) | ($b, $a)
+    };
+}
+macro_rules! number {
+    ($var:ident $( , $gen:ident)*) => {
+        unordered!(
+            Type { body: TypeBody::$var, loc: _ },
+            Type { body: TypeBody::AnyNumber $( | TypeBody::$gen )*, loc: _ })
+    };
+}
+macro_rules! body {
+    ($pat:pat) => {
+        Type { body: $pat, loc: _ }
+    };
+}
 impl Type {
-    pub fn unknown() -> Self {
-        Type::Inferred(InferType {
-            properties: utils::SortedMap::new(),
-        })
+    pub fn unknown(loc: Option<Loc>) -> Self {
+        Type::new(
+            TypeBody::Inferred(InferredType {
+                properties: utils::SortedMap::new(),
+            }),
+            loc,
+        )
     }
 
     pub fn is_unknown(&self) -> bool {
-        if let Type::Inferred(i) = self {
+        if let TypeBody::Inferred(i) = &self.body {
             return i.properties.is_empty();
         }
         false
     }
 
     pub fn is_inferred(&self) -> bool {
-        matches!(self, Type::Inferred(_))
+        matches!(&self.body, TypeBody::Inferred(_))
     }
 
     pub fn is_composite(&self) -> bool {
-        matches!(self, Type::String(_) | Type::Array(_))
+        matches!(&self.body, TypeBody::String(_) | TypeBody::Array(_))
     }
 
     pub fn is_primitive(&self) -> bool {
@@ -61,11 +87,11 @@ impl Type {
     }
 
     pub fn is_bool(&self) -> bool {
-        matches!(self, Type::Bool)
+        matches!(&self.body, TypeBody::Bool)
     }
 
     pub fn is_number(&self) -> bool {
-        matches!(self, Type::AnyNumber | Type::AnySignedNumber)
+        matches!(&self.body, TypeBody::AnyNumber | TypeBody::AnySignedNumber)
             || self.is_sint()
             || self.is_uint()
             || self.is_float()
@@ -76,18 +102,28 @@ impl Type {
     }
 
     pub fn is_sint(&self) -> bool {
-        matches!(self, Type::I8 | Type::I16 | Type::I32 | Type::I64)
+        matches!(
+            &self.body,
+            TypeBody::I8 | TypeBody::I16 | TypeBody::I32 | TypeBody::I64
+        )
     }
 
     pub fn is_uint(&self) -> bool {
         matches!(
-            self,
-            Type::U8 | Type::U16 | Type::U32 | Type::U64 | Type::USize
+            &self.body,
+            TypeBody::U8
+                | TypeBody::U16
+                | TypeBody::U32
+                | TypeBody::U64
+                | TypeBody::USize
         )
     }
 
     pub fn is_float(&self) -> bool {
-        matches!(self, Type::AnyFloat | Type::F32 | Type::F64)
+        matches!(
+            &self.body,
+            TypeBody::AnyFloat | TypeBody::F32 | TypeBody::F64
+        )
     }
 
     pub fn property<'a>(
@@ -95,9 +131,9 @@ impl Type {
         name: &str,
         typedefs: &'a [TypeDef],
     ) -> Option<&'a Type> {
-        match self {
-            Type::Inferred(v) => v.properties.get(name),
-            Type::TypeRef(idx) => match &typedefs.get(*idx)?.body {
+        match &self.body {
+            TypeBody::Inferred(v) => v.properties.get(name),
+            TypeBody::TypeRef(idx) => match &typedefs.get(*idx)?.body {
                 TypeDefBody::Record(rec) => Some(&rec.fields.get(name)?.ty),
             },
             _ => None,
@@ -105,48 +141,38 @@ impl Type {
     }
 
     pub fn intersection(&self, other: &Type, typedefs: &[TypeDef]) -> Option<Type> {
-        macro_rules! unordered {
-            ($a:pat, $b:pat) => {
-                ($a, $b) | ($b, $a)
-            };
-        }
-        macro_rules! number {
-            ($var:ident $( , $gen:ident)*) => {
-                unordered!(Type::$var, Type::AnyNumber $( | Type::$gen )*)
-            };
-        }
-        match (self, other) {
-            number!(U8) => Some(Type::U8),
-            number!(U16) => Some(Type::U16),
-            number!(U32) => Some(Type::U32),
-            number!(U64) => Some(Type::U64),
-            number!(USize) => Some(Type::USize),
-            number!(I8, AnySignedNumber) => Some(Type::I8),
-            number!(I16, AnySignedNumber) => Some(Type::I16),
-            number!(I32, AnySignedNumber) => Some(Type::I32),
-            number!(I64, AnySignedNumber) => Some(Type::I64),
-            number!(F32, AnySignedNumber, AnyFloat) => Some(Type::F32),
-            number!(F64, AnySignedNumber, AnyFloat) => Some(Type::F64),
-            (Type::String(a), Type::String(b)) => {
+        let body = match (self, other) {
+            number!(U8) => TypeBody::U8,
+            number!(U16) => TypeBody::U16,
+            number!(U32) => TypeBody::U32,
+            number!(U64) => TypeBody::U64,
+            number!(USize) => TypeBody::USize,
+            number!(I8, AnySignedNumber) => TypeBody::I8,
+            number!(I16, AnySignedNumber) => TypeBody::I16,
+            number!(I32, AnySignedNumber) => TypeBody::I32,
+            number!(I64, AnySignedNumber) => TypeBody::I64,
+            number!(F32, AnySignedNumber, AnyFloat) => TypeBody::F32,
+            number!(F64, AnySignedNumber, AnyFloat) => TypeBody::F64,
+            (body!(TypeBody::String(a)), body!(TypeBody::String(b))) => {
                 let len = match (&a.len, &b.len) {
                     (a_len, b_len) if a_len == b_len => a_len.clone(),
                     (Some(len), None) | (None, Some(len)) => Some(*len),
                     _ => return None,
                 };
-                Some(Type::String(StringType { len }))
+                TypeBody::String(StringType { len })
             }
-            (Type::Array(a), Type::Array(b)) => {
+            (body!(TypeBody::Array(a)), body!(TypeBody::Array(b))) => {
                 let len = match (&a.len, &b.len) {
                     (a_len, b_len) if a_len == b_len => a_len.clone(),
                     (Some(len), None) | (None, Some(len)) => Some(*len),
                     _ => return None,
                 };
-                Some(Type::Array(ArrayType {
+                TypeBody::Array(ArrayType {
                     len,
                     item: a.item.intersection(&b.item, typedefs)?.into(),
-                }))
+                })
             }
-            (Type::Inferred(a), Type::Inferred(b)) => {
+            (body!(TypeBody::Inferred(a)), body!(TypeBody::Inferred(b))) => {
                 let mut props = utils::SortedMap::new();
                 let prop_names: HashSet<_> =
                     a.properties.keys().chain(b.properties.keys()).collect();
@@ -162,38 +188,51 @@ impl Type {
                     };
                     props.insert(prop_name.to_string(), ty);
                 }
-                Some(Type::Inferred(InferType { properties: props }))
+                TypeBody::Inferred(InferredType { properties: props })
             }
-            unordered!(Type::Inferred(a), b) => {
+            unordered!(body!(TypeBody::Inferred(a)), b) => {
                 let has_all_properties = a.properties.iter().all(|(name, a_ty)| {
-                    b.property(name, typedefs)
+                    other
+                        .property(name, typedefs)
                         .is_some_and(|b_ty| a_ty.intersection(b_ty, typedefs).is_some())
                 });
                 if has_all_properties {
-                    Some(b.clone())
+                    b.body.clone()
+                } else {
+                    return None;
+                }
+            }
+            (body!(a), body!(b)) if a == b => a.clone(),
+            _ => return None,
+        };
+        let loc = match (&self.loc, &other.loc) {
+            unordered!(Some(loc), None) => Some(*loc),
+            (Some(a), Some(b)) => {
+                if a == b {
+                    Some(*a)
                 } else {
                     None
                 }
             }
-            (a, b) if a == b => Some(a.clone()),
-            _ => None,
-        }
+            (None, None) => None,
+        };
+        Some(Type::new(body, loc))
     }
 
     pub fn common_type(&self, other: &Type, typedefs: &[TypeDef]) -> Option<Type> {
-        if self == other {
-            return Some(self.clone());
-        }
-
-        match (self, other) {
-            (Type::String(a), Type::String(b)) => Some(Type::String(StringType {
-                len: if a.len == b.len { a.len.clone() } else { None },
-            })),
-            (Type::Array(a), Type::Array(b)) => Some(Type::Array(ArrayType {
-                item: a.item.common_type(&b.item, typedefs)?.into(),
-                len: if a.len == b.len { a.len.clone() } else { None },
-            })),
-            (Type::Inferred(a), Type::Inferred(b)) => {
+        let body = match (self, other) {
+            (body!(TypeBody::String(a)), body!(TypeBody::String(b))) => {
+                TypeBody::String(StringType {
+                    len: if a.len == b.len { a.len.clone() } else { None },
+                })
+            }
+            (body!(TypeBody::Array(a)), body!(TypeBody::Array(b))) => {
+                TypeBody::Array(ArrayType {
+                    item: a.item.common_type(&b.item, typedefs)?.into(),
+                    len: if a.len == b.len { a.len.clone() } else { None },
+                })
+            }
+            (body!(TypeBody::Inferred(a)), body!(TypeBody::Inferred(b))) => {
                 let mut props = utils::SortedMap::new();
                 let prop_names: HashSet<_> =
                     a.properties.keys().chain(b.properties.keys()).collect();
@@ -209,77 +248,98 @@ impl Type {
                     };
                     props.insert(prop_name.to_string(), ty);
                 }
-                Some(Type::Inferred(InferType { properties: props }))
+                TypeBody::Inferred(InferredType { properties: props })
             }
-            (Type::Inferred(a), b) | (b, Type::Inferred(a)) => {
+            unordered!(body!(TypeBody::Inferred(a)), b) => {
                 for (prop_name, prop_ty) in &a.properties {
                     if prop_ty
-                        .common_type(b.property(prop_name, typedefs)?, typedefs)
+                        .common_type(other.property(prop_name, typedefs)?, typedefs)
                         .is_none()
                     {
                         return None;
                     }
                 }
-                Some(b.clone())
+                return Some(b.clone());
             }
-            (a, b) => a.intersection(b, typedefs),
-        }
+            (a, b) => {
+                if &a.body == &b.body {
+                    a.body.clone()
+                } else {
+                    return a.intersection(b, typedefs);
+                }
+            }
+        };
+        let loc = match (&self.loc, &other.loc) {
+            unordered!(Some(loc), None) => Some(loc.clone()),
+            (Some(_), Some(_)) | (None, None) => None,
+        };
+        Some(Type::new(body, loc))
     }
 }
-
+impl PartialEq for Type {
+    fn eq(&self, other: &Self) -> bool {
+        &self.body == &other.body
+    }
+}
+impl Eq for Type {}
+impl Hash for Type {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.body.hash(state)
+    }
+}
 impl Display for Type {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match &self {
-            Type::Bool => write!(f, "bool"),
-            Type::AnyNumber => write!(f, "AnyNumber"),
-            Type::AnySignedNumber => write!(f, "AnySignedNumber"),
-            Type::AnyFloat => write!(f, "AnyFloat"),
-            Type::I8 => write!(f, "i8"),
-            Type::I16 => write!(f, "i16"),
-            Type::I32 => write!(f, "i32"),
-            Type::I64 => write!(f, "i64"),
-            Type::U8 => write!(f, "u8"),
-            Type::U16 => write!(f, "u16"),
-            Type::U32 => write!(f, "u32"),
-            Type::U64 => write!(f, "u64"),
-            Type::USize => write!(f, "usize"),
-            Type::F32 => write!(f, "f32"),
-            Type::F64 => write!(f, "f64"),
-            Type::Inferred(v) => {
-                write!(f, "(infered")?;
+        write!(f, "(")?;
+        match &self.body {
+            TypeBody::Bool => write!(f, "bool")?,
+            TypeBody::AnyNumber => write!(f, "AnyNumber")?,
+            TypeBody::AnySignedNumber => write!(f, "AnySignedNumber")?,
+            TypeBody::AnyFloat => write!(f, "AnyFloat")?,
+            TypeBody::I8 => write!(f, "i8")?,
+            TypeBody::I16 => write!(f, "i16")?,
+            TypeBody::I32 => write!(f, "i32")?,
+            TypeBody::I64 => write!(f, "i64")?,
+            TypeBody::U8 => write!(f, "u8")?,
+            TypeBody::U16 => write!(f, "u16")?,
+            TypeBody::U32 => write!(f, "u32")?,
+            TypeBody::U64 => write!(f, "u64")?,
+            TypeBody::USize => write!(f, "usize")?,
+            TypeBody::F32 => write!(f, "f32")?,
+            TypeBody::F64 => write!(f, "f64")?,
+            TypeBody::Inferred(v) => {
+                write!(f, "infered")?;
                 for (name, t) in &v.properties {
                     write!(f, " .{}: {}", name, t)?;
                 }
-                write!(f, ")")?;
-                Ok(())
             }
-            Type::String(v) => {
-                if let Some(len) = v.len {
-                    write!(f, "(string {})", len)?;
-                } else {
-                    write!(f, "string")?;
-                }
-                Ok(())
-            }
-            Type::Array(v) => {
-                write!(f, "(array {}", v.item)?;
+            TypeBody::String(v) => {
+                write!(f, "string")?;
                 if let Some(len) = v.len {
                     write!(f, " {}", len)?;
                 }
-                write!(f, ")")?;
-                Ok(())
             }
-            Type::TypeRef(i) => write!(f, "(type {i})"),
+            TypeBody::Array(v) => {
+                write!(f, "array {}", v.item)?;
+                if let Some(len) = v.len {
+                    write!(f, " {}", len)?;
+                }
+            }
+            TypeBody::TypeRef(i) => write!(f, "type {i}")?,
         }
+        if let Some(loc) = &self.loc {
+            write!(f, " {loc}")?;
+        }
+        write!(f, ")")?;
+        Ok(())
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct InferType {
+pub struct InferredType {
     pub properties: utils::SortedMap<String, Type>,
 }
 
-impl InferType {
+impl InferredType {
     pub fn new(properties: impl IntoIterator<Item = (String, Type)>) -> Self {
         Self {
             properties: properties.into_iter().collect(),

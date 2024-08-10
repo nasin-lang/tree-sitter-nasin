@@ -54,12 +54,8 @@ impl TypeChecker {
 
         for (i, func) in enumerate(&mut module.funcs) {
             let entry = &self.funcs[i];
-            self.funcs[i].instrs = self.add_body(
-                &func.body,
-                &entry.params.clone(),
-                entry.ret,
-                Some(i ),
-            );
+            self.funcs[i].instrs =
+                self.add_body(&func.body, &entry.params.clone(), entry.ret, Some(i));
         }
         for (i, global) in enumerate(&module.globals) {
             self.globals[i].instrs =
@@ -71,11 +67,11 @@ impl TypeChecker {
         macro_rules! finish_body {
             ($body:expr, $entry:expr) => {
                 for (instr, instr_entry) in izip!(&mut ($body), &($entry).instrs) {
-                    if let b::Instr::CreateNumber(ty, _)
-                    | b::Instr::CreateArray(ty, _)
-                    | b::Instr::CreateRecord(ty, _)
-                    | b::Instr::If(ty)
-                    | b::Instr::Loop(ty, _) = instr
+                    if let b::InstrBody::CreateNumber(ty, _)
+                    | b::InstrBody::CreateArray(ty, _)
+                    | b::InstrBody::CreateRecord(ty, _)
+                    | b::InstrBody::If(ty)
+                    | b::InstrBody::Loop(ty, _) = &mut instr.body
                     {
                         *ty = self.entries[instr_entry.unwrap()].ty.clone();
                     }
@@ -133,53 +129,55 @@ impl TypeChecker {
         stack: &mut Stack,
         func_idx: Option<usize>,
     ) -> Option<TypeCheckEntryIdx> {
-        match instr {
-            b::Instr::Dup(v) => {
+        match &instr.body {
+            b::InstrBody::Dup(v) => {
                 let value = *stack.get(*v).unwrap();
                 stack.push(value);
                 Some(value)
             }
-            b::Instr::GetGlobal(v) => {
-                let result = self.globals[*v ].result;
+            b::InstrBody::GetGlobal(v) => {
+                let result = self.globals[*v].result;
                 stack.push(result);
                 Some(result)
             }
-            b::Instr::GetField(v) => {
+            b::InstrBody::GetField(v) => {
                 assert!(stack.len() >= 1);
                 let property = self.property(stack.pop(), v);
                 stack.push(property);
                 None
             }
-            b::Instr::CreateBool(_) => {
-                let entry = self.add_entry_from_type(b::Type::Bool);
+            b::InstrBody::CreateBool(_) => {
+                let entry =
+                    self.add_entry_from_type(b::Type::new(b::TypeBody::Bool, None));
                 stack.push(entry);
                 Some(entry)
             }
-            b::Instr::CreateNumber(ty, _) => {
+            b::InstrBody::CreateNumber(ty, _) => {
                 let entry = self.add_entry_from_type(ty.clone());
                 stack.push(entry);
                 Some(entry)
             }
-            b::Instr::CreateString(v) => {
-                let entry = self.add_entry_from_type(b::Type::String(b::StringType {
-                    len: Some(v.len()),
-                }));
+            b::InstrBody::CreateString(v) => {
+                let entry = self.add_entry_from_type(b::Type::new(
+                    b::TypeBody::String(b::StringType { len: Some(v.len()) }),
+                    None,
+                ));
                 stack.push(entry);
                 Some(entry)
             }
-            b::Instr::CreateArray(ty, len) => {
-                assert!(stack.len() >= *len );
+            b::InstrBody::CreateArray(ty, len) => {
+                assert!(stack.len() >= *len);
                 if *len == 0 {
                     todo!();
                 }
-                let item_entry = self.merge_entries(&stack.pop_many(*len ));
+                let item_entry = self.merge_entries(&stack.pop_many(*len));
                 let entry = self.add_entry();
                 self.add_constraint(entry, Constraint::Is(ty.clone()));
                 self.add_constraint(entry, Constraint::Array(item_entry));
                 stack.push(entry);
                 Some(entry)
             }
-            b::Instr::CreateRecord(ty, fields) => {
+            b::InstrBody::CreateRecord(ty, fields) => {
                 assert!(stack.len() >= fields.len());
                 if fields.len() == 0 {
                     todo!();
@@ -193,34 +191,41 @@ impl TypeChecker {
                 stack.push(entry);
                 Some(entry)
             }
-            b::Instr::Add
-            | b::Instr::Sub
-            | b::Instr::Mul
-            | b::Instr::Div
-            | b::Instr::Mod => {
+            b::InstrBody::Add
+            | b::InstrBody::Sub
+            | b::InstrBody::Mul
+            | b::InstrBody::Div
+            | b::InstrBody::Mod => {
                 assert!(stack.len() >= 2);
                 let entry = self.merge_entries(&stack.pop_many(2));
                 // FIXME: use interface/trait
-                self.add_constraint(entry, Constraint::Is(b::Type::AnyNumber));
+                self.add_constraint(
+                    entry,
+                    Constraint::Is(b::Type::new(b::TypeBody::AnyNumber, None)),
+                );
                 stack.push(entry);
                 Some(entry)
             }
-            b::Instr::Eq
-            | b::Instr::Neq
-            | b::Instr::Gt
-            | b::Instr::Gte
-            | b::Instr::Lt
-            | b::Instr::Lte => {
+            b::InstrBody::Eq
+            | b::InstrBody::Neq
+            | b::InstrBody::Gt
+            | b::InstrBody::Gte
+            | b::InstrBody::Lt
+            | b::InstrBody::Lte => {
                 assert!(stack.len() >= 2);
                 let operand = self.merge_entries(&stack.pop_many(2));
                 // FIXME: use interface/trait
-                self.add_constraint(operand, Constraint::Is(b::Type::AnyNumber));
-                let entry = self.add_entry_from_type(b::Type::Bool);
+                self.add_constraint(
+                    operand,
+                    Constraint::Is(b::Type::new(b::TypeBody::AnyNumber, None)),
+                );
+                let entry =
+                    self.add_entry_from_type(b::Type::new(b::TypeBody::Bool, None));
                 stack.push(entry);
                 Some(entry)
             }
-            b::Instr::Call(idx) => {
-                let func = self.funcs[*idx ].clone();
+            b::InstrBody::Call(idx) => {
+                let func = self.funcs[*idx].clone();
                 assert!(stack.len() >= func.params.len());
 
                 let args = stack.pop_many(func.params.len());
@@ -239,16 +244,19 @@ impl TypeChecker {
                 stack.push(entry);
                 Some(entry)
             }
-            b::Instr::If(_) => {
+            b::InstrBody::If(_) => {
                 let cond = stack.pop();
-                self.add_constraint(cond, Constraint::Is(b::Type::Bool));
+                self.add_constraint(
+                    cond,
+                    Constraint::Is(b::Type::new(b::TypeBody::Bool, None)),
+                );
 
                 let entry = self.add_entry();
 
                 stack.create_scope(ScopePayload::new(entry));
                 Some(entry)
             }
-            b::Instr::Else => {
+            b::InstrBody::Else => {
                 assert!(stack.scope_len() > 1);
                 let is_never = stack.get_scope().is_never();
                 let (scope, mut removed) = stack.branch_scope();
@@ -261,7 +269,7 @@ impl TypeChecker {
 
                 None
             }
-            b::Instr::End => {
+            b::InstrBody::End => {
                 assert!(stack.scope_len() >= 1);
                 let (scope, mut removed) = stack.end_scope();
                 let result = scope.payload.result;
@@ -275,9 +283,9 @@ impl TypeChecker {
                 stack.push(result);
                 Some(result)
             }
-            b::Instr::Loop(_, n) => {
-                assert!(stack.len() >= *n );
-                let loop_args = stack.pop_many(*n );
+            b::InstrBody::Loop(_, n) => {
+                assert!(stack.len() >= *n);
+                let loop_args = stack.pop_many(*n);
 
                 let entry = self.add_entry();
                 let scope = stack.create_scope(ScopePayload::new(entry));
@@ -288,18 +296,17 @@ impl TypeChecker {
                 stack.extend(loop_args);
                 Some(entry)
             }
-            b::Instr::Continue => {
+            b::InstrBody::Continue => {
                 assert!(stack.scope_len() >= 1);
                 let scope = stack
                     .get_loop_scope()
                     .expect("continue should be inside a loop scope")
                     .clone();
-                assert!(stack.len() >= scope.start() + scope.loop_arity );
+                assert!(stack.len() >= scope.start() + scope.loop_arity);
 
-                for (old, curr) in izip!(
-                    scope.payload.loop_args,
-                    stack.pop_many(scope.loop_arity )
-                ) {
+                for (old, curr) in
+                    izip!(scope.payload.loop_args, stack.pop_many(scope.loop_arity))
+                {
                     if old != curr {
                         self.merge_entries(&[old, curr]);
                     }
@@ -308,27 +315,30 @@ impl TypeChecker {
                 stack.get_scope_mut().mark_as_never();
                 None
             }
-            b::Instr::CompileError => Some(self.add_entry_from_type(b::Type::unknown())),
+            b::InstrBody::CompileError => {
+                Some(self.add_entry_from_type(b::Type::unknown(None)))
+            }
         }
     }
 
     fn add_entry(&mut self) -> TypeCheckEntryIdx {
-        self.entries.push(TypeCheckEntry::new(b::Type::unknown()));
+        self.entries
+            .push(TypeCheckEntry::new(b::Type::unknown(None)));
         self.entries.len() - 1
     }
 
     fn add_entry_from_type(&mut self, ty: b::Type) -> TypeCheckEntryIdx {
         let mut entry = TypeCheckEntry::new(ty.clone());
 
-        if let b::Type::Inferred(b::InferType { properties }) = ty {
+        if let b::TypeBody::Inferred(b::InferredType { properties }) = ty.body {
             for (prop_name, prop_ty) in properties {
                 let prop_idx = self.add_entry_from_type(prop_ty);
                 entry
                     .constraints
-                    .insert(Constraint::Property(prop_name, prop_idx));
+                    .push(Constraint::Property(prop_name, prop_idx));
             }
         } else {
-            entry.constraints.insert(Constraint::Is(ty.clone()));
+            entry.constraints.push(Constraint::Is(ty.clone()));
         }
 
         self.entries.push(entry);
@@ -345,7 +355,7 @@ impl TypeChecker {
             return;
         }
 
-        entry.constraints.insert(constraint);
+        entry.constraints.push(constraint);
     }
 
     fn merge_entries(&mut self, entries: &[TypeCheckEntryIdx]) -> TypeCheckEntryIdx {
@@ -360,8 +370,7 @@ impl TypeChecker {
             }
 
             self.entries[*idx].same_of.insert(head);
-            let constraints =
-                mem::replace(&mut self.entries[*idx].constraints, HashSet::new());
+            let constraints = mem::replace(&mut self.entries[*idx].constraints, vec![]);
 
             for constraint in constraints {
                 self.add_constraint(head, constraint);
@@ -448,21 +457,30 @@ impl TypeChecker {
                 }
                 Constraint::Array(target) => {
                     let ty = self.entries[*target].ty.clone();
-                    b::Type::Array(b::ArrayType::new(ty.into(), None))
+                    b::Type::new(
+                        b::TypeBody::Array(b::ArrayType::new(ty.into(), None)),
+                        None,
+                    )
                 }
                 Constraint::Property(key, target) => {
                     let ty = self.entries[*target].ty.clone();
-                    b::Type::Inferred(b::InferType {
-                        properties: SortedMap::from([(key.clone(), ty)]),
-                    })
+                    b::Type::new(
+                        b::TypeBody::Inferred(b::InferredType {
+                            properties: SortedMap::from([(key.clone(), ty)]),
+                        }),
+                        None,
+                    )
                 }
             })
             .collect_vec();
-        merge_with.sort_by(|a, b| match (a, b) {
-            (b::Type::Inferred(_), _) => cmp::Ordering::Less,
-            (b::Type::AnyNumber | b::Type::AnySignedNumber | b::Type::AnyFloat, _) => {
-                cmp::Ordering::Greater
-            }
+        merge_with.sort_by(|a, b| match (&a.body, &b.body) {
+            (b::TypeBody::Inferred(_), _) => cmp::Ordering::Less,
+            (
+                b::TypeBody::AnyNumber
+                | b::TypeBody::AnySignedNumber
+                | b::TypeBody::AnyFloat,
+                _,
+            ) => cmp::Ordering::Greater,
             _ => cmp::Ordering::Equal,
         });
 

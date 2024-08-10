@@ -93,7 +93,7 @@ fn main() {
                 println!("{}", root_node.to_sexp());
             }
 
-            let module = parser::parse_module(&src, root_node);
+            let module = parser::parse_module(file, &src, root_node);
             //eprintln!("{}", module);
 
             let (module, errors) = typecheck::check_module(module);
