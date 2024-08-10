@@ -186,7 +186,7 @@ module.exports = grammar({
         _pat: ($) => choice($.ident),
 
         type_decl: ($) =>
-            seq("type", field("name", $.ident), "=", field("body", $._type_decl_body)),
+            seq("type", field("name", $.ident), field("body", $._type_decl_body)),
         _type_decl_body: ($) => choice($.record_type),
 
         record_type: ($) => seq("{", repeat(field("fields", $.record_type_field)), "}"),
