@@ -1,5 +1,4 @@
-@extern("write")
-write(f: i32, buf: str, len: usize): i32
+write(f: i32, buf: str, len: usize): i32 @extern("write")
 
 main :=
     write(1, "Hello\n", 6)

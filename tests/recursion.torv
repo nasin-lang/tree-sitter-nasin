@@ -1,5 +1,4 @@
-@extern("write")
-write(f: i32, buf: str, len: usize): i32
+write(f: i32, buf: str, len: usize): i32 @extern("write")
 
 msg := "got 10\n"
 len := 7

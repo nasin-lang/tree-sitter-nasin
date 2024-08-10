@@ -30,7 +30,6 @@ module.exports = grammar({
 
         func_decl: ($) =>
             seq(
-                repeat(field("directives", $.directive)),
                 field("name", $.ident),
                 "(",
                 repeat(seq(field("params", $.func_param), optional(","))),
@@ -39,9 +38,15 @@ module.exports = grammar({
                     seq(
                         ":",
                         field("ret_type", $._type_expr),
+                        repeat(field("directives", $.directive)),
                         optional(seq("=", field("return", $._expr))),
                     ),
-                    seq(":", "=", field("return", $._expr)),
+                    seq(
+                        repeat(field("directives", $.directive)),
+                        ":",
+                        "=",
+                        field("return", $._expr),
+                    ),
                 ),
             ),
 
