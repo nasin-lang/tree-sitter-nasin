@@ -1,21 +1,21 @@
 @extern("write")
 write(f: i32, buf: str, len: usize): i32
 
-true_msg  = "it's true!\n"
-false_msg = "it's false\n"
-len = 11
+true_msg  := "it's true!\n"
+false_msg := "it's false\n"
+len := 11
 
 main: i32 =
-    if_result = if true then
+    if_result := if true then
         true_msg
     else
         false_msg
-    _ = write(1, if_result, len)
+    _ := write(1, if_result, len)
 
-    if_result = if false then
+    if_result := if false then
         true_msg
     else
         false_msg
-    _ = write(1, if_result, len)
+    _ := write(1, if_result, len)
 
     0

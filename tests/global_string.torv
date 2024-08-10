@@ -1,8 +1,8 @@
 @extern("write")
 write(f: i32, buf: str, len: usize): i32
 
-msg = "Hello from global\n"
-len = 18
+msg := "Hello from global\n"
+len := 18
 
-main =
+main :=
     write(1, msg, len)

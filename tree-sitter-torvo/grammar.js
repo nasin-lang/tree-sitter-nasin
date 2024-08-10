@@ -35,8 +35,14 @@ module.exports = grammar({
                 "(",
                 repeat(seq(field("params", $.func_param), optional(","))),
                 ")",
-                optional(seq(":", field("ret_type", $._type_expr))),
-                optional(seq("=", field("return", $._expr))),
+                choice(
+                    seq(
+                        ":",
+                        field("ret_type", $._type_expr),
+                        optional(seq("=", field("return", $._expr))),
+                    ),
+                    seq(":", "=", field("return", $._expr)),
+                ),
             ),
 
         func_param: ($) =>
@@ -45,7 +51,8 @@ module.exports = grammar({
         global_var_decl: ($) =>
             seq(
                 field("name", $.ident),
-                optional(seq(":", field("type", $._type_expr))),
+                ":",
+                optional(field("type", $._type_expr)),
                 "=",
                 field("value", $._expr),
             ),
@@ -53,7 +60,8 @@ module.exports = grammar({
         var_decl: ($) =>
             seq(
                 field("pat", $._pat),
-                optional(seq(":", field("type", $._type_expr))),
+                ":",
+                optional(field("type", $._type_expr)),
                 "=",
                 field("value", $._expr),
             ),
