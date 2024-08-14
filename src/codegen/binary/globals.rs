@@ -143,48 +143,14 @@ impl<'a> Globals<'a> {
     pub fn create_writable_for_type<M: cl::Module>(
         &mut self,
         ty: &b::Type,
-        mut module: M,
+        mut obj_module: M,
     ) -> (cl::DataId, M) {
-        let ptr = module.isa().pointer_bytes() as usize;
-
-        let size = match &ty.body {
-            b::TypeBody::String(s) => s.len.map_or(ptr, |len| len + 1),
-            b::TypeBody::Array(a) => a.len.map_or(ptr, |len| {
-                len * types::get_type(&a.item, self.module, &module).bytes() as usize
-            }),
-            b::TypeBody::TypeRef(i) => match &&self.module.typedefs[*i].body {
-                b::TypeDefBody::Record(rec) => rec
-                    .fields
-                    .values()
-                    .map(|field| {
-                        types::get_type(&field.ty, self.module, &module).bytes() as usize
-                    })
-                    .sum(),
-            },
-            b::TypeBody::Bool
-            | b::TypeBody::I8
-            | b::TypeBody::U8
-            | b::TypeBody::I16
-            | b::TypeBody::U16
-            | b::TypeBody::I32
-            | b::TypeBody::U32
-            | b::TypeBody::I64
-            | b::TypeBody::U64
-            | b::TypeBody::USize
-            | b::TypeBody::F32
-            | b::TypeBody::F64 => types::get_type(ty, self.module, &module).bytes() as usize,
-            b::TypeBody::AnyNumber
-            | b::TypeBody::AnySignedNumber
-            | b::TypeBody::AnyFloat
-            | b::TypeBody::Inferred(_) => unreachable!(),
-        };
-
-        let data_id = module.declare_anonymous_data(false, false).unwrap();
+        let data_id = obj_module.declare_anonymous_data(false, false).unwrap();
         let mut desc = cl::DataDescription::new();
-        desc.define_zeroinit(size);
-        module.define_data(data_id, &desc).unwrap();
+        desc.define_zeroinit(types::get_size(ty, self.module, &obj_module));
+        obj_module.define_data(data_id, &desc).unwrap();
 
         self.data.insert(data_id, desc);
-        (data_id, module)
+        (data_id, obj_module)
     }
 }

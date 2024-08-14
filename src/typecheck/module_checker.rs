@@ -439,7 +439,8 @@ impl TypeChecker {
             let dep = match cons {
                 Constraint::TypeOf(target)
                 | Constraint::Array(target)
-                | Constraint::Property(_, target) => target,
+                | Constraint::Property(_, target)
+                | Constraint::Ptr(target) => target,
                 Constraint::Is(_) => continue,
             };
 
@@ -470,6 +471,10 @@ impl TypeChecker {
                         }),
                         None,
                     )
+                }
+                Constraint::Ptr(target) => {
+                    let ty = self.entries[*target].ty.clone();
+                    b::Type::new(b::TypeBody::Ptr(ty.into()), None)
                 }
             })
             .collect_vec();

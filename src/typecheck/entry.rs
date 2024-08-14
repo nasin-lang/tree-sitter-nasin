@@ -27,4 +27,5 @@ pub enum Constraint {
     TypeOf(TypeCheckEntryIdx),
     Property(String, TypeCheckEntryIdx),
     Array(TypeCheckEntryIdx),
+    Ptr(TypeCheckEntryIdx),
 }

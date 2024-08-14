@@ -183,7 +183,7 @@ module.exports = grammar({
                 ),
             ),
 
-        _type_expr: ($) => choice($.ident, $.array_type),
+        _type_expr: ($) => choice($.ident, $.array_type, $.generic_type),
 
         array_type: ($) =>
             prec(
@@ -195,6 +195,14 @@ module.exports = grammar({
                     "]",
                 ),
             ),
+
+        generic_type: ($) =>
+            prec(
+                PREC.CALL,
+                seq(field("name", $.ident), "(", optional($._type_args_list), ")"),
+            ),
+        _type_args_list: ($) =>
+            prec(PREC.CALL, repeat1(seq(field("args", $._type_expr), optional(",")))),
 
         _pat: ($) => choice($.ident),
 

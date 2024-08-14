@@ -1,9 +1,10 @@
 use std::collections::HashMap;
 
+use itertools::Itertools;
 use tree_sitter as ts;
 
 use crate::bytecode as b;
-use crate::utils::TreeSitterUtils;
+use crate::utils::{IntoItem, TreeSitterUtils};
 
 pub struct TypeParser<'a> {
     pub typedefs: Vec<b::TypeDef>,
@@ -55,6 +56,26 @@ impl<'a> TypeParser<'a> {
                         .expect("Cannot cast length to integer")
                 });
                 b::TypeBody::Array(b::ArrayType::new(item_ty.into(), len))
+            }
+            "generic_type" => {
+                let name = node
+                    .required_field("name")
+                    .of_kind("ident")
+                    .get_text(&self.src);
+
+                let args = node
+                    .iter_field("args")
+                    .map(|arg_node| self.parse_type(arg_node))
+                    .collect_vec();
+
+                match name {
+                    "Ptr" => {
+                        // TODO: Better error handling
+                        assert!(args.len() == 1, "Ptr accepts only one parameter");
+                        b::TypeBody::Ptr(args.into_item(0).unwrap().into())
+                    }
+                    _ => panic!("unhandled generic type: `{name}`"),
+                }
             }
             k => panic!("Found unexpected type `{}`", k),
         };

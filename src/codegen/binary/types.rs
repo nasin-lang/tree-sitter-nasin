@@ -136,24 +136,7 @@ pub fn tuple_from_record<'a>(
                 })
                 .collect(),
         },
-        b::TypeBody::AnyNumber
-        | b::TypeBody::AnySignedNumber
-        | b::TypeBody::AnyFloat
-        | b::TypeBody::Bool
-        | b::TypeBody::I8
-        | b::TypeBody::I16
-        | b::TypeBody::I32
-        | b::TypeBody::I64
-        | b::TypeBody::U8
-        | b::TypeBody::U16
-        | b::TypeBody::U32
-        | b::TypeBody::U64
-        | b::TypeBody::USize
-        | b::TypeBody::F32
-        | b::TypeBody::F64
-        | b::TypeBody::String(_)
-        | b::TypeBody::Array(_)
-        | b::TypeBody::Inferred(_) => panic!("type is not a record type"),
+        _ => panic!("type is not a record type"),
     }
 }
 
@@ -174,9 +157,10 @@ pub fn get_type(
         b::TypeBody::U64 => cl::types::I64,
         b::TypeBody::F32 => cl::types::F32,
         b::TypeBody::F64 => cl::types::F64,
-        b::TypeBody::USize | b::TypeBody::String(_) | b::TypeBody::Array(_) => {
-            obj_module.isa().pointer_type()
-        }
+        b::TypeBody::USize
+        | b::TypeBody::String(_)
+        | b::TypeBody::Array(_)
+        | b::TypeBody::Ptr(_) => obj_module.isa().pointer_type(),
         b::TypeBody::TypeRef(i) => match &module.typedefs[*i].body {
             b::TypeDefBody::Record(_) => obj_module.isa().pointer_type(),
         },
@@ -184,5 +168,42 @@ pub fn get_type(
         | b::TypeBody::AnySignedNumber
         | b::TypeBody::AnyFloat
         | b::TypeBody::Inferred(_) => panic!("Type must be resolved before codegen"),
+        b::TypeBody::AnyOpaque => panic!("anyopaque cannot be used directly"),
+    }
+}
+
+pub fn get_size(ty: &b::Type, module: &b::Module, obj_module: &impl cl::Module) -> usize {
+    let ptr = obj_module.isa().pointer_bytes() as usize;
+
+    match &ty.body {
+        b::TypeBody::String(s) => s.len.map_or(ptr, |len| len + 1),
+        b::TypeBody::Array(a) => a.len.map_or(ptr, |len| {
+            len * get_type(&a.item, module, obj_module).bytes() as usize
+        }),
+        b::TypeBody::TypeRef(i) => match &module.typedefs[*i].body {
+            b::TypeDefBody::Record(rec) => rec
+                .fields
+                .values()
+                .map(|field| get_type(&field.ty, module, obj_module).bytes() as usize)
+                .sum(),
+        },
+        b::TypeBody::Bool
+        | b::TypeBody::I8
+        | b::TypeBody::U8
+        | b::TypeBody::I16
+        | b::TypeBody::U16
+        | b::TypeBody::I32
+        | b::TypeBody::U32
+        | b::TypeBody::I64
+        | b::TypeBody::U64
+        | b::TypeBody::USize
+        | b::TypeBody::F32
+        | b::TypeBody::F64
+        | b::TypeBody::Ptr(_) => get_type(ty, module, obj_module).bytes() as usize,
+        b::TypeBody::AnyNumber
+        | b::TypeBody::AnySignedNumber
+        | b::TypeBody::AnyFloat
+        | b::TypeBody::Inferred(_) => panic!("Type must be resolved before codegen"),
+        b::TypeBody::AnyOpaque => panic!("anyopaque cannot be used directly"),
     }
 }

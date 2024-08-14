@@ -433,7 +433,9 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
                             | b::TypeBody::String(_)
                             | b::TypeBody::TypeRef(_)
                             | b::TypeBody::Array(_)
+                            | b::TypeBody::Ptr(_)
                             | b::TypeBody::Inferred(_)
+                            | b::TypeBody::AnyOpaque
                             | b::TypeBody::AnyNumber
                             | b::TypeBody::AnySignedNumber
                             | b::TypeBody::AnyFloat => panic!("Cannot parse {n} as {ty}"),

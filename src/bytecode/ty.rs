@@ -11,6 +11,7 @@ use crate::utils;
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TypeBody {
     Bool,
+    AnyOpaque,
     // FIXME: use interface/trait for this
     AnyNumber,
     // FIXME: use interface/trait for this
@@ -31,6 +32,7 @@ pub enum TypeBody {
     Inferred(InferredType),
     String(StringType),
     Array(ArrayType),
+    Ptr(Box<Type>),
     TypeRef(usize),
 }
 
@@ -83,7 +85,7 @@ impl Type {
     }
 
     pub fn is_primitive(&self) -> bool {
-        self.is_bool() || self.is_number()
+        self.is_bool() || self.is_number() || matches!(&self.body, TypeBody::Ptr(_))
     }
 
     pub fn is_bool(&self) -> bool {
@@ -172,6 +174,9 @@ impl Type {
                     item: a.item.intersection(&b.item, typedefs)?.into(),
                 })
             }
+            (body!(TypeBody::Ptr(a)), body!(TypeBody::Ptr(b))) => {
+                TypeBody::Ptr(a.intersection(&b, typedefs)?.into())
+            }
             (body!(TypeBody::Inferred(a)), body!(TypeBody::Inferred(b))) => {
                 let mut props = utils::SortedMap::new();
                 let prop_names: HashSet<_> =
@@ -231,6 +236,9 @@ impl Type {
                     item: a.item.common_type(&b.item, typedefs)?.into(),
                     len: if a.len == b.len { a.len.clone() } else { None },
                 })
+            }
+            (body!(TypeBody::Ptr(a)), body!(TypeBody::Ptr(b))) => {
+                TypeBody::Ptr(a.common_type(&b, typedefs)?.into())
             }
             (body!(TypeBody::Inferred(a)), body!(TypeBody::Inferred(b))) => {
                 let mut props = utils::SortedMap::new();
@@ -295,6 +303,7 @@ impl Display for Type {
             TypeBody::AnyNumber => write!(f, "AnyNumber")?,
             TypeBody::AnySignedNumber => write!(f, "AnySignedNumber")?,
             TypeBody::AnyFloat => write!(f, "AnyFloat")?,
+            TypeBody::AnyOpaque => write!(f, "anyopaque")?,
             TypeBody::I8 => write!(f, "i8")?,
             TypeBody::I16 => write!(f, "i16")?,
             TypeBody::I32 => write!(f, "i32")?,
@@ -324,6 +333,7 @@ impl Display for Type {
                     write!(f, " {}", len)?;
                 }
             }
+            TypeBody::Ptr(ty) => write!(f, "ptr {ty}")?,
             TypeBody::TypeRef(i) => write!(f, "type {i}")?,
         }
         if let Some(loc) = &self.loc {
