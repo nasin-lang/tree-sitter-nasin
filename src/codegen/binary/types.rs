@@ -26,28 +26,7 @@ impl RuntimeValue<'_> {
         bytes: &mut Vec<u8>,
         endianess: cl::Endianness,
     ) -> Result<(), ()> {
-        macro_rules! serialize_number {
-            ($n:expr) => {
-                match endianess {
-                    cl::Endianness::Little => bytes.extend(($n).to_le_bytes()),
-                    cl::Endianness::Big => bytes.extend(($n).to_be_bytes()),
-                }
-            };
-        }
-
-        match self.src {
-            ValueSource::I8(n) => bytes.push(n),
-            ValueSource::I16(n) => serialize_number!(n),
-            ValueSource::I32(n) => serialize_number!(n),
-            ValueSource::I64(n) => serialize_number!(n),
-            ValueSource::F32(n) => serialize_number!(n.to_float()),
-            ValueSource::F64(n) => serialize_number!(n.to_float()),
-            ValueSource::Value(_) | ValueSource::Data(_) | ValueSource::StackSlot(_) => {
-                return Err(())
-            }
-        }
-
-        Ok(())
+        self.src.serialize(bytes, endianess)
     }
     pub fn add_to_func(
         &self,
@@ -88,6 +67,36 @@ pub enum ValueSource {
     Value(cl::Value),
     Data(cl::DataId),
     StackSlot(cl::StackSlot),
+}
+impl ValueSource {
+    pub fn serialize(
+        &self,
+        bytes: &mut Vec<u8>,
+        endianess: cl::Endianness,
+    ) -> Result<(), ()> {
+        macro_rules! serialize_number {
+            ($n:expr) => {
+                match endianess {
+                    cl::Endianness::Little => bytes.extend(($n).to_le_bytes()),
+                    cl::Endianness::Big => bytes.extend(($n).to_be_bytes()),
+                }
+            };
+        }
+
+        match self {
+            ValueSource::I8(n) => bytes.push(*n),
+            ValueSource::I16(n) => serialize_number!(n),
+            ValueSource::I32(n) => serialize_number!(n),
+            ValueSource::I64(n) => serialize_number!(n),
+            ValueSource::F32(n) => serialize_number!(n.to_float()),
+            ValueSource::F64(n) => serialize_number!(n.to_float()),
+            ValueSource::Value(_) | ValueSource::Data(_) | ValueSource::StackSlot(_) => {
+                return Err(())
+            }
+        }
+
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

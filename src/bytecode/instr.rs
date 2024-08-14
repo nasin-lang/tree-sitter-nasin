@@ -39,6 +39,11 @@ pub enum InstrBody {
     End,
     Continue,
 
+    ArrayLen,
+    ArrayPtr(u64),
+    StrLen,
+    StrPtr(u64),
+
     CompileError,
 }
 
@@ -82,6 +87,10 @@ impl Display for Instr {
             InstrBody::Loop(ty, n) => write!(f, "loop {ty} {n}")?,
             InstrBody::End => write!(f, "end")?,
             InstrBody::Continue => write!(f, "continue")?,
+            InstrBody::ArrayLen => write!(f, "array_len")?,
+            InstrBody::ArrayPtr(idx) => write!(f, "array_ptr {idx}")?,
+            InstrBody::StrLen => write!(f, "str_len")?,
+            InstrBody::StrPtr(idx) => write!(f, "str_ptr {idx}")?,
             InstrBody::CompileError => write!(f, "compile_error")?,
         }
         write!(f, " {}", &self.loc)?;

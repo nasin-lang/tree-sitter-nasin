@@ -80,37 +80,71 @@ impl<'a> Globals<'a> {
     pub fn data_for_string<M: cl::Module>(
         &mut self,
         value: &str,
-        mut module: M,
+        mut obj_module: M,
     ) -> (cl::DataId, M) {
         if let Some(id) = self.strings.get(value) {
-            return (*id, module);
+            return (*id, obj_module);
         }
 
-        let data_id = module.declare_anonymous_data(false, false).unwrap();
+        let data_id = obj_module.declare_anonymous_data(false, false).unwrap();
         let mut desc = cl::DataDescription::new();
 
-        let mut bytes = value.as_bytes().to_vec();
+        let mut bytes = vec![];
+
+        match obj_module.isa().pointer_bytes() {
+            1 => types::ValueSource::I8(value.len() as u8),
+            2 => types::ValueSource::I16(value.len() as u16),
+            4 => types::ValueSource::I32(value.len() as u32),
+            8 => types::ValueSource::I64(value.len() as u64),
+            _ => panic!("how many bytes?"),
+        }
+        .serialize(&mut bytes, obj_module.isa().endianness())
+        .unwrap();
+
+        bytes.extend(value.as_bytes());
         // Append a null terminator to avoid problems if used as a C string
         bytes.extend([0]);
 
         desc.define(bytes.into());
-        module.define_data(data_id, &desc).unwrap();
+        obj_module.define_data(data_id, &desc).unwrap();
 
         self.data.insert(data_id, desc);
         self.strings.insert(value.to_string(), data_id);
-        (data_id, module)
+        (data_id, obj_module)
+    }
+
+    pub fn data_for_array<M: cl::Module>(
+        &mut self,
+        mut values: Vec<types::RuntimeValue<'a>>,
+        obj_module: M,
+    ) -> (Option<cl::DataId>, M) {
+        let len = match obj_module.isa().pointer_bytes() {
+            1 => types::ValueSource::I8(values.len() as u8),
+            2 => types::ValueSource::I16(values.len() as u16),
+            4 => types::ValueSource::I32(values.len() as u32),
+            8 => types::ValueSource::I64(values.len() as u64),
+            _ => panic!("how many bytes?"),
+        };
+        values.insert(
+            0,
+            types::RuntimeValue::new(
+                Cow::Owned(b::Type::new(b::TypeBody::USize, None)),
+                len,
+            ),
+        );
+        self.data_for_tuple(values, obj_module)
     }
 
     pub fn data_for_tuple<M: cl::Module>(
         &mut self,
         values: Vec<types::RuntimeValue<'a>>,
-        mut module: M,
+        mut obj_module: M,
     ) -> (Option<cl::DataId>, M) {
         if let Some(id) = self.tuples.get(&values) {
-            return (Some(*id), module);
+            return (Some(*id), obj_module);
         }
 
-        let data_id = module.declare_anonymous_data(false, false).unwrap();
+        let data_id = obj_module.declare_anonymous_data(false, false).unwrap();
         let mut desc = cl::DataDescription::new();
 
         let mut bytes = vec![];
@@ -119,25 +153,26 @@ impl<'a> Globals<'a> {
         for item in &values {
             if let types::ValueSource::Data(field_data_id) = item.src {
                 let offset = bytes.len();
-                bytes.extend(repeat_n(0u8, module.isa().pointer_bytes() as usize));
+                bytes.extend(repeat_n(0u8, obj_module.isa().pointer_bytes() as usize));
 
                 let field_gv = included_datas.entry(field_data_id).or_insert_with(|| {
-                    module.declare_data_in_data(field_data_id, &mut desc)
+                    obj_module.declare_data_in_data(field_data_id, &mut desc)
                 });
                 desc.write_data_addr(offset as u32, field_gv.clone(), 0);
             } else {
-                if let Err(()) = item.serialize(&mut bytes, module.isa().endianness()) {
-                    return (None, module);
+                if let Err(()) = item.serialize(&mut bytes, obj_module.isa().endianness())
+                {
+                    return (None, obj_module);
                 }
             }
         }
 
         desc.define(bytes.into());
-        module.define_data(data_id, &desc).unwrap();
+        obj_module.define_data(data_id, &desc).unwrap();
 
         self.data.insert(data_id, desc);
         self.tuples.insert(values, data_id);
-        (Some(data_id), module)
+        (Some(data_id), obj_module)
     }
 
     pub fn create_writable_for_type<M: cl::Module>(

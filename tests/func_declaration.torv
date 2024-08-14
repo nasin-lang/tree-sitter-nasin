@@ -1,7 +1,7 @@
-write(f: i32, buf: str, len: usize): i32 @extern("write")
-
-print_hello(f, len) :=
-    write(f, "Hello\n", len)
+write(f: i32, buf: Ptr(u8), len: usize): i32 @extern("write")
 
 main :=
-    print_hello(1, 6)
+    print(1, "Hello\n")
+
+print(f: i32, msg) :=
+    write(f, @str_ptr(msg, 0), @str_len(msg))

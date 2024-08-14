@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::usize;
 
 use derive_new::new;
+use itertools::Itertools;
 use tree_sitter as ts;
 
 use super::module_parser::ModuleParser;
@@ -233,10 +234,22 @@ impl<'a> ExprParser<'a> {
                     Value::new(ValueBody::Never, loc)
                 }
             }
+            "macro" => {
+                let name = node
+                    .required_field("name")
+                    .of_kind("ident")
+                    .get_text(&self.src);
+                let args = node.iter_field("args").collect_vec();
+                self.add_macro(name, &args, b::Loc::from_node(0, &node))
+            }
             k => panic!("Found unexpected expression `{}`", k),
         }
     }
 
+    /// Push values to the stack. This will add the necessary instruction to have the
+    /// values accessible in the stack in the specified order. `is_result` specifies that
+    /// the values will be used as the result of the current scope. In that case, it will
+    /// avoid adding unnecessary `dup` instructions
     pub fn push_values<'v>(
         &mut self,
         values: impl IntoIterator<Item = &'v Value>,
@@ -254,12 +267,13 @@ impl<'a> ExprParser<'a> {
                 ValueBody::Local(idx) => {
                     assert!(*idx <= self.stack.len() - 1);
                     let rel_value = self.stack.len() - idx - 1;
-                    if rel_value != 0 || !is_result {
-                        self.add_instr_with_result(
-                            0,
-                            b::Instr::new(b::InstrBody::Dup(rel_value), value.loc),
-                        );
+                    if is_result && rel_value == 0 {
+                        continue;
                     }
+                    self.add_instr_with_result(
+                        0,
+                        b::Instr::new(b::InstrBody::Dup(rel_value), value.loc),
+                    );
                 }
                 ValueBody::Bool(v) => {
                     self.add_instr_with_result(
@@ -371,6 +385,55 @@ impl<'a> ExprParser<'a> {
             _ => {
                 // TODO: better error handling
                 panic!("Value is not a function")
+            }
+        }
+    }
+
+    fn add_macro(&mut self, name: &str, args: &[ts::Node<'a>], loc: b::Loc) -> Value {
+        match name {
+            "str_len" | "array_len" => {
+                // TODO: better error handling
+                assert!(args.len() == 1, "@{name}() expects a single argument");
+
+                let source = self.add_expr_node(args[0], false);
+                self.push_values(&[source], false);
+
+                let instr_body = match name {
+                    "str_len" => b::InstrBody::StrLen,
+                    "array_len" => b::InstrBody::ArrayLen,
+                    _ => unreachable!(),
+                };
+
+                let idx = self.add_instr_with_result(1, b::Instr::new(instr_body, loc));
+                Value::new(ValueBody::Local(idx), loc)
+            }
+            "str_ptr" | "array_ptr" => {
+                // TODO: better error handling
+                assert!(args.len() == 2, "@{name}() expects 2 arguments");
+
+                let source = self.add_expr_node(args[0], false);
+
+                let ValueBody::Number(idx) = self.add_expr_node(args[1], false).body
+                else {
+                    // TODO: better error handling
+                    panic!("index can only be a number");
+                };
+                // TODO: better error handling
+                let idx: u64 = idx.parse().expect("index is not a valid number");
+
+                self.push_values(&[source], false);
+
+                let instr_body = match name {
+                    "str_ptr" => b::InstrBody::StrPtr(idx),
+                    "array_ptr" => b::InstrBody::ArrayPtr(idx),
+                    _ => unreachable!(),
+                };
+
+                let idx = self.add_instr_with_result(1, b::Instr::new(instr_body, loc));
+                Value::new(ValueBody::Local(idx), loc)
+            }
+            _ => {
+                panic!("unhandled macro: `{name}`")
             }
         }
     }

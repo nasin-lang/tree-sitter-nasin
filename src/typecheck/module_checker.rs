@@ -315,6 +315,64 @@ impl TypeChecker {
                 stack.get_scope_mut().mark_as_never();
                 None
             }
+            b::InstrBody::ArrayLen => {
+                assert!(stack.scope_len() >= 1);
+                let array = stack.pop();
+                self.add_constraint(
+                    array,
+                    Constraint::Is(b::Type::new(
+                        b::TypeBody::Array(b::ArrayType::new(
+                            b::Type::unknown(None).into(),
+                            None,
+                        )),
+                        None,
+                    )),
+                );
+                let entry =
+                    self.add_entry_from_type(b::Type::new(b::TypeBody::USize, None));
+                stack.push(entry);
+                Some(entry)
+            }
+            b::InstrBody::ArrayPtr(_) => {
+                assert!(stack.scope_len() >= 1);
+                let source = stack.pop();
+                let item = self.array_item(source);
+                let entry = self.add_entry();
+                self.add_constraint(entry, Constraint::Ptr(item));
+                stack.push(entry);
+                Some(entry)
+            }
+            b::InstrBody::StrLen => {
+                assert!(stack.scope_len() >= 1);
+                let string = stack.pop();
+                self.add_constraint(
+                    string,
+                    Constraint::Is(b::Type::new(
+                        b::TypeBody::String(b::StringType::new(None)),
+                        None,
+                    )),
+                );
+                let entry =
+                    self.add_entry_from_type(b::Type::new(b::TypeBody::USize, None));
+                stack.push(entry);
+                Some(entry)
+            }
+            b::InstrBody::StrPtr(_) => {
+                assert!(stack.scope_len() >= 1);
+                let string = stack.pop();
+                self.add_constraint(
+                    string,
+                    Constraint::Is(b::Type::new(
+                        b::TypeBody::String(b::StringType::new(None)),
+                        None,
+                    )),
+                );
+                let item = self.add_entry_from_type(b::Type::new(b::TypeBody::U8, None));
+                let entry = self.add_entry();
+                self.add_constraint(entry, Constraint::Ptr(item));
+                stack.push(entry);
+                Some(entry)
+            }
             b::InstrBody::CompileError => {
                 Some(self.add_entry_from_type(b::Type::unknown(None)))
             }
@@ -507,7 +565,7 @@ impl TypeChecker {
         errors
     }
 
-    pub fn property(&mut self, idx: TypeCheckEntryIdx, name: &str) -> TypeCheckEntryIdx {
+    fn property(&mut self, idx: TypeCheckEntryIdx, name: &str) -> TypeCheckEntryIdx {
         let entry = &self.entries[idx];
 
         for item in &entry.constraints {
@@ -532,6 +590,32 @@ impl TypeChecker {
         };
 
         self.add_constraint(idx, Constraint::Property(name.to_string(), res));
+        res
+    }
+
+    fn array_item(&mut self, idx: TypeCheckEntryIdx) -> TypeCheckEntryIdx {
+        let entry = &self.entries[idx];
+
+        for item in &entry.constraints {
+            if let Constraint::Array(item_idx) = item {
+                return *item_idx;
+            }
+        }
+
+        let res = match entry.same_of.len() {
+            0 => self.add_entry(),
+            1 => self.array_item(*entry.same_of.iter().next().unwrap()),
+            _ => {
+                let res = self.add_entry();
+                for i in self.entries[idx].same_of.clone() {
+                    let prop = self.array_item(i);
+                    self.entries[res].same_of.insert(prop);
+                }
+                res
+            }
+        };
+
+        self.add_constraint(idx, Constraint::Array(res));
         res
     }
 }

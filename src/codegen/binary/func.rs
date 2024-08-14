@@ -8,7 +8,7 @@ use derive_new::new;
 use itertools::{izip, Itertools};
 
 use super::globals::{GlobalBinding, Globals};
-use super::types::{self, get_type, RuntimeValue};
+use super::types::{self, get_size, get_type, RuntimeValue};
 use super::FuncBinding;
 use crate::{bytecode as b, utils};
 
@@ -363,6 +363,80 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
                     value.into(),
                 ));
             }
+            b::InstrBody::ArrayLen | b::InstrBody::StrLen => {
+                let builder = expect_builder!(self);
+
+                let source = self.stack.pop().add_to_func(&self.obj_module, builder);
+                let value = builder.ins().load(
+                    self.obj_module.isa().pointer_type(),
+                    cl::MemFlags::new(),
+                    source,
+                    0,
+                );
+                self.stack.push(RuntimeValue::new(
+                    Cow::Owned(b::Type::new(b::TypeBody::USize, None)),
+                    types::ValueSource::Value(value),
+                ));
+            }
+            b::InstrBody::ArrayPtr(idx) | b::InstrBody::StrPtr(idx) => {
+                let source = self.stack.pop();
+                let source_value =
+                    source.add_to_func(&mut self.obj_module, expect_builder!(self));
+
+                let (item_size, len) = match &source.ty.body {
+                    b::TypeBody::Array(array_ty) => (
+                        get_size(&array_ty.item, &self.module, &self.obj_module),
+                        array_ty.len,
+                    ),
+                    b::TypeBody::String(str_ty) => (1, str_ty.len),
+                    _ => panic!("type should be string or array"),
+                };
+
+                if let Some(len) = len {
+                    assert!(*idx < len as u64);
+                } else {
+                    // Check length at runtime
+                    let builder = expect_builder!(self);
+
+                    let idx_value = builder
+                        .ins()
+                        .iconst(self.obj_module.isa().pointer_type(), unsafe {
+                            mem::transmute::<_, i64>(*idx)
+                        });
+                    let len = builder.ins().load(
+                        self.obj_module.isa().pointer_type(),
+                        cl::MemFlags::new(),
+                        source_value,
+                        0,
+                    );
+                    let cond =
+                        builder
+                            .ins()
+                            .icmp(cl::IntCC::UnsignedLessThan, idx_value, len);
+                    self.add_assert(cond, cl::TrapCode::NullReference);
+                }
+
+                let builder = expect_builder!(self);
+
+                let offset =
+                    self.obj_module.isa().pointer_bytes() as u64 + idx * item_size as u64;
+                let offset_value = builder
+                    .ins()
+                    .iconst(self.obj_module.isa().pointer_type(), unsafe {
+                        mem::transmute::<_, i64>(offset)
+                    });
+                let value = builder.ins().iadd(source_value, offset_value);
+
+                let item_ty = match &source.ty.body {
+                    b::TypeBody::Array(array_ty) => array_ty.item.clone(),
+                    b::TypeBody::String(_) => b::Type::new(b::TypeBody::U8, None).into(),
+                    _ => panic!("type should be string or array"),
+                };
+                self.stack.push(RuntimeValue::new(
+                    Cow::Owned(b::Type::new(b::TypeBody::Ptr(item_ty), None)),
+                    value.into(),
+                ));
+            }
             b::InstrBody::CompileError => {
                 panic!("never should try to compile CompileError")
             }
@@ -460,7 +534,7 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
                     b::InstrBody::CreateArray(ty, n) => {
                         let values = this.stack.pop_many(*n);
                         let (data, module) =
-                            this.globals.data_for_tuple(values.clone(), this.obj_module);
+                            this.globals.data_for_array(values.clone(), this.obj_module);
                         this.obj_module = module;
                         let src = if let Some(data) = data {
                             data.into()
@@ -580,6 +654,10 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
             operands[0].ty.clone(),
             value.into(),
         ));
+    }
+    fn add_assert(&mut self, cond: cl::Value, code: cl::TrapCode) {
+        let builder = expect_builder!(self);
+        builder.ins().trapz(cond, code);
     }
 }
 

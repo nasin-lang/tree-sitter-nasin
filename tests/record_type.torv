@@ -1,11 +1,11 @@
-write(f: i32, buf: str, len: usize): i32 @extern("write")
+write(f: i32, buf: Ptr(u8), len: usize): i32 @extern("write")
 
-type String {
+type Foo {
     data: str
-    len: usize
+    clip: usize
 }
 
-msg: String = {.data="Hello from record\n", .len=18}
+msg: Foo = {.data="Hello from record\n...", .clip=3}
 
 main: i32 =
-    write(1, msg.data, msg.len)
+    write(1, @str_ptr(msg.data, 0), @str_len(msg.data) - msg.clip)

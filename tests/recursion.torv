@@ -1,7 +1,6 @@
-write(f: i32, buf: str, len: usize): i32 @extern("write")
+write(f: i32, buf: Ptr(u8), len: usize): i32 @extern("write")
 
 msg := "got 10\n"
-len := 7
 
 rec(i: u8) :=
     if i >= 10 then
@@ -10,5 +9,6 @@ rec(i: u8) :=
         rec(i + 1)
 
 main: i32 =
-    _ := write(1, rec(0), len)
+    res := rec(0)
+    _ := write(1, @str_ptr(res, 0), @str_len(res))
     0

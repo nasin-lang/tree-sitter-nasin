@@ -1,4 +1,4 @@
-write(f: i32, buf: str, len: usize): i32 @extern("write")
+write(f: i32, buf: Ptr(u8), len: usize): i32 @extern("write")
 
 main :=
-    write(1, "Hello\n", 6)
+    write(1, @str_ptr("Hello\n", 0), 6)

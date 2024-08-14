@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use tree_sitter as ts;
 
 pub trait TreeSitterUtils<'a> {
@@ -8,7 +10,6 @@ pub trait TreeSitterUtils<'a> {
     fn field(&self, field: &str) -> Option<ts::Node<'a>>;
     fn required_field(&self, field: &str) -> ts::Node<'a>;
 }
-
 impl<'a> TreeSitterUtils<'a> for ts::Node<'a> {
     fn of_kind(self, kind: &'a str) -> Self {
         assert!(self.is_named());
@@ -21,11 +22,11 @@ impl<'a> TreeSitterUtils<'a> for ts::Node<'a> {
     }
 
     fn iter_children(&self) -> impl Iterator<Item = ts::Node<'a>> {
-        Children::new(self, None)
+        TreeSitterChildren::new(self, None)
     }
 
     fn iter_field(&self, field: &str) -> impl Iterator<Item = ts::Node<'a>> {
-        Children::new(self, Some(field.to_string()))
+        TreeSitterChildren::new(self, Some(field.to_string()))
     }
 
     fn field(&self, field: &str) -> Option<ts::Node<'a>> {
@@ -38,26 +39,24 @@ impl<'a> TreeSitterUtils<'a> for ts::Node<'a> {
     }
 }
 
-struct Children<'a> {
+struct TreeSitterChildren<'a> {
     field: Option<String>,
     cursor: ts::TreeCursor<'a>,
     finished: bool,
 }
-
-impl<'a> Children<'a> {
+impl<'a> TreeSitterChildren<'a> {
     fn new(node: &ts::Node<'a>, field: Option<String>) -> Self {
         let mut cursor = node.walk();
         let has_children = cursor.goto_first_child();
 
-        Children {
+        TreeSitterChildren {
             field,
             cursor,
             finished: !has_children,
         }
     }
 }
-
-impl<'a> Iterator for Children<'a> {
+impl<'a> Iterator for TreeSitterChildren<'a> {
     type Item = ts::Node<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -85,5 +84,16 @@ impl<'a> Iterator for Children<'a> {
         self.finished = !self.cursor.goto_next_sibling();
 
         Some(node)
+    }
+}
+
+pub trait IntoItem<Q> {
+    type Item;
+    fn into_item(self, item: Q) -> Option<Self::Item>;
+}
+impl<T, I: IntoIterator<Item = T>> IntoItem<usize> for I {
+    type Item = T;
+    fn into_item(self, n: usize) -> Option<Self::Item> {
+        self.into_iter().nth(n)
     }
 }

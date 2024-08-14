@@ -101,6 +101,7 @@ module.exports = grammar({
                 $.string_lit,
                 $.array_lit,
                 $.call,
+                $.macro,
                 $.record_lit,
                 $.bin_op,
                 $.block,
@@ -130,6 +131,18 @@ module.exports = grammar({
             ),
         _call_args_list: ($) =>
             prec(PREC.CALL, repeat1(seq(field("args", $._expr), optional(",")))),
+
+        macro: ($) =>
+            prec.left(
+                PREC.CALL,
+                seq(
+                    "@",
+                    field("name", $.ident),
+                    "(",
+                    optional($._call_args_list),
+                    seq(")"),
+                ),
+            ),
 
         get_prop: ($) =>
             prec.left(

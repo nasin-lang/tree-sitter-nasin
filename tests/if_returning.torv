@@ -1,8 +1,7 @@
-write(f: i32, buf: str, len: usize): i32 @extern("write")
+write(f: i32, buf: Ptr(u8), len: usize): i32 @extern("write")
 
 true_msg  := "it's true!\n"
 false_msg := "it's false\n"
-len := 11
 
 get_msg(cond) :=
     if cond then
@@ -11,6 +10,8 @@ get_msg(cond) :=
         false_msg
 
 main: i32 =
-    _ := write(1, get_msg(true), len)
-    _ := write(1, get_msg(false), len)
+    msg := get_msg(true)
+    _ := write(1, @str_ptr(msg, 0), @str_len(msg))
+    msg := get_msg(false)
+    _ := write(1, @str_ptr(msg, 0), @str_len(msg))
     0
