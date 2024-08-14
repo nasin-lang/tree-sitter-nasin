@@ -8,6 +8,7 @@ use tree_sitter as ts;
 use super::module_parser::ModuleParser;
 use super::parser_value::{Value, ValueBody};
 use crate::bytecode::Loc;
+use crate::sources::Sources;
 use crate::utils::{TreeSitterUtils, ValueStack};
 use crate::{bytecode as b, utils};
 
@@ -18,14 +19,14 @@ pub struct ExprParser<'a> {
     pub instrs: Vec<b::Instr>,
     pub is_loop: bool,
     pub idents: HashMap<&'a str, Value>,
-    src: &'a str,
+    src: &'a Sources<'a>,
     func_idx: Option<usize>,
     stack: Stack<'a>,
 }
 
 impl<'a> ExprParser<'a> {
     pub fn new(
-        src: &'a str,
+        src: &'a Sources<'a>,
         module_parser: ModuleParser<'a>,
         func_idx: Option<usize>,
         inputs: impl IntoIterator<Item = (&'a str, b::Loc)>,
@@ -73,12 +74,12 @@ impl<'a> ExprParser<'a> {
             "true" => Value::new(ValueBody::Bool(true), loc),
             "false" => Value::new(ValueBody::Bool(false), loc),
             "number" => {
-                let number = node.get_text(self.src);
+                let number = node.get_text(self.src.content(0));
                 Value::new(ValueBody::Number(number.to_string()), loc)
             }
             "string_lit" => {
                 let string = utils::decode_string_lit(
-                    node.required_field("content").get_text(self.src),
+                    node.required_field("content").get_text(self.src.content(0)),
                 );
                 let local_idx = self.add_instr_with_result(
                     0,
@@ -109,8 +110,9 @@ impl<'a> ExprParser<'a> {
                 let fields: utils::SortedMap<_, _> = node
                     .iter_field("fields")
                     .map(|field_node| {
-                        let field_name =
-                            field_node.required_field("name").get_text(self.src);
+                        let field_name = field_node
+                            .required_field("name")
+                            .get_text(self.src.content(0));
                         let field_value =
                             self.add_expr_node(field_node.required_field("value"), false);
                         (field_name.to_string(), field_value)
@@ -136,7 +138,7 @@ impl<'a> ExprParser<'a> {
                 Value::new(ValueBody::Local(local_idx), loc)
             }
             "ident" => {
-                let ident = node.get_text(self.src);
+                let ident = node.get_text(self.src.content(0));
                 let Some(value) = self.idents.get(ident) else {
                     // TODO: better error handling
                     panic!("Value \"{ident}\" not found");
@@ -144,7 +146,7 @@ impl<'a> ExprParser<'a> {
                 value.with_loc(loc)
             }
             "bin_op" => {
-                let op = node.required_field("op").get_text(self.src);
+                let op = node.required_field("op").get_text(self.src.content(0));
                 let left = self.add_expr_node(node.required_field("left"), false);
                 let right = self.add_expr_node(node.required_field("right"), false);
                 self.add_bin_op(op, left, right)
@@ -152,7 +154,7 @@ impl<'a> ExprParser<'a> {
             "get_prop" => {
                 let parent = self.add_expr_node(node.required_field("parent"), false);
                 let prop_name_node = node.required_field("prop_name");
-                let prop_name = prop_name_node.get_text(self.src);
+                let prop_name = prop_name_node.get_text(self.src.content(0));
                 self.add_get_prop(parent, prop_name, Loc::from_node(0, &prop_name_node))
             }
             "call" => {
@@ -238,7 +240,7 @@ impl<'a> ExprParser<'a> {
                 let name = node
                     .required_field("name")
                     .of_kind("ident")
-                    .get_text(&self.src);
+                    .get_text(self.src.content(0));
                 let args = node.iter_field("args").collect_vec();
                 self.add_macro(name, &args, b::Loc::from_node(0, &node))
             }
@@ -445,7 +447,7 @@ impl<'a> ExprParser<'a> {
                 let pat_node = node.required_field("pat");
                 match pat_node.kind() {
                     "ident" => {
-                        let ident = pat_node.get_text(self.src);
+                        let ident = pat_node.get_text(self.src.content(0));
                         self.idents
                             .insert(ident, value.with_loc(Loc::from_node(0, &node)));
                     }

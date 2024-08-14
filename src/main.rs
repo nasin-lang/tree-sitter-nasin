@@ -1,9 +1,10 @@
+use std::env;
 use std::path::PathBuf;
 use std::process::exit;
-use std::{env, fs};
 
 use clap::{Parser, Subcommand, ValueEnum};
 use torvo::config::BuildConfig;
+use torvo::sources::Sources;
 use torvo::{codegen, parser, typecheck};
 use tree_sitter as ts;
 
@@ -66,7 +67,9 @@ fn main() {
             dump_bytecode,
             dump_clif,
         } => {
-            let src = fs::read_to_string(&file).expect("failed to read file");
+            let mut src = Sources::new();
+            src.read(&file).unwrap();
+
             let cfg = BuildConfig {
                 out: out.unwrap_or_else(|| {
                     env::current_dir()
@@ -85,7 +88,7 @@ fn main() {
                 .set_language(tree_sitter_torvo::language())
                 .unwrap();
             let tree = ts_parser
-                .parse(&src, None)
+                .parse(src.content(0), None)
                 .expect("Could not parse this file");
             let root_node = tree.root_node();
 
@@ -93,10 +96,10 @@ fn main() {
                 println!("{}", root_node.to_sexp());
             }
 
-            let module = parser::parse_module(file, &src, root_node);
+            let module = parser::parse_module(&src, root_node);
             //eprintln!("{}", module);
 
-            let (module, errors) = typecheck::check_module(module);
+            let (module, errors) = typecheck::check_module(module, &src);
 
             if dump_bytecode {
                 println!("{}", module);

@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
 
 use tree_sitter as ts;
 
@@ -7,6 +6,7 @@ use super::parser_value::Value;
 use super::type_parser::TypeParser;
 use crate::parser::expr_parser::ExprParser;
 use crate::parser::parser_value::ValueBody;
+use crate::sources::Sources;
 use crate::utils::TreeSitterUtils;
 use crate::{bytecode as b, utils};
 
@@ -15,15 +15,13 @@ pub struct ModuleParser<'a> {
     pub globals: Vec<DeclaredGlobal<'a>>,
     pub funcs: Vec<DeclaredFunc<'a>>,
     pub idents: HashMap<&'a str, Value>,
-    src: &'a str,
-    path: PathBuf,
+    src: &'a Sources<'a>,
 }
 
 impl<'a> ModuleParser<'a> {
-    pub fn new(path: PathBuf, src: &'a str) -> Self {
+    pub fn new(src: &'a Sources<'a>) -> Self {
         ModuleParser {
             src,
-            path,
             types: TypeParser::new(src),
             globals: vec![],
             funcs: vec![],
@@ -61,7 +59,12 @@ impl<'a> ModuleParser<'a> {
             typedefs: self.types.typedefs,
             globals: self.globals.into_iter().map(|x| x.global).collect(),
             funcs: self.funcs.into_iter().map(|x| x.func).collect(),
-            sources: vec![b::Source::new(self.path)],
+            sources: self
+                .src
+                .sources
+                .iter()
+                .map(|s| b::Source::new(s.path.to_owned()))
+                .collect(),
         }
     }
 
@@ -70,7 +73,7 @@ impl<'a> ModuleParser<'a> {
 
         for sym_node in node.iter_children() {
             let ident_node = sym_node.required_field("name").of_kind("ident");
-            let ident = ident_node.get_text(self.src);
+            let ident = ident_node.get_text(self.src.content(0));
 
             match sym_node.kind() {
                 "type_decl" => self.types.add_type(ident, sym_node),
@@ -88,7 +91,7 @@ impl<'a> ModuleParser<'a> {
             .iter_field("params")
             .map(|param_node| {
                 let param_name_node = param_node.required_field("pat").of_kind("ident");
-                let param_name = param_name_node.get_text(self.src);
+                let param_name = param_name_node.get_text(self.src.content(0));
 
                 let param_ty = match param_node.field("type") {
                     Some(ty_node) => self.types.parse_type(ty_node),
@@ -113,14 +116,19 @@ impl<'a> ModuleParser<'a> {
         let mut extn: Option<b::Extern> = None;
         for directive_node in node.iter_field("directives") {
             let args_nodes: Vec<_> = directive_node.iter_field("args").collect();
-            match directive_node.required_field("name").get_text(self.src) {
+            match directive_node
+                .required_field("name")
+                .get_text(self.src.content(0))
+            {
                 "extern" => {
                     // TODO: error handling
                     assert!(extn.is_none());
                     assert!(args_nodes.len() == 1);
                     assert!(args_nodes[0].kind() == "string_lit");
                     let symbol_name = utils::decode_string_lit(
-                        args_nodes[0].required_field("content").get_text(self.src),
+                        args_nodes[0]
+                            .required_field("content")
+                            .get_text(self.src.content(0)),
                     );
                     extn = Some(b::Extern { name: symbol_name });
                 }

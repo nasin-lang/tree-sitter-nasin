@@ -35,6 +35,49 @@ pub enum TypeBody {
     Ptr(Box<Type>),
     TypeRef(usize),
 }
+impl Display for TypeBody {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            TypeBody::Bool => write!(f, "bool")?,
+            TypeBody::AnyNumber => write!(f, "AnyNumber")?,
+            TypeBody::AnySignedNumber => write!(f, "AnySignedNumber")?,
+            TypeBody::AnyFloat => write!(f, "AnyFloat")?,
+            TypeBody::AnyOpaque => write!(f, "anyopaque")?,
+            TypeBody::I8 => write!(f, "i8")?,
+            TypeBody::I16 => write!(f, "i16")?,
+            TypeBody::I32 => write!(f, "i32")?,
+            TypeBody::I64 => write!(f, "i64")?,
+            TypeBody::U8 => write!(f, "u8")?,
+            TypeBody::U16 => write!(f, "u16")?,
+            TypeBody::U32 => write!(f, "u32")?,
+            TypeBody::U64 => write!(f, "u64")?,
+            TypeBody::USize => write!(f, "usize")?,
+            TypeBody::F32 => write!(f, "f32")?,
+            TypeBody::F64 => write!(f, "f64")?,
+            TypeBody::Inferred(v) => {
+                write!(f, "infered")?;
+                for (name, t) in &v.properties {
+                    write!(f, " .{}: {}", name, t)?;
+                }
+            }
+            TypeBody::String(v) => {
+                write!(f, "string")?;
+                if let Some(len) = v.len {
+                    write!(f, " {}", len)?;
+                }
+            }
+            TypeBody::Array(v) => {
+                write!(f, "array {}", v.item)?;
+                if let Some(len) = v.len {
+                    write!(f, " {}", len)?;
+                }
+            }
+            TypeBody::Ptr(ty) => write!(f, "ptr {ty}")?,
+            TypeBody::TypeRef(i) => write!(f, "type {i}")?,
+        }
+        Ok(())
+    }
+}
 
 #[derive(Debug, Clone, new)]
 pub struct Type {

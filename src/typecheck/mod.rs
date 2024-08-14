@@ -1,22 +1,13 @@
 mod entry;
 mod module_checker;
 
-use thiserror::Error;
-
 use self::module_checker::TypeChecker;
-use crate::{bytecode as b, utils};
+use crate::sources::Sources;
+use crate::{bytecode as b, errors};
 
-#[derive(Debug, Clone, Error)]
-pub enum TypeError {
-    #[error("Expected type {expected}, found {actual}")]
-    UnexpectedType { expected: b::Type, actual: b::Type },
-    #[error(
-        "All results of the expression should have the same type\n{}",
-        utils::indented(2, .0.iter().map(|t| format!("- found {t}"))),
-    )]
-    TypeMisatch(Vec<b::Type>),
-}
-
-pub fn check_module(module: b::Module) -> (b::Module, Vec<TypeError>) {
-    TypeChecker::new().check_module(module)
+pub fn check_module<'a>(
+    module: b::Module,
+    src: &'a Sources<'a>,
+) -> (b::Module, Vec<errors::Error<'a>>) {
+    TypeChecker::new(src).check_module(module)
 }

@@ -1,24 +1,19 @@
 use std::collections::HashSet;
 
+use derive_new::new;
+
 use crate::bytecode as b;
 
 pub type TypeCheckEntryIdx = usize;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, new)]
 pub struct TypeCheckEntry {
     pub ty: b::Type,
+    pub loc: b::Loc,
+    #[new(default)]
     pub constraints: Vec<Constraint>,
+    #[new(default)]
     pub same_of: HashSet<TypeCheckEntryIdx>,
-}
-
-impl TypeCheckEntry {
-    pub fn new(ty: b::Type) -> Self {
-        Self {
-            ty,
-            constraints: vec![],
-            same_of: HashSet::new(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -5,9 +5,9 @@ use derive_new::new;
 use itertools::{enumerate, izip, Itertools};
 
 use super::entry::{Constraint, TypeCheckEntry, TypeCheckEntryIdx};
-use super::TypeError;
+use crate::sources::Sources;
 use crate::utils::SortedMap;
-use crate::{bytecode as b, utils};
+use crate::{bytecode as b, errors, utils};
 
 type Stack = utils::ValueStack<TypeCheckEntryIdx, ScopePayload>;
 
@@ -27,7 +27,8 @@ struct FuncEntry {
 }
 
 #[derive(Debug, Clone, new)]
-pub struct TypeChecker {
+pub struct TypeChecker<'a> {
+    src: &'a Sources<'a>,
     #[new(default)]
     entries: Vec<TypeCheckEntry>,
     #[new(default)]
@@ -36,19 +37,26 @@ pub struct TypeChecker {
     funcs: Vec<FuncEntry>,
 }
 
-impl TypeChecker {
-    pub fn check_module(&mut self, mut module: b::Module) -> (b::Module, Vec<TypeError>) {
+impl<'a> TypeChecker<'a> {
+    pub fn check_module(
+        &mut self,
+        mut module: b::Module,
+    ) -> (b::Module, Vec<errors::Error<'a>>) {
         for func in &mut module.funcs {
             let params_idxs: Vec<_> = func
                 .params
                 .iter()
-                .map(|p| self.add_entry_from_type(p.ty.clone()))
+                .map(|p| self.add_entry_from_type(p.ty.clone(), p.loc))
                 .collect();
-            let ret_idx = self.add_entry_from_type(func.ret.clone());
+            let ret_idx = self
+                .add_entry_from_type(func.ret.clone(), func.ret.loc.unwrap_or(func.loc));
             self.funcs.push(FuncEntry::new(params_idxs, ret_idx));
         }
         for global in &module.globals {
-            let idx = self.add_entry_from_type(global.ty.clone());
+            let idx = self.add_entry_from_type(
+                global.ty.clone(),
+                global.ty.loc.unwrap_or(global.loc),
+            );
             self.globals.push(GlobalEntry::new(idx));
         }
 
@@ -142,26 +150,31 @@ impl TypeChecker {
             }
             b::InstrBody::GetField(v) => {
                 assert!(stack.len() >= 1);
-                let property = self.property(stack.pop(), v);
+                let property = self.property(stack.pop(), v, instr.loc);
                 stack.push(property);
                 None
             }
             b::InstrBody::CreateBool(_) => {
-                let entry =
-                    self.add_entry_from_type(b::Type::new(b::TypeBody::Bool, None));
+                let entry = self.add_entry_from_type(
+                    b::Type::new(b::TypeBody::Bool, None),
+                    instr.loc,
+                );
                 stack.push(entry);
                 Some(entry)
             }
             b::InstrBody::CreateNumber(ty, _) => {
-                let entry = self.add_entry_from_type(ty.clone());
+                let entry = self.add_entry_from_type(ty.clone(), instr.loc);
                 stack.push(entry);
                 Some(entry)
             }
             b::InstrBody::CreateString(v) => {
-                let entry = self.add_entry_from_type(b::Type::new(
-                    b::TypeBody::String(b::StringType { len: Some(v.len()) }),
-                    None,
-                ));
+                let entry = self.add_entry_from_type(
+                    b::Type::new(
+                        b::TypeBody::String(b::StringType { len: Some(v.len()) }),
+                        None,
+                    ),
+                    instr.loc,
+                );
                 stack.push(entry);
                 Some(entry)
             }
@@ -171,7 +184,7 @@ impl TypeChecker {
                     todo!();
                 }
                 let item_entry = self.merge_entries(&stack.pop_many(*len));
-                let entry = self.add_entry();
+                let entry = self.add_entry(instr.loc);
                 self.add_constraint(entry, Constraint::Is(ty.clone()));
                 self.add_constraint(entry, Constraint::Array(item_entry));
                 stack.push(entry);
@@ -183,7 +196,7 @@ impl TypeChecker {
                     todo!();
                 }
                 let values = stack.pop_many(fields.len());
-                let entry = self.add_entry();
+                let entry = self.add_entry(instr.loc);
                 self.add_constraint(entry, Constraint::Is(ty.clone()));
                 for (key, value) in izip!(fields, values) {
                     self.add_constraint(entry, Constraint::Property(key.clone(), value));
@@ -219,8 +232,10 @@ impl TypeChecker {
                     operand,
                     Constraint::Is(b::Type::new(b::TypeBody::AnyNumber, None)),
                 );
-                let entry =
-                    self.add_entry_from_type(b::Type::new(b::TypeBody::Bool, None));
+                let entry = self.add_entry_from_type(
+                    b::Type::new(b::TypeBody::Bool, None),
+                    instr.loc,
+                );
                 stack.push(entry);
                 Some(entry)
             }
@@ -233,7 +248,7 @@ impl TypeChecker {
                     self.add_constraint(arg, Constraint::TypeOf(param));
                 }
 
-                let entry = self.add_entry();
+                let entry = self.add_entry(instr.loc);
 
                 if func_idx.is_some_and(|i| i == *idx) {
                     self.merge_entries(&[entry, func.ret]);
@@ -251,7 +266,7 @@ impl TypeChecker {
                     Constraint::Is(b::Type::new(b::TypeBody::Bool, None)),
                 );
 
-                let entry = self.add_entry();
+                let entry = self.add_entry(instr.loc);
 
                 stack.create_scope(ScopePayload::new(entry));
                 Some(entry)
@@ -287,7 +302,7 @@ impl TypeChecker {
                 assert!(stack.len() >= *n);
                 let loop_args = stack.pop_many(*n);
 
-                let entry = self.add_entry();
+                let entry = self.add_entry(instr.loc);
                 let scope = stack.create_scope(ScopePayload::new(entry));
                 scope.is_loop = true;
                 scope.loop_arity = *n;
@@ -328,16 +343,18 @@ impl TypeChecker {
                         None,
                     )),
                 );
-                let entry =
-                    self.add_entry_from_type(b::Type::new(b::TypeBody::USize, None));
+                let entry = self.add_entry_from_type(
+                    b::Type::new(b::TypeBody::USize, None),
+                    instr.loc,
+                );
                 stack.push(entry);
                 Some(entry)
             }
             b::InstrBody::ArrayPtr(_) => {
                 assert!(stack.scope_len() >= 1);
                 let source = stack.pop();
-                let item = self.array_item(source);
-                let entry = self.add_entry();
+                let item = self.array_item(source, instr.loc);
+                let entry = self.add_entry(instr.loc);
                 self.add_constraint(entry, Constraint::Ptr(item));
                 stack.push(entry);
                 Some(entry)
@@ -352,8 +369,10 @@ impl TypeChecker {
                         None,
                     )),
                 );
-                let entry =
-                    self.add_entry_from_type(b::Type::new(b::TypeBody::USize, None));
+                let entry = self.add_entry_from_type(
+                    b::Type::new(b::TypeBody::USize, None),
+                    instr.loc,
+                );
                 stack.push(entry);
                 Some(entry)
             }
@@ -367,30 +386,31 @@ impl TypeChecker {
                         None,
                     )),
                 );
-                let item = self.add_entry_from_type(b::Type::new(b::TypeBody::U8, None));
-                let entry = self.add_entry();
+                let item = self
+                    .add_entry_from_type(b::Type::new(b::TypeBody::U8, None), instr.loc);
+                let entry = self.add_entry(instr.loc);
                 self.add_constraint(entry, Constraint::Ptr(item));
                 stack.push(entry);
                 Some(entry)
             }
             b::InstrBody::CompileError => {
-                Some(self.add_entry_from_type(b::Type::unknown(None)))
+                Some(self.add_entry_from_type(b::Type::unknown(None), instr.loc))
             }
         }
     }
 
-    fn add_entry(&mut self) -> TypeCheckEntryIdx {
+    fn add_entry(&mut self, loc: b::Loc) -> TypeCheckEntryIdx {
         self.entries
-            .push(TypeCheckEntry::new(b::Type::unknown(None)));
+            .push(TypeCheckEntry::new(b::Type::unknown(None), loc));
         self.entries.len() - 1
     }
 
-    fn add_entry_from_type(&mut self, ty: b::Type) -> TypeCheckEntryIdx {
-        let mut entry = TypeCheckEntry::new(ty.clone());
+    fn add_entry_from_type(&mut self, ty: b::Type, loc: b::Loc) -> TypeCheckEntryIdx {
+        let mut entry = TypeCheckEntry::new(ty.clone(), loc);
 
         if let b::TypeBody::Inferred(b::InferredType { properties }) = ty.body {
             for (prop_name, prop_ty) in properties {
-                let prop_idx = self.add_entry_from_type(prop_ty);
+                let prop_idx = self.add_entry_from_type(prop_ty, loc);
                 entry
                     .constraints
                     .push(Constraint::Property(prop_name, prop_idx));
@@ -440,7 +460,7 @@ impl TypeChecker {
         head
     }
 
-    fn validate(&mut self, typedefs: &[b::TypeDef]) -> Vec<TypeError> {
+    fn validate(&mut self, typedefs: &[b::TypeDef]) -> Vec<errors::Error<'a>> {
         let mut errors = vec![];
         let mut visited = HashSet::new();
 
@@ -456,7 +476,7 @@ impl TypeChecker {
         idx: TypeCheckEntryIdx,
         typedefs: &[b::TypeDef],
         visited: &mut HashSet<TypeCheckEntryIdx>,
-    ) -> Vec<TypeError> {
+    ) -> Vec<errors::Error<'a>> {
         if visited.contains(&idx) {
             return vec![];
         }
@@ -485,7 +505,11 @@ impl TypeChecker {
                 if let Some(ty) = result_ty.common_type(ty, typedefs) {
                     result_ty = ty;
                 } else {
-                    return vec![TypeError::TypeMisatch(tys)];
+                    return vec![errors::Error::new(
+                        errors::TypeMisatch::new(tys).into(),
+                        self.src,
+                        self.entries[idx].loc,
+                    )];
                 }
             }
             self.entries[idx].ty = result_ty;
@@ -554,10 +578,12 @@ impl TypeChecker {
                     self.entries[idx].ty = res;
                 }
                 None => {
-                    errors.push(TypeError::UnexpectedType {
-                        expected: ty.clone(),
-                        actual: entry_ty.to_owned(),
-                    });
+                    errors.push(errors::Error::new(
+                        errors::UnexpectedType::new( entry_ty.to_owned(),ty.clone(),)
+                            .into(),
+                        self.src,
+                        self.entries[idx].loc,
+                    ));
                 }
             }
         }
@@ -565,7 +591,12 @@ impl TypeChecker {
         errors
     }
 
-    fn property(&mut self, idx: TypeCheckEntryIdx, name: &str) -> TypeCheckEntryIdx {
+    fn property(
+        &mut self,
+        idx: TypeCheckEntryIdx,
+        name: &str,
+        loc: b::Loc,
+    ) -> TypeCheckEntryIdx {
         let entry = &self.entries[idx];
 
         for item in &entry.constraints {
@@ -577,12 +608,12 @@ impl TypeChecker {
         }
 
         let res = match entry.same_of.len() {
-            0 => self.add_entry(),
-            1 => self.property(*entry.same_of.iter().next().unwrap(), name),
+            0 => self.add_entry(loc),
+            1 => self.property(*entry.same_of.iter().next().unwrap(), name, loc),
             _ => {
-                let res = self.add_entry();
+                let res = self.add_entry(loc);
                 for i in self.entries[idx].same_of.clone() {
-                    let prop = self.property(i, name);
+                    let prop = self.property(i, name, loc);
                     self.entries[res].same_of.insert(prop);
                 }
                 res
@@ -593,7 +624,7 @@ impl TypeChecker {
         res
     }
 
-    fn array_item(&mut self, idx: TypeCheckEntryIdx) -> TypeCheckEntryIdx {
+    fn array_item(&mut self, idx: TypeCheckEntryIdx, loc: b::Loc) -> TypeCheckEntryIdx {
         let entry = &self.entries[idx];
 
         for item in &entry.constraints {
@@ -603,12 +634,12 @@ impl TypeChecker {
         }
 
         let res = match entry.same_of.len() {
-            0 => self.add_entry(),
-            1 => self.array_item(*entry.same_of.iter().next().unwrap()),
+            0 => self.add_entry(loc),
+            1 => self.array_item(*entry.same_of.iter().next().unwrap(), loc),
             _ => {
-                let res = self.add_entry();
+                let res = self.add_entry(loc);
                 for i in self.entries[idx].same_of.clone() {
-                    let prop = self.array_item(i);
+                    let prop = self.array_item(i, loc);
                     self.entries[res].same_of.insert(prop);
                 }
                 res

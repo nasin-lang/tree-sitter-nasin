@@ -4,16 +4,17 @@ use itertools::Itertools;
 use tree_sitter as ts;
 
 use crate::bytecode as b;
+use crate::sources::Sources;
 use crate::utils::{IntoItem, TreeSitterUtils};
 
 pub struct TypeParser<'a> {
     pub typedefs: Vec<b::TypeDef>,
     pub idents: HashMap<&'a str, b::TypeBody>,
-    src: &'a str,
+    src: &'a Sources<'a>,
 }
 
 impl<'a> TypeParser<'a> {
-    pub fn new(src: &'a str) -> Self {
+    pub fn new(src: &'a Sources<'a>) -> Self {
         let idents = HashMap::from([
             ("bool", b::TypeBody::Bool),
             ("i8", b::TypeBody::I8),
@@ -39,7 +40,7 @@ impl<'a> TypeParser<'a> {
     pub fn parse_type(&self, node: ts::Node<'a>) -> b::Type {
         let body = match node.kind() {
             "ident" => {
-                let ident = node.get_text(self.src);
+                let ident = node.get_text(self.src.content(0));
                 match self.idents.get(ident) {
                     Some(body) => body.clone(),
                     None => {
@@ -51,7 +52,7 @@ impl<'a> TypeParser<'a> {
             "array_type" => {
                 let item_ty = self.parse_type(node.required_field("item_type"));
                 let len = node.field("length").map(|n| {
-                    n.get_text(self.src)
+                    n.get_text(self.src.content(0))
                         .parse::<usize>()
                         .expect("Cannot cast length to integer")
                 });
@@ -61,7 +62,7 @@ impl<'a> TypeParser<'a> {
                 let name = node
                     .required_field("name")
                     .of_kind("ident")
-                    .get_text(&self.src);
+                    .get_text(&self.src.content(0));
 
                 let args = node
                     .iter_field("args")
@@ -91,7 +92,7 @@ impl<'a> TypeParser<'a> {
                 .iter_field("fields")
                 .map(|field_node| {
                     let name_node = field_node.required_field("name");
-                    let name = name_node.get_text(self.src).to_string();
+                    let name = name_node.get_text(self.src.content(0)).to_string();
                     (
                         name.clone(),
                         b::RecordField::new(

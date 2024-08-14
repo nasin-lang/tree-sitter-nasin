@@ -134,7 +134,7 @@ pub struct Source {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Display)]
 #[display(":{start_line}:{start_col}-{end_line}:{end_col}")]
 pub struct Loc {
-    pub source: usize,
+    pub source_idx: usize,
     pub start_line: usize,
     pub start_col: usize,
     pub start_byte: usize,
@@ -147,7 +147,7 @@ impl Loc {
         let start_pos = node.start_position();
         let end_pos = node.end_position();
         Loc {
-            source,
+            source_idx: source,
             start_line: start_pos.row + 1,
             start_col: start_pos.column + 1,
             start_byte: node.start_byte(),
@@ -157,9 +157,9 @@ impl Loc {
         }
     }
     pub fn merge(&self, other: &Loc) -> Loc {
-        assert!(self.source == other.source);
+        assert!(self.source_idx == other.source_idx);
         Loc {
-            source: self.source,
+            source_idx: self.source_idx,
             start_byte: cmp::min(self.start_byte, other.start_byte),
             start_line: cmp::min(self.start_line, other.start_line),
             start_col: cmp::min(self.start_col, other.start_col),
