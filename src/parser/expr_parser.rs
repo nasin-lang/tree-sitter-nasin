@@ -52,7 +52,7 @@ impl<'a> ExprParser<'a> {
         assert!(self.stack.scope_len() == 1);
 
         if self.is_loop {
-            let func = &self.module_parser.funcs[self.func_idx.unwrap()];
+            let func = &self.module_parser.funcs[self.func_idx.unwrap()].func;
             self.instrs.insert(
                 0,
                 b::Instr::new(
