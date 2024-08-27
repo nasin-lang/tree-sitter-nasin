@@ -444,6 +444,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "523dc4f511e55ab87b694dc30d0f820d60906ef06413f93d4d7a1385599cc149"
 
 [[package]]
+name = "nasin"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "compact-debug",
+ "cranelift_shim",
+ "derivative",
+ "derive-new",
+ "derive_more",
+ "itertools",
+ "lazy-init",
+ "target-lexicon",
+ "thiserror",
+ "tree-sitter",
+ "tree-sitter-nasin",
+]
+
+[[package]]
 name = "object"
 version = "0.32.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -612,24 +630,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "torvo"
-version = "0.1.0"
-dependencies = [
- "clap",
- "compact-debug",
- "cranelift_shim",
- "derivative",
- "derive-new",
- "derive_more",
- "itertools",
- "lazy-init",
- "target-lexicon",
- "thiserror",
- "tree-sitter",
- "tree-sitter-torvo",
-]
-
-[[package]]
 name = "tree-sitter"
 version = "0.20.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -640,7 +640,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "tree-sitter-torvo"
+name = "tree-sitter-nasin"
 version = "0.0.1"
 dependencies = [
  "cc",

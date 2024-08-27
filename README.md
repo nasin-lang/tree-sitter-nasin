@@ -1,6 +1,6 @@
-# Torvo Language
+# Nasin Language
 
-Torvo is a pure functional language with a easy syntax and a strong expressive type system.
+Nasin is a pure functional language with a easy syntax and a strong expressive type system.
 
 ## Warning
 

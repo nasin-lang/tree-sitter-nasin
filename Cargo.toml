@@ -1,12 +1,12 @@
 [package]
-name = "torvo"
+name = "nasin"
 description = "Elegant pure functional programming language"
 authors = ["Felipe Nascimento <felipenasgomes@gmail.com>"]
 version = "0.1.0"
 edition = "2021"
 
 [workspace]
-members = ["cranelift-shim", "tree-sitter-torvo"]
+members = ["cranelift-shim", "tree-sitter-nasin"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -26,4 +26,4 @@ lazy-init = "0.5.1"
 target-lexicon = "0.12.13"
 thiserror = "1.0.62"
 tree-sitter = "~0.20.10"
-tree-sitter-torvo = { version = "0.0.1", path = "tree-sitter-torvo" }
+tree-sitter-nasin = { version = "0.0.1", path = "tree-sitter-nasin" }

@@ -3,11 +3,11 @@ use std::path::PathBuf;
 use std::process::exit;
 
 use clap::{Parser, Subcommand};
-use torvo::config::BuildConfig;
-use torvo::context;
+use nasin::config::BuildConfig;
+use nasin::context;
 
 #[derive(Parser, Debug)]
-#[command(name = "Torvo Language")]
+#[command(name = "Nasin Language")]
 #[command(author, version, about, long_about = None)]
 struct Cli {
     #[command(subcommand)]

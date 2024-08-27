@@ -3,7 +3,7 @@ node_modules/
 .cargo/
 
 # Generated files
-tree-sitter-torvo/src
+tree-sitter-nasin/src
 
 # Compiled results
 bin/*

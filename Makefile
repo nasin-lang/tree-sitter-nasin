@@ -1,5 +1,5 @@
 .PHONY: all
-all: bin/torvo
+all: bin/nasin
 
 .PHONY: clean
 clean:
@@ -9,23 +9,23 @@ clean:
 	cargo clean
 
 .PHONY: test
-test: bin/torvo
+test: bin/nasin
 	./rere.py replay tests/_test.list
 
 .PHONY: record-test
-record-test: bin/torvo
+record-test: bin/nasin
 	./rere.py record tests/_test.list
 
 RUST_SRC = $(shell find src/ -type f -name '*.rs')
-bin/torvo: Cargo.toml $(RUST_SRC) tree-sitter-torvo/src/parser.c
+bin/nasin: Cargo.toml $(RUST_SRC) tree-sitter-nasin/src/parser.c
 	cargo build     \
 	&& mkdir -p bin \
-	&& cp -T target/debug/torvo bin/torvo
+	&& cp -T target/debug/nasin bin/nasin
 
-tree-sitter-torvo/src/parser.c: tree-sitter-torvo/grammar.js tree-sitter-torvo/node_modules
-	cd tree-sitter-torvo \
+tree-sitter-nasin/src/parser.c: tree-sitter-nasin/grammar.js tree-sitter-nasin/node_modules
+	cd tree-sitter-nasin \
 	&& bun run generate
 
-tree-sitter-torvo/node_modules: tree-sitter-torvo/package.json
-	cd tree-sitter-torvo \
+tree-sitter-nasin/node_modules: tree-sitter-nasin/package.json
+	cd tree-sitter-nasin \
 	&& bun install

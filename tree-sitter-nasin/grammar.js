@@ -21,7 +21,7 @@ function bin_op(prec_lvl, operator, operand) {
 }
 
 module.exports = grammar({
-    name: "torvo",
+    name: "nasin",
     word: ($) => $._ident,
     rules: {
         root: ($) => repeat($._module_stmt),
