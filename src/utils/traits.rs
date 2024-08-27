@@ -2,50 +2,50 @@ use std::borrow::Cow;
 
 use tree_sitter as ts;
 
-pub trait TreeSitterUtils<'a> {
-    fn of_kind(self, kind: &'a str) -> Self;
-    fn get_text(&self, source: &'a str) -> &'a str;
-    fn iter_children(&self) -> impl Iterator<Item = ts::Node<'a>>;
-    fn iter_field(&self, field: &str) -> impl Iterator<Item = ts::Node<'a>>;
-    fn field(&self, field: &str) -> Option<ts::Node<'a>>;
-    fn required_field(&self, field: &str) -> ts::Node<'a>;
+pub trait TreeSitterUtils<'t> {
+    fn of_kind(self, kind: &str) -> Self;
+    fn get_text<'s>(&self, source: &'s str) -> &'s str;
+    fn iter_children(&self) -> impl Iterator<Item = ts::Node<'t>>;
+    fn iter_field(&self, field: &str) -> impl Iterator<Item = ts::Node<'t>>;
+    fn field(&self, field: &str) -> Option<ts::Node<'t>>;
+    fn required_field(&self, field: &str) -> ts::Node<'t>;
 }
-impl<'a> TreeSitterUtils<'a> for ts::Node<'a> {
-    fn of_kind(self, kind: &'a str) -> Self {
+impl<'t> TreeSitterUtils<'t> for ts::Node<'t> {
+    fn of_kind(self, kind: &str) -> Self {
         assert!(self.is_named());
         assert_eq!(self.kind(), kind);
         self
     }
 
-    fn get_text(&self, source: &'a str) -> &'a str {
+    fn get_text<'s>(&self, source: &'s str) -> &'s str {
         &source[self.start_byte()..self.end_byte()]
     }
 
-    fn iter_children(&self) -> impl Iterator<Item = ts::Node<'a>> {
+    fn iter_children(&self) -> impl Iterator<Item = ts::Node<'t>> {
         TreeSitterChildren::new(self, None)
     }
 
-    fn iter_field(&self, field: &str) -> impl Iterator<Item = ts::Node<'a>> {
+    fn iter_field(&self, field: &str) -> impl Iterator<Item = ts::Node<'t>> {
         TreeSitterChildren::new(self, Some(field.to_string()))
     }
 
-    fn field(&self, field: &str) -> Option<ts::Node<'a>> {
+    fn field(&self, field: &str) -> Option<ts::Node<'t>> {
         self.iter_field(field).next()
     }
 
-    fn required_field(&self, field: &str) -> ts::Node<'a> {
+    fn required_field(&self, field: &str) -> ts::Node<'t> {
         self.field(field)
             .expect(&format!("Field {} is missing", field))
     }
 }
 
-struct TreeSitterChildren<'a> {
+struct TreeSitterChildren<'t> {
     field: Option<String>,
-    cursor: ts::TreeCursor<'a>,
+    cursor: ts::TreeCursor<'t>,
     finished: bool,
 }
-impl<'a> TreeSitterChildren<'a> {
-    fn new(node: &ts::Node<'a>, field: Option<String>) -> Self {
+impl<'t> TreeSitterChildren<'t> {
+    fn new(node: &ts::Node<'t>, field: Option<String>) -> Self {
         let mut cursor = node.walk();
         let has_children = cursor.goto_first_child();
 
@@ -56,8 +56,8 @@ impl<'a> TreeSitterChildren<'a> {
         }
     }
 }
-impl<'a> Iterator for TreeSitterChildren<'a> {
-    type Item = ts::Node<'a>;
+impl<'t> Iterator for TreeSitterChildren<'t> {
+    type Item = ts::Node<'t>;
 
     fn next(&mut self) -> Option<Self::Item> {
         // Skip to a valid node

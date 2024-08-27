@@ -2,11 +2,9 @@ use std::env;
 use std::path::PathBuf;
 use std::process::exit;
 
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Parser, Subcommand};
 use torvo::config::BuildConfig;
-use torvo::sources::Sources;
-use torvo::{codegen, parser, typecheck};
-use tree_sitter as ts;
+use torvo::context;
 
 #[derive(Parser, Debug)]
 #[command(name = "Torvo Language")]
@@ -39,18 +37,6 @@ enum CliCommand {
         /// Whether to dump the parsed CLIF of the source file, if using Cranelift
         dump_clif: bool,
     },
-    /// Dump artifacts of compilation
-    Dump {
-        target: DumpTarget,
-        /// Path to the file to show the artifacts of
-        file: PathBuf,
-    },
-}
-
-#[derive(Debug, Clone, ValueEnum)]
-enum DumpTarget {
-    Ast,
-    Bytecode,
 }
 
 fn main() {
@@ -67,10 +53,7 @@ fn main() {
             dump_bytecode,
             dump_clif,
         } => {
-            let mut src = Sources::new();
-            src.read(&file).unwrap();
-
-            let cfg = BuildConfig {
+            let mut ctx = context::BuildContext::new(BuildConfig {
                 out: out.unwrap_or_else(|| {
                     env::current_dir()
                         .unwrap()
@@ -81,53 +64,23 @@ fn main() {
                 dump_ast,
                 dump_bytecode,
                 dump_clif,
-            };
+            });
 
-            let mut ts_parser = ts::Parser::new();
-            ts_parser
-                .set_language(tree_sitter_torvo::language())
-                .unwrap();
-            let tree = ts_parser
-                .parse(src.content(0), None)
-                .expect("Could not parse this file");
-            let root_node = tree.root_node();
+            let src_idx = ctx.preload(file).expect("file not found");
 
-            if dump_ast {
-                println!("{}", root_node.to_sexp());
-            }
+            ctx.parse(src_idx);
 
-            let module = parser::parse_module(&src, root_node);
-            //eprintln!("{}", module);
-
-            let (module, errors) = typecheck::check_module(module, &src);
-
-            if dump_bytecode {
-                println!("{}", module);
-            }
-
-            if errors.len() > 0 {
-                for err in errors {
-                    eprintln!("{err}");
+            {
+                let errors = ctx.errors.lock().unwrap();
+                if errors.len() > 0 {
+                    for err in errors.iter() {
+                        eprintln!("{err}");
+                    }
+                    exit(1);
                 }
-                exit(1);
             }
 
-            codegen::compile_program(&module, &cfg);
-        }
-        CliCommand::Dump { target, file } => {
-            //let src = fs::read_to_string(&file).expect("failed to read file");
-            //let name = get_module_name(&file);
-            //
-            //match target {
-            //    DumpTarget::Ast => {
-            //        let tree = parse_tree(&src);
-            //        println!("{}", tree.root_node().to_sexp());
-            //    }
-            //    DumpTarget::Mir => {
-            //        let module = parse_mir(&name, &src, &BuildConfig::default());
-            //        println!("{}", module);
-            //    }
-            //}
+            ctx.compile();
         }
     }
 }

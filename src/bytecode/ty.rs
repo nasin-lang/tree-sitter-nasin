@@ -5,7 +5,7 @@ use std::hash::Hash;
 
 use derive_new::new;
 
-use super::{Loc, TypeDef, TypeDefBody};
+use super::{Loc, Module, TypeDefBody};
 use crate::utils;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -33,7 +33,7 @@ pub enum TypeBody {
     String(StringType),
     Array(ArrayType),
     Ptr(Box<Type>),
-    TypeRef(usize),
+    TypeRef(usize, usize),
 }
 impl Display for TypeBody {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -73,7 +73,7 @@ impl Display for TypeBody {
                 }
             }
             TypeBody::Ptr(ty) => write!(f, "ptr {ty}")?,
-            TypeBody::TypeRef(i) => write!(f, "type {i}")?,
+            TypeBody::TypeRef(mod_idx, ty_idx) => write!(f, "type {mod_idx}-{ty_idx}")?,
         }
         Ok(())
     }
@@ -171,21 +171,19 @@ impl Type {
         )
     }
 
-    pub fn property<'a>(
-        &'a self,
-        name: &str,
-        typedefs: &'a [TypeDef],
-    ) -> Option<&'a Type> {
+    pub fn property<'a>(&'a self, name: &str, modules: &'a [Module]) -> Option<&'a Type> {
         match &self.body {
             TypeBody::Inferred(v) => v.properties.get(name),
-            TypeBody::TypeRef(idx) => match &typedefs.get(*idx)?.body {
-                TypeDefBody::Record(rec) => Some(&rec.fields.get(name)?.ty),
-            },
+            TypeBody::TypeRef(mod_idx, ty_idx) => {
+                match &modules.get(*mod_idx)?.typedefs.get(*ty_idx)?.body {
+                    TypeDefBody::Record(rec) => Some(&rec.fields.get(name)?.ty),
+                }
+            }
             _ => None,
         }
     }
 
-    pub fn intersection(&self, other: &Type, typedefs: &[TypeDef]) -> Option<Type> {
+    pub fn intersection(&self, other: &Type, modules: &[Module]) -> Option<Type> {
         let body = match (self, other) {
             number!(U8) => TypeBody::U8,
             number!(U16) => TypeBody::U16,
@@ -214,11 +212,11 @@ impl Type {
                 };
                 TypeBody::Array(ArrayType {
                     len,
-                    item: a.item.intersection(&b.item, typedefs)?.into(),
+                    item: a.item.intersection(&b.item, modules)?.into(),
                 })
             }
             (body!(TypeBody::Ptr(a)), body!(TypeBody::Ptr(b))) => {
-                TypeBody::Ptr(a.intersection(&b, typedefs)?.into())
+                TypeBody::Ptr(a.intersection(&b, modules)?.into())
             }
             (body!(TypeBody::Inferred(a)), body!(TypeBody::Inferred(b))) => {
                 let mut props = utils::SortedMap::new();
@@ -229,7 +227,7 @@ impl Type {
                     let b_prop_ty = b.properties.get(prop_name);
                     let ty = match (a_prop_ty, b_prop_ty) {
                         (Some(a_prop), Some(b_prop)) => {
-                            a_prop.intersection(b_prop, typedefs)?
+                            a_prop.intersection(b_prop, modules)?
                         }
                         (Some(prop), None) | (None, Some(prop)) => prop.clone(),
                         (None, None) => return None, // this should never happen
@@ -241,8 +239,8 @@ impl Type {
             unordered!(body!(TypeBody::Inferred(a)), b) => {
                 let has_all_properties = a.properties.iter().all(|(name, a_ty)| {
                     other
-                        .property(name, typedefs)
-                        .is_some_and(|b_ty| a_ty.intersection(b_ty, typedefs).is_some())
+                        .property(name, modules)
+                        .is_some_and(|b_ty| a_ty.intersection(b_ty, modules).is_some())
                 });
                 if has_all_properties {
                     b.body.clone()
@@ -267,7 +265,7 @@ impl Type {
         Some(Type::new(body, loc))
     }
 
-    pub fn common_type(&self, other: &Type, typedefs: &[TypeDef]) -> Option<Type> {
+    pub fn common_type(&self, other: &Type, modules: &[Module]) -> Option<Type> {
         let body = match (self, other) {
             (body!(TypeBody::String(a)), body!(TypeBody::String(b))) => {
                 TypeBody::String(StringType {
@@ -276,12 +274,12 @@ impl Type {
             }
             (body!(TypeBody::Array(a)), body!(TypeBody::Array(b))) => {
                 TypeBody::Array(ArrayType {
-                    item: a.item.common_type(&b.item, typedefs)?.into(),
+                    item: a.item.common_type(&b.item, modules)?.into(),
                     len: if a.len == b.len { a.len.clone() } else { None },
                 })
             }
             (body!(TypeBody::Ptr(a)), body!(TypeBody::Ptr(b))) => {
-                TypeBody::Ptr(a.common_type(&b, typedefs)?.into())
+                TypeBody::Ptr(a.common_type(&b, modules)?.into())
             }
             (body!(TypeBody::Inferred(a)), body!(TypeBody::Inferred(b))) => {
                 let mut props = utils::SortedMap::new();
@@ -292,7 +290,7 @@ impl Type {
                     let b_prop_ty = b.properties.get(prop_name);
                     let ty = match (a_prop_ty, b_prop_ty) {
                         (Some(a_prop), Some(b_prop)) => {
-                            a_prop.common_type(b_prop, typedefs)?
+                            a_prop.common_type(b_prop, modules)?
                         }
                         (Some(prop), None) | (None, Some(prop)) => prop.clone(),
                         (None, None) => return None, // this should never happen
@@ -304,7 +302,7 @@ impl Type {
             unordered!(body!(TypeBody::Inferred(a)), b) => {
                 for (prop_name, prop_ty) in &a.properties {
                     if prop_ty
-                        .common_type(other.property(prop_name, typedefs)?, typedefs)
+                        .common_type(other.property(prop_name, modules)?, modules)
                         .is_none()
                     {
                         return None;
@@ -316,7 +314,7 @@ impl Type {
                 if &a.body == &b.body {
                     a.body.clone()
                 } else {
-                    return a.intersection(b, typedefs);
+                    return a.intersection(b, modules);
                 }
             }
         };
@@ -377,7 +375,7 @@ impl Display for Type {
                 }
             }
             TypeBody::Ptr(ty) => write!(f, "ptr {ty}")?,
-            TypeBody::TypeRef(i) => write!(f, "type {i}")?,
+            TypeBody::TypeRef(mod_idx, ty_idx) => write!(f, "type {mod_idx}-{ty_idx}")?,
         }
         if let Some(loc) = &self.loc {
             write!(f, " {loc}")?;

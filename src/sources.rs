@@ -1,64 +1,79 @@
-use std::borrow::Cow;
-use std::path::Path;
-use std::{fs, io};
+use std::fs::File;
+use std::io;
+use std::io::Read;
+use std::path::{Path, PathBuf};
 
+use derivative::Derivative;
 use derive_new::new;
 use itertools::Itertools;
+use lazy_init::LazyTransform;
 
-#[derive(Debug, new)]
-pub struct Sources<'a> {
+use crate::bytecode as b;
+
+#[derive(Default, Debug, new)]
+pub struct SourceManager {
     #[new(default)]
-    pub sources: Vec<Source<'a>>,
+    pub sources: Vec<Source>,
 }
-impl<'a> Sources<'a> {
-    pub fn path(&self, idx: usize) -> &Path {
-        self.sources.get(idx).expect("source should exist").path
+impl SourceManager {
+    pub fn source(&self, idx: usize) -> &Source {
+        &self.sources.get(idx).expect("source should exist")
     }
-    pub fn content(&self, idx: usize) -> &str {
-        self.sources
-            .get(idx)
-            .expect("source should exist")
-            .content
-            .as_ref()
+    pub fn find_source(&self, path: &Path) -> Option<&Source> {
+        self.sources.iter().find(|item| item.path == path)
     }
-    pub fn line(&self, idx: usize, n: usize) -> &str {
-        self.sources
-            .get(idx)
-            .expect("source should exist")
-            .line(n)
-            .expect("line should exist")
+    pub fn open(&mut self, path: PathBuf) -> io::Result<usize> {
+        self.sources.push(Source::open(path)?);
+        Ok(self.sources.len() - 1)
     }
-    pub fn insert(&mut self, path: &'a Path, content: &'a str) {
-        self.sources.push(Source::new(path, Cow::Borrowed(content)));
-    }
-    pub fn read(&mut self, path: &'a Path) -> io::Result<()> {
-        let content = fs::read_to_string(path)?;
-        self.sources.push(Source::new(path, Cow::Owned(content)));
-        Ok(())
+    pub fn preload(&mut self, path: PathBuf) -> io::Result<usize> {
+        let idx = self.open(path)?;
+        self.source(idx).content();
+        Ok(idx)
     }
 }
 
-#[derive(Debug)]
-pub struct Source<'a> {
-    pub path: &'a Path,
-    pub content: Cow<'a, str>,
+#[derive(Derivative)]
+#[derivative(Debug)]
+pub struct Source {
+    pub path: PathBuf,
+    #[derivative(Debug = "ignore")]
+    content: LazyTransform<File, SourceContent>,
+}
+impl Source {
+    pub fn open(path: PathBuf) -> io::Result<Self> {
+        Ok(Self {
+            content: LazyTransform::new(File::open(&path)?),
+            path,
+        })
+    }
+    pub fn content(&self) -> &SourceContent {
+        self.content.get_or_create(|mut file| {
+            let mut buf = "".to_string();
+            file.read_to_string(&mut buf)
+                .expect("file should be readable");
+            SourceContent::new(buf)
+        })
+    }
+}
+impl From<&Source> for b::Source {
+    fn from(value: &Source) -> Self {
+        b::Source::new(value.path.clone())
+    }
+}
+
+pub struct SourceContent {
+    pub text: String,
     /// Indexes of each line after the first (which is implied to be at index 0)
     lines: Vec<usize>,
 }
-impl<'a> Source<'a> {
-    fn new(path: &'a Path, content: Cow<'a, str>) -> Self {
-        let lines = content
-            .match_indices('\n')
-            .map(|(i, _)| i + 1)
-            .collect_vec();
+impl SourceContent {
+    pub fn new(text: String) -> Self {
+        let lines = text.match_indices('\n').map(|(i, _)| i + 1).collect_vec();
 
-        Self {
-            path,
-            content,
-            lines,
-        }
+        Self { text, lines }
     }
-    fn line(&self, n: usize) -> Option<&str> {
+    pub fn line(&self, n: usize) -> Option<&str> {
         if n > self.lines.len() + 1 {
             return None;
         }
@@ -71,9 +86,9 @@ impl<'a> Source<'a> {
         let end = if n < self.lines.len() + 1 {
             self.lines[n - 1] - 1
         } else {
-            self.content.len()
+            self.text.len()
         };
 
-        Some(&self.content[start..end])
+        Some(&self.text[start..end])
     }
 }

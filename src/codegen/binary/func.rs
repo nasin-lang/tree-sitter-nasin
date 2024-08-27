@@ -14,11 +14,11 @@ use crate::{bytecode as b, utils};
 
 #[derive(new)]
 pub struct FuncCodegen<'a, 'b, M: cl::Module> {
-    pub module: &'a b::Module,
+    pub modules: &'a [b::Module],
     pub builder: Option<cl::FunctionBuilder<'b>>,
     pub obj_module: M,
     pub globals: Globals<'a>,
-    pub funcs: Vec<FuncBinding>,
+    pub funcs: HashMap<(usize, usize), FuncBinding>,
     #[new(value = "utils::ValueStack::new(ScopePayload::default())")]
     pub stack: utils::ValueStack<types::RuntimeValue<'a>, ScopePayload<'a>>,
     #[new(default)]
@@ -182,7 +182,7 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
                 let next_block = builder.create_block();
                 builder.append_block_param(
                     next_block,
-                    get_type(ty, self.module, &self.obj_module),
+                    get_type(ty, self.modules, &self.obj_module),
                 );
 
                 self.stack.get_scope_mut().payload.block = Some(next_block);
@@ -225,7 +225,7 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
                 for arg in &args {
                     let value = builder.append_block_param(
                         loop_block,
-                        get_type(&arg.ty, self.module, &self.obj_module),
+                        get_type(&arg.ty, self.modules, &self.obj_module),
                     );
                     args_values.push(arg.add_to_func(&mut self.obj_module, builder));
                     loop_params
@@ -238,7 +238,7 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
                 let next_block = builder.create_block();
                 builder.append_block_param(
                     next_block,
-                    get_type(ty, self.module, &self.obj_module),
+                    get_type(ty, self.modules, &self.obj_module),
                 );
 
                 self.stack.get_scope_mut().payload.block = Some(next_block);
@@ -302,9 +302,9 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
                 builder.ins().jump(block, &values);
                 self.stack.get_scope_mut().mark_as_never();
             }
-            b::InstrBody::Call(idx) => {
-                let func_id = self.funcs[*idx].func_id;
-                let func = &self.module.funcs[*idx];
+            b::InstrBody::Call(mod_idx, func_idx) => {
+                let func_id = self.funcs.get(&(*mod_idx, *func_idx)).unwrap().func_id;
+                let func = &self.modules[*mod_idx].funcs[*func_idx];
                 let builder = expect_builder!(self);
 
                 let args = self
@@ -326,13 +326,14 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
 
                 let source = self.stack.pop();
                 let b::Type {
-                    body: b::TypeBody::TypeRef(type_ref),
+                    body: b::TypeBody::TypeRef(mod_idx, ty_idx),
                     ..
                 } = source.ty.as_ref()
                 else {
                     panic!("type should be a record type");
                 };
-                let b::TypeDefBody::Record(rec) = &self.module.typedefs[*type_ref].body
+                let b::TypeDefBody::Record(rec) =
+                    &self.modules[*mod_idx].typedefs[*ty_idx].body
                 else {
                     panic!("type should be a record type");
                 };
@@ -348,12 +349,12 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
                         break;
                     }
 
-                    offset += get_type(&field.ty, self.module, &self.obj_module).bytes();
+                    offset += get_type(&field.ty, self.modules, &self.obj_module).bytes();
                 }
 
                 let source_value = source.add_to_func(&mut self.obj_module, builder);
                 let value = builder.ins().load(
-                    source.native_type(self.module, &self.obj_module).clone(),
+                    source.native_type(self.modules, &self.obj_module).clone(),
                     cl::MemFlags::new(),
                     source_value,
                     offset as i32,
@@ -385,7 +386,7 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
 
                 let (item_size, len) = match &source.ty.body {
                     b::TypeBody::Array(array_ty) => (
-                        get_size(&array_ty.item, &self.module, &self.obj_module),
+                        get_size(&array_ty.item, &self.modules, &self.obj_module),
                         array_ty.len,
                     ),
                     b::TypeBody::String(str_ty) => (1, str_ty.len),
@@ -449,7 +450,9 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
             | b::InstrBody::GetGlobal(..) => unreachable!(),
         }
     }
-    pub fn return_value(mut self) -> (M, Globals<'a>, Vec<FuncBinding>) {
+    pub fn return_value(
+        mut self,
+    ) -> (M, Globals<'a>, HashMap<(usize, usize), FuncBinding>) {
         let builder = expect_builder!(self);
 
         let value = self.stack.pop().add_to_func(&mut self.obj_module, builder);
@@ -457,7 +460,9 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
 
         (self.obj_module, self.globals, self.funcs)
     }
-    pub fn return_never(mut self) -> (M, Globals<'a>, Vec<FuncBinding>) {
+    pub fn return_never(
+        mut self,
+    ) -> (M, Globals<'a>, HashMap<(usize, usize), FuncBinding>) {
         let func = expect_builder!(self);
 
         func.ins().trap(cl::TrapCode::UnreachableCodeReached);
@@ -505,7 +510,7 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
                             b::TypeBody::F64 => parse_num!(f64, F64),
                             b::TypeBody::Bool
                             | b::TypeBody::String(_)
-                            | b::TypeBody::TypeRef(_)
+                            | b::TypeBody::TypeRef(_, _)
                             | b::TypeBody::Array(_)
                             | b::TypeBody::Ptr(_)
                             | b::TypeBody::Inferred(_)
@@ -549,7 +554,7 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
                         let values = types::tuple_from_record(
                             izip!(fields, this.stack.pop_many(fields.len())),
                             ty,
-                            this.module,
+                            this.modules,
                         );
                         let (data, module) =
                             this.globals.data_for_tuple(values.clone(), this.obj_module);
@@ -563,9 +568,9 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
                         };
                         Some(types::RuntimeValue::new(Cow::Borrowed(ty), src))
                     }
-                    b::InstrBody::GetGlobal(idx) => Some(
+                    b::InstrBody::GetGlobal(mod_idx, global_idx) => Some(
                         this.globals
-                            .get_global(*idx)
+                            .get_global(*mod_idx, *global_idx)
                             .expect("global idx out of range")
                             .value
                             .clone(),
@@ -584,7 +589,7 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
 
         let builder = expect_builder!(self);
 
-        let ty = types::get_type(&value.ty, self.module, &self.obj_module);
+        let ty = types::get_type(&value.ty, self.modules, &self.obj_module);
         let value = value.add_to_func(&mut self.obj_module, builder);
         let gv = self
             .obj_module
@@ -626,7 +631,7 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
             .iter()
             .map(|v| {
                 let offset = size;
-                size += v.native_type(self.module, &self.obj_module).bytes();
+                size += v.native_type(self.modules, &self.obj_module).bytes();
                 (offset, v.add_to_func(&self.obj_module, func))
             })
             .collect_vec();

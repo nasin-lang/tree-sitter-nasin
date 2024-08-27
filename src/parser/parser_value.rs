@@ -4,8 +4,8 @@ use crate::bytecode as b;
 
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
 pub enum ValueBody {
-    Func(usize),
-    Global(usize),
+    Func(usize, usize),
+    Global(usize, usize),
     Local(usize),
     Bool(bool),
     Number(String),

@@ -2,29 +2,31 @@ mod func;
 mod globals;
 mod types;
 
+use std::collections::HashMap;
 use std::env;
 use std::fs::File;
 use std::io::BufWriter;
 use std::path::Path;
 
 use cranelift_shim::{self as cl, Module};
-use itertools::{enumerate, izip};
+use itertools::Itertools;
 use target_lexicon::Triple;
 
 use self::func::FuncCodegen;
 use self::globals::Globals;
 use crate::{bytecode as b, config, utils};
 
-utils::enumerate!(pub FuncNS: u32 {
+utils::number_enum!(pub FuncNS: u32 {
     User = 0,
     SystemFunc = 1,
 });
 
-utils::enumerate!(pub SystemFunc: u32 {
+utils::number_enum!(pub SystemFunc: u32 {
     Start = 0,
     Exit = 1,
 });
 
+#[derive(Debug)]
 pub struct FuncBinding {
     pub is_extern: bool,
     pub symbol_name: String,
@@ -32,16 +34,17 @@ pub struct FuncBinding {
 }
 
 pub struct BinaryCodegen<'a> {
-    pub module: &'a b::Module,
+    pub modules: &'a [b::Module],
     pub cfg: &'a config::BuildConfig,
     pub obj_module: cl::ObjectModule,
     module_ctx: cl::Context,
     globals: Globals<'a>,
-    funcs: Vec<FuncBinding>,
-    declared_funcs: Vec<cl::Function>,
+    funcs: HashMap<(usize, usize), FuncBinding>,
+    declared_funcs: HashMap<(usize, usize), cl::Function>,
+    next_func_id: u32,
 }
 impl<'a> BinaryCodegen<'a> {
-    pub fn new(module: &'a b::Module, cfg: &'a config::BuildConfig) -> Self {
+    pub fn new(modules: &'a [b::Module], cfg: &'a config::BuildConfig) -> Self {
         let triple = Triple::host();
 
         let settings_builder = cl::settings::builder();
@@ -56,31 +59,36 @@ impl<'a> BinaryCodegen<'a> {
         let module_ctx = obj_module.make_context();
 
         BinaryCodegen {
-            module,
+            modules,
             cfg,
             obj_module,
             module_ctx,
-            globals: Globals::new(module),
-            funcs: Vec::new(),
-            declared_funcs: Vec::new(),
+            globals: Globals::new(modules),
+            funcs: HashMap::new(),
+            declared_funcs: HashMap::new(),
+            next_func_id: 0,
         }
     }
 }
 impl BinaryCodegen<'_> {
     pub fn write(mut self) {
-        for i in 0..self.module.globals.len() {
-            self.declare_global(i);
-        }
-
-        for i in 0..self.module.funcs.len() {
-            self.declare_function(i);
-        }
-
-        for i in 0..self.module.funcs.len() {
-            if self.module.funcs[i].body.is_empty() {
-                continue;
+        for mod_idx in 0..self.modules.len() {
+            for idx in 0..self.modules[mod_idx].globals.len() {
+                self.declare_global(mod_idx, idx);
             }
-            self.build_function(i);
+
+            for idx in 0..self.modules[mod_idx].funcs.len() {
+                self.declare_function(mod_idx, idx);
+            }
+        }
+
+        for mod_idx in 0..self.modules.len() {
+            for idx in 0..self.modules[mod_idx].funcs.len() {
+                if self.modules[mod_idx].funcs[idx].body.is_empty() {
+                    continue;
+                }
+                self.build_function(mod_idx, idx);
+            }
         }
 
         self.write_to_file();
@@ -111,7 +119,7 @@ impl BinaryCodegen<'_> {
             let mut func_ctx = cl::FunctionBuilderContext::new();
             let func_builder = cl::FunctionBuilder::new(&mut func, &mut func_ctx);
             let mut codegen = FuncCodegen::new(
-                this.module,
+                this.modules,
                 Some(func_builder),
                 this.obj_module,
                 this.globals,
@@ -121,15 +129,15 @@ impl BinaryCodegen<'_> {
 
             let mut entry_point = None;
 
-            for (i, global) in enumerate(codegen.globals.globals.clone()) {
+            for ((i, j), global) in codegen.globals.globals.clone() {
                 if global.is_entry_point {
-                    entry_point = Some(i);
+                    entry_point = Some((i, j));
                     continue;
                 }
                 if global.is_const {
                     continue;
                 };
-                for instr in &self.module.globals[i].body {
+                for instr in &self.modules[i].globals[j].body {
                     codegen.add_instr(instr);
                 }
                 let res = codegen.stack.pop();
@@ -137,7 +145,7 @@ impl BinaryCodegen<'_> {
             }
 
             let entry_point = entry_point.expect("entrypoint should be defined");
-            for instr in &self.module.globals[entry_point].body {
+            for instr in &self.modules[entry_point.0].globals[entry_point.1].body {
                 codegen.add_instr(instr);
             }
             let exit_code = codegen
@@ -160,24 +168,26 @@ impl BinaryCodegen<'_> {
             .unwrap();
         self.obj_module.clear_context(&mut self.module_ctx)
     }
-    fn declare_function(&mut self, idx: usize) {
-        let decl = &self.module.funcs[idx];
+    fn declare_function(&mut self, mod_idx: usize, idx: usize) {
+        let decl = &self.modules[mod_idx].funcs[idx];
         let mut sig = self.obj_module.make_signature();
 
         for param in &decl.params {
             sig.params.push(cl::AbiParam::new(types::get_type(
                 &param.ty,
-                self.module,
+                self.modules,
                 &self.obj_module,
             )));
         }
         sig.returns.push(cl::AbiParam::new(types::get_type(
             &decl.ret,
-            self.module,
+            self.modules,
             &self.obj_module,
         )));
 
-        let user_func_name = cl::UserFuncName::user(FuncNS::User.into(), idx as u32);
+        let user_func_name =
+            cl::UserFuncName::user(FuncNS::User.into(), self.next_func_id);
+        self.next_func_id += 1;
 
         let func = cl::Function::with_name_signature(user_func_name, sig);
 
@@ -185,7 +195,7 @@ impl BinaryCodegen<'_> {
             name.clone()
         } else {
             // TODO: improve name mangling
-            format!("$func{idx}")
+            format!("$func_{mod_idx}_{idx}")
         };
 
         let linkage = if decl.extn.is_some() {
@@ -203,24 +213,28 @@ impl BinaryCodegen<'_> {
             .declare_function(&symbol_name, linkage, &func.signature)
             .unwrap();
 
-        self.funcs.push(FuncBinding {
-            symbol_name,
-            is_extern: decl.extn.is_some(),
-            func_id,
-        });
-        self.declared_funcs.push(func);
+        self.funcs.insert(
+            (mod_idx, idx),
+            FuncBinding {
+                symbol_name,
+                is_extern: decl.extn.is_some(),
+                func_id,
+            },
+        );
+        self.declared_funcs.insert((mod_idx, idx), func);
     }
-    fn declare_global(&mut self, idx: usize) {
-        self.globals.insert_global(idx, &mut self.obj_module);
+    fn declare_global(&mut self, mod_idx: usize, idx: usize) {
+        self.globals
+            .insert_global(mod_idx, idx, &mut self.obj_module);
     }
-    fn build_function(&mut self, idx: usize) {
-        let decl = &self.module.funcs[idx];
+    fn build_function(&mut self, mod_idx: usize, idx: usize) {
+        let decl = &self.modules[mod_idx].funcs[idx];
         utils::replace_with(self, |mut this| {
             let mut func_ctx = cl::FunctionBuilderContext::new();
-            let func =
-                cl::FunctionBuilder::new(&mut this.declared_funcs[idx], &mut func_ctx);
+            let func = this.declared_funcs.get_mut(&(mod_idx, idx)).unwrap();
+            let func = cl::FunctionBuilder::new(func, &mut func_ctx);
             let mut codegen = FuncCodegen::new(
-                this.module,
+                this.modules,
                 Some(func),
                 this.obj_module,
                 this.globals,
@@ -257,7 +271,10 @@ impl BinaryCodegen<'_> {
             }
         }
 
-        for (func_binding, func) in izip!(self.funcs, self.declared_funcs) {
+        for key in self.funcs.keys().cloned().collect_vec() {
+            let func_binding = self.funcs.remove(&key).unwrap();
+            let func = self.declared_funcs.remove(&key).unwrap();
+
             if self.cfg.dump_clif {
                 println!("<{}> {}", func_binding.symbol_name, func);
             }

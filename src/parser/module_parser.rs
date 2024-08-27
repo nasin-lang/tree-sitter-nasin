@@ -1,39 +1,40 @@
 use std::collections::HashMap;
 
+use derive_new::new;
 use tree_sitter as ts;
 
 use super::parser_value::Value;
 use super::type_parser::TypeParser;
 use crate::parser::expr_parser::ExprParser;
 use crate::parser::parser_value::ValueBody;
-use crate::sources::Sources;
 use crate::utils::TreeSitterUtils;
-use crate::{bytecode as b, utils};
+use crate::{bytecode as b, context, utils};
 
-pub struct ModuleParser<'a> {
+#[derive(new)]
+pub struct ModuleParser<'a, 't> {
+    #[new(value = "TypeParser::new(ctx, src_idx, mod_idx)")]
     pub types: TypeParser<'a>,
-    pub globals: Vec<DeclaredGlobal<'a>>,
-    pub funcs: Vec<DeclaredFunc<'a>>,
-    pub idents: HashMap<&'a str, Value>,
-    src: &'a Sources<'a>,
+    #[new(default)]
+    pub globals: Vec<DeclaredGlobal<'t>>,
+    #[new(default)]
+    pub funcs: Vec<DeclaredFunc<'t>>,
+    #[new(default)]
+    pub idents: HashMap<String, Value>,
+    ctx: &'a context::BuildContext<'a>,
+    src_idx: usize,
+    mod_idx: usize,
 }
 
-impl<'a> ModuleParser<'a> {
-    pub fn new(src: &'a Sources<'a>) -> Self {
-        ModuleParser {
-            src,
-            types: TypeParser::new(src),
-            globals: vec![],
-            funcs: vec![],
-            idents: HashMap::new(),
-        }
-    }
+impl<'a, 't> ModuleParser<'a, 't> {
+    pub fn finish(mut self) {
+        let src_idx = self.src_idx;
+        let mod_idx = self.mod_idx;
 
-    pub fn finish(mut self) -> b::Module {
         for i in 0..self.globals.len() {
             let value_node = self.globals[i].value_node.clone();
 
-            let mut value_parser = ExprParser::new(self.src, self, None, []);
+            let mut value_parser =
+                ExprParser::new(self.ctx, self, src_idx, mod_idx, None, []);
 
             let value = value_parser.add_expr_node(value_node, true);
             value_parser.push_values([&value], true);
@@ -47,7 +48,8 @@ impl<'a> ModuleParser<'a> {
             };
             let params_names = self.funcs[i].params_names.clone();
 
-            let mut value_parser = ExprParser::new(self.src, self, Some(i), params_names);
+            let mut value_parser =
+                ExprParser::new(self.ctx, self, src_idx, mod_idx, Some(i), params_names);
 
             let value = value_parser.add_expr_node(value_node, true);
             value_parser.push_values([&value], true);
@@ -55,25 +57,18 @@ impl<'a> ModuleParser<'a> {
             (self, self.funcs[i].func.body) = value_parser.finish();
         }
 
-        b::Module {
-            typedefs: self.types.typedefs,
-            globals: self.globals.into_iter().map(|x| x.global).collect(),
-            funcs: self.funcs.into_iter().map(|x| x.func).collect(),
-            sources: self
-                .src
-                .sources
-                .iter()
-                .map(|s| b::Source::new(s.path.to_owned()))
-                .collect(),
-        }
+        let module = &mut self.ctx.lock_modules_mut()[self.mod_idx];
+        module.typedefs = self.types.typedefs;
+        module.globals = self.globals.into_iter().map(|x| x.global).collect();
+        module.funcs = self.funcs.into_iter().map(|x| x.func).collect();
     }
-
-    pub fn add_root(&mut self, node: ts::Node<'a>) {
+    pub fn add_root(&mut self, node: ts::Node<'t>) {
         node.of_kind("root");
 
         for sym_node in node.iter_children() {
             let ident_node = sym_node.required_field("name").of_kind("ident");
-            let ident = ident_node.get_text(self.src.content(0));
+            let ident =
+                ident_node.get_text(&self.ctx.source(self.src_idx).content().text);
 
             match sym_node.kind() {
                 "type_decl" => self.types.add_type(ident, sym_node),
@@ -84,14 +79,15 @@ impl<'a> ModuleParser<'a> {
         }
     }
 
-    pub fn add_func(&mut self, name: &'a str, node: ts::Node<'a>) {
+    fn add_func(&mut self, name: &'a str, node: ts::Node<'t>) {
         assert_eq!(node.kind(), "func_decl");
 
         let (params, params_names): (Vec<_>, Vec<_>) = node
             .iter_field("params")
             .map(|param_node| {
                 let param_name_node = param_node.required_field("pat").of_kind("ident");
-                let param_name = param_name_node.get_text(self.src.content(0));
+                let param_name = param_name_node
+                    .get_text(&self.ctx.source(self.src_idx).content().text);
 
                 let param_ty = match param_node.field("type") {
                     Some(ty_node) => self.types.parse_type(ty_node),
@@ -101,9 +97,12 @@ impl<'a> ModuleParser<'a> {
                 (
                     b::Param {
                         ty: param_ty,
-                        loc: b::Loc::from_node(0, &param_node),
+                        loc: b::Loc::from_node(self.src_idx, &param_node),
                     },
-                    (param_name, b::Loc::from_node(0, &param_name_node)),
+                    (
+                        param_name.to_string(),
+                        b::Loc::from_node(self.src_idx, &param_name_node),
+                    ),
                 )
             })
             .unzip();
@@ -118,7 +117,7 @@ impl<'a> ModuleParser<'a> {
             let args_nodes: Vec<_> = directive_node.iter_field("args").collect();
             match directive_node
                 .required_field("name")
-                .get_text(self.src.content(0))
+                .get_text(&self.ctx.source(self.src_idx).content().text)
             {
                 "extern" => {
                     // TODO: error handling
@@ -128,7 +127,7 @@ impl<'a> ModuleParser<'a> {
                     let symbol_name = utils::decode_string_lit(
                         args_nodes[0]
                             .required_field("content")
-                            .get_text(self.src.content(0)),
+                            .get_text(&self.ctx.source(self.src_idx).content().text),
                     );
                     extn = Some(b::Extern { name: symbol_name });
                 }
@@ -136,26 +135,28 @@ impl<'a> ModuleParser<'a> {
             }
         }
 
-        let func_idx = self.funcs.len();
-
+        let func = b::Func {
+            name: name.to_string(),
+            params,
+            ret: ret_ty,
+            extn,
+            body: vec![],
+            loc: b::Loc::from_node(self.src_idx, &node),
+        };
+        self.idents.insert(
+            func.name.clone(),
+            Value::new(
+                ValueBody::Func(self.mod_idx, self.funcs.len()),
+                b::Loc::from_node(self.src_idx, &node),
+            ),
+        );
         self.funcs.push(DeclaredFunc {
-            func: b::Func {
-                params,
-                ret: ret_ty,
-                extn,
-                body: vec![],
-                loc: b::Loc::from_node(0, &node),
-            },
+            func,
             value_node: node.field("return"),
             params_names,
         });
-        self.idents.insert(
-            name,
-            Value::new(ValueBody::Func(func_idx), b::Loc::from_node(0, &node)),
-        );
     }
-
-    pub fn add_global(&mut self, name: &'a str, node: ts::Node<'a>) {
+    fn add_global(&mut self, name: &'a str, node: ts::Node<'t>) {
         assert_eq!(node.kind(), "global_var_decl");
 
         let ty = match node.field("type") {
@@ -163,31 +164,34 @@ impl<'a> ModuleParser<'a> {
             None => b::Type::unknown(None),
         };
 
-        let global_idx = self.globals.len();
-
+        let global = b::Global {
+            name: name.to_string(),
+            ty,
+            body: vec![],
+            is_entry_point: name == "main",
+            loc: b::Loc::from_node(self.src_idx, &node),
+        };
+        self.idents.insert(
+            global.name.clone(),
+            Value::new(
+                ValueBody::Global(self.mod_idx, self.globals.len()),
+                b::Loc::from_node(self.src_idx, &node),
+            ),
+        );
         self.globals.push(DeclaredGlobal {
-            global: b::Global {
-                ty,
-                body: vec![],
-                is_entry_point: name == "main",
-                loc: b::Loc::from_node(0, &node),
-            },
+            global,
             value_node: node.required_field("value"),
         });
-        self.idents.insert(
-            name,
-            Value::new(ValueBody::Global(global_idx), b::Loc::from_node(0, &node)),
-        );
     }
 }
 
-pub struct DeclaredFunc<'a> {
+pub struct DeclaredFunc<'t> {
     pub func: b::Func,
-    value_node: Option<ts::Node<'a>>,
-    params_names: Vec<(&'a str, b::Loc)>,
+    value_node: Option<ts::Node<'t>>,
+    params_names: Vec<(String, b::Loc)>,
 }
 
-pub struct DeclaredGlobal<'a> {
+pub struct DeclaredGlobal<'t> {
     pub global: b::Global,
-    value_node: ts::Node<'a>,
+    value_node: ts::Node<'t>,
 }

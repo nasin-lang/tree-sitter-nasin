@@ -18,9 +18,9 @@ pub struct GlobalBinding<'a> {
 }
 
 /// Describe all static data that is present in the module and which values they represent
-#[derive(Debug, new)]
+#[derive(new)]
 pub struct Globals<'a> {
-    pub module: &'a b::Module,
+    pub modules: &'a [b::Module],
     #[new(default)]
     pub data: HashMap<cl::DataId, cl::DataDescription>,
     #[new(default)]
@@ -28,22 +28,27 @@ pub struct Globals<'a> {
     #[new(default)]
     tuples: HashMap<Vec<types::RuntimeValue<'a>>, cl::DataId>,
     #[new(default)]
-    pub globals: Vec<GlobalBinding<'a>>,
+    pub globals: HashMap<(usize, usize), GlobalBinding<'a>>,
 }
 impl<'a> Globals<'a> {
-    pub fn get_global(&self, idx: usize) -> Option<&GlobalBinding<'a>> {
-        self.globals.get(idx)
+    pub fn get_global(&self, mod_idx: usize, idx: usize) -> Option<&GlobalBinding<'a>> {
+        self.globals.get(&(mod_idx, idx))
     }
 
-    pub fn insert_global<M: cl::Module>(&mut self, idx: usize, obj_module: M) -> M {
-        let global = &self.module.globals[idx];
-        assert!(idx == self.globals.len());
+    pub fn insert_global<M: cl::Module>(
+        &mut self,
+        mod_idx: usize,
+        idx: usize,
+        obj_module: M,
+    ) -> M {
+        let global = &self.modules[mod_idx].globals[idx];
 
         // TODO: improve name mangling
-        let symbol_name = format!("$global{idx}");
+        let symbol_name = format!("$global_{mod_idx}_{idx}");
 
         let (value, is_const, module) = utils::replace_with(self, |s| {
-            let mut codegen = FuncCodegen::new(self.module, None, obj_module, s, vec![]);
+            let mut codegen =
+                FuncCodegen::new(self.modules, None, obj_module, s, HashMap::new());
 
             for instr in &global.body {
                 if let Some(value) = codegen.value_from_instr(instr) {
@@ -67,12 +72,15 @@ impl<'a> Globals<'a> {
             )
         });
 
-        self.globals.push(GlobalBinding {
-            symbol_name,
-            value,
-            is_const,
-            is_entry_point: global.is_entry_point,
-        });
+        self.globals.insert(
+            (mod_idx, idx),
+            GlobalBinding {
+                symbol_name,
+                value,
+                is_const,
+                is_entry_point: global.is_entry_point,
+            },
+        );
 
         module
     }
@@ -182,7 +190,7 @@ impl<'a> Globals<'a> {
     ) -> (cl::DataId, M) {
         let data_id = obj_module.declare_anonymous_data(false, false).unwrap();
         let mut desc = cl::DataDescription::new();
-        desc.define_zeroinit(types::get_size(ty, self.module, &obj_module));
+        desc.define_zeroinit(types::get_size(ty, self.modules, &obj_module));
         obj_module.define_data(data_id, &desc).unwrap();
 
         self.data.insert(data_id, desc);

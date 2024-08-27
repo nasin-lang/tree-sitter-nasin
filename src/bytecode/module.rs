@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::{cmp, fmt};
 
@@ -10,12 +11,15 @@ use super::ty::*;
 use crate::utils;
 use crate::utils::SortedMap;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, new)]
 pub struct Module {
+    #[new(default)]
     pub typedefs: Vec<TypeDef>,
+    #[new(default)]
     pub globals: Vec<Global>,
+    #[new(default)]
     pub funcs: Vec<Func>,
-    pub sources: Vec<Source>,
+    pub sources: HashSet<Source>,
 }
 impl Display for Module {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -76,6 +80,7 @@ pub struct TypeDef {
 
 #[derive(Debug, Clone)]
 pub struct Global {
+    pub name: String,
     pub ty: Type,
     pub body: Vec<Instr>,
     pub is_entry_point: bool,
@@ -84,6 +89,7 @@ pub struct Global {
 
 #[derive(Debug, Clone)]
 pub struct Func {
+    pub name: String,
     pub params: Vec<Param>,
     pub ret: Type,
     pub body: Vec<Instr>,
@@ -126,7 +132,7 @@ pub struct Extern {
     pub name: String,
 }
 
-#[derive(Debug, Clone, new)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, new)]
 pub struct Source {
     pub path: PathBuf,
 }

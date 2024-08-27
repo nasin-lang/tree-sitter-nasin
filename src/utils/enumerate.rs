@@ -1,14 +1,13 @@
-macro_rules! enumerate {
+macro_rules! number_enum {
     ($vis:vis $name:ident : $ty:ty { $($field:ident = $value:literal),+ $(,)? }) => {
         #[derive(Clone, Copy, PartialEq, Eq, Debug)]
         $vis enum $name {
-            $($field),+
+            $($field = $value),+
         }
         impl Into<$ty> for $name {
+            #[inline]
             fn into(self) -> $ty {
-                match self {
-                    $(Self::$field => $value),+
-                }
+                self as $ty
             }
         }
         impl TryFrom<$ty> for $name {
@@ -23,4 +22,4 @@ macro_rules! enumerate {
     };
 }
 
-pub(crate) use enumerate;
+pub(crate) use number_enum;

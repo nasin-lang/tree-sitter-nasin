@@ -8,28 +8,31 @@ use tree_sitter as ts;
 use super::module_parser::ModuleParser;
 use super::parser_value::{Value, ValueBody};
 use crate::bytecode::Loc;
-use crate::sources::Sources;
 use crate::utils::{TreeSitterUtils, ValueStack};
-use crate::{bytecode as b, utils};
+use crate::{bytecode as b, context, utils};
 
-type Stack<'a> = ValueStack<(), ScopePayload<'a>>;
+type Stack = ValueStack<(), ScopePayload>;
 
-pub struct ExprParser<'a> {
-    pub module_parser: ModuleParser<'a>,
+pub struct ExprParser<'a, 't> {
+    pub module_parser: ModuleParser<'a, 't>,
     pub instrs: Vec<b::Instr>,
     pub is_loop: bool,
-    pub idents: HashMap<&'a str, Value>,
-    src: &'a Sources<'a>,
+    pub idents: HashMap<String, Value>,
+    ctx: &'a context::BuildContext<'a>,
+    src_idx: usize,
+    mod_idx: usize,
     func_idx: Option<usize>,
-    stack: Stack<'a>,
+    stack: Stack,
 }
 
-impl<'a> ExprParser<'a> {
+impl<'a, 't> ExprParser<'a, 't> {
     pub fn new(
-        src: &'a Sources<'a>,
-        module_parser: ModuleParser<'a>,
+        ctx: &'a context::BuildContext<'a>,
+        module_parser: ModuleParser<'a, 't>,
+        src_idx: usize,
+        mod_idx: usize,
         func_idx: Option<usize>,
-        inputs: impl IntoIterator<Item = (&'a str, b::Loc)>,
+        inputs: impl IntoIterator<Item = (String, b::Loc)>,
     ) -> Self {
         let mut idents = module_parser.idents.clone();
 
@@ -40,7 +43,9 @@ impl<'a> ExprParser<'a> {
         }
 
         ExprParser {
-            src,
+            ctx,
+            mod_idx,
+            src_idx,
             module_parser,
             idents,
             func_idx,
@@ -50,7 +55,7 @@ impl<'a> ExprParser<'a> {
         }
     }
 
-    pub fn finish(mut self) -> (ModuleParser<'a>, Vec<b::Instr>) {
+    pub fn finish(mut self) -> (ModuleParser<'a, 't>, Vec<b::Instr>) {
         assert!(self.stack.scope_len() == 1);
 
         if self.is_loop {
@@ -68,18 +73,19 @@ impl<'a> ExprParser<'a> {
         (self.module_parser, self.instrs)
     }
 
-    pub fn add_expr_node(&mut self, node: ts::Node<'a>, returning: bool) -> Value {
-        let loc = Loc::from_node(0, &node);
+    pub fn add_expr_node(&mut self, node: ts::Node<'t>, returning: bool) -> Value {
+        let loc = Loc::from_node(self.src_idx, &node);
         match node.kind() {
             "true" => Value::new(ValueBody::Bool(true), loc),
             "false" => Value::new(ValueBody::Bool(false), loc),
             "number" => {
-                let number = node.get_text(self.src.content(0));
+                let number = node.get_text(&self.ctx.source(self.src_idx).content().text);
                 Value::new(ValueBody::Number(number.to_string()), loc)
             }
             "string_lit" => {
                 let string = utils::decode_string_lit(
-                    node.required_field("content").get_text(self.src.content(0)),
+                    node.required_field("content")
+                        .get_text(&self.ctx.source(self.src_idx).content().text),
                 );
                 let local_idx = self.add_instr_with_result(
                     0,
@@ -112,7 +118,7 @@ impl<'a> ExprParser<'a> {
                     .map(|field_node| {
                         let field_name = field_node
                             .required_field("name")
-                            .get_text(self.src.content(0));
+                            .get_text(&self.ctx.source(self.src_idx).content().text);
                         let field_value =
                             self.add_expr_node(field_node.required_field("value"), false);
                         (field_name.to_string(), field_value)
@@ -138,7 +144,7 @@ impl<'a> ExprParser<'a> {
                 Value::new(ValueBody::Local(local_idx), loc)
             }
             "ident" => {
-                let ident = node.get_text(self.src.content(0));
+                let ident = node.get_text(&self.ctx.source(self.src_idx).content().text);
                 let Some(value) = self.idents.get(ident) else {
                     // TODO: better error handling
                     panic!("Value \"{ident}\" not found");
@@ -146,7 +152,9 @@ impl<'a> ExprParser<'a> {
                 value.with_loc(loc)
             }
             "bin_op" => {
-                let op = node.required_field("op").get_text(self.src.content(0));
+                let op = node
+                    .required_field("op")
+                    .get_text(&self.ctx.source(self.src_idx).content().text);
                 let left = self.add_expr_node(node.required_field("left"), false);
                 let right = self.add_expr_node(node.required_field("right"), false);
                 self.add_bin_op(op, left, right)
@@ -154,8 +162,13 @@ impl<'a> ExprParser<'a> {
             "get_prop" => {
                 let parent = self.add_expr_node(node.required_field("parent"), false);
                 let prop_name_node = node.required_field("prop_name");
-                let prop_name = prop_name_node.get_text(self.src.content(0));
-                self.add_get_prop(parent, prop_name, Loc::from_node(0, &prop_name_node))
+                let prop_name = prop_name_node
+                    .get_text(&self.ctx.source(self.src_idx).content().text);
+                self.add_get_prop(
+                    parent,
+                    prop_name,
+                    Loc::from_node(self.src_idx, &prop_name_node),
+                )
             }
             "call" => {
                 let callee = self.add_expr_node(node.required_field("callee"), false);
@@ -190,7 +203,7 @@ impl<'a> ExprParser<'a> {
 
                 self.instrs.push(b::Instr::new(
                     b::InstrBody::If(b::Type::unknown(None)),
-                    b::Loc::from_node(0, &node),
+                    b::Loc::from_node(self.src_idx, &node),
                 ));
                 let then_value =
                     self.add_expr_node(node.required_field("then"), returning);
@@ -204,7 +217,7 @@ impl<'a> ExprParser<'a> {
                     assert!(self.stack.scope_len() >= block_len + 1);
                     self.instrs.push(b::Instr::new(
                         b::InstrBody::Else,
-                        Loc::from_node(0, &else_node),
+                        Loc::from_node(self.src_idx, &else_node),
                     ));
 
                     let (scope, _) = self.stack.branch_scope();
@@ -229,7 +242,10 @@ impl<'a> ExprParser<'a> {
                 if !then_value.is_never() || !else_value.is_never() {
                     let idx = self.add_instr_with_result(
                         0,
-                        b::Instr::new(b::InstrBody::End, Loc::from_node(0, &node)),
+                        b::Instr::new(
+                            b::InstrBody::End,
+                            Loc::from_node(self.src_idx, &node),
+                        ),
                     );
                     Value::new(ValueBody::Local(idx), loc)
                 } else {
@@ -240,9 +256,9 @@ impl<'a> ExprParser<'a> {
                 let name = node
                     .required_field("name")
                     .of_kind("ident")
-                    .get_text(self.src.content(0));
+                    .get_text(&self.ctx.source(self.src_idx).content().text);
                 let args = node.iter_field("args").collect_vec();
-                self.add_macro(name, &args, b::Loc::from_node(0, &node))
+                self.add_macro(name, &args, b::Loc::from_node(self.src_idx, &node))
             }
             k => panic!("Found unexpected expression `{}`", k),
         }
@@ -259,13 +275,16 @@ impl<'a> ExprParser<'a> {
     ) {
         for value in values {
             match &value.body {
-                ValueBody::Global(idx) => {
+                ValueBody::Global(mod_idx, global_idx) => {
                     self.add_instr_with_result(
                         0,
-                        b::Instr::new(b::InstrBody::GetGlobal(*idx), value.loc),
+                        b::Instr::new(
+                            b::InstrBody::GetGlobal(*mod_idx, *global_idx),
+                            value.loc,
+                        ),
                     );
                 }
-                ValueBody::Func(_) => todo!("func as value"),
+                ValueBody::Func(_, _) => todo!("func as value"),
                 ValueBody::Local(idx) => {
                     assert!(*idx <= self.stack.len() - 1);
                     let rel_value = self.stack.len() - idx - 1;
@@ -362,8 +381,11 @@ impl<'a> ExprParser<'a> {
     ) -> Value {
         let args: Vec<_> = args.into_iter().collect();
         match callee.body {
-            ValueBody::Func(idx) => {
-                if self.func_idx.is_some_and(|i| i == idx) && returning {
+            ValueBody::Func(mod_idx, func_idx) => {
+                if returning
+                    && self.mod_idx == mod_idx
+                    && self.func_idx.is_some_and(|i| i == func_idx)
+                {
                     self.is_loop = true;
                     self.stack.get_scope_mut().mark_as_never();
 
@@ -376,12 +398,12 @@ impl<'a> ExprParser<'a> {
 
                     let idx = self.add_instr_with_result(
                         args.len(),
-                        b::Instr::new(b::InstrBody::Call(idx), loc),
+                        b::Instr::new(b::InstrBody::Call(mod_idx, func_idx), loc),
                     );
                     Value::new(ValueBody::Local(idx), loc)
                 }
             }
-            ValueBody::Local(_) | ValueBody::Global(_) => {
+            ValueBody::Local(_) | ValueBody::Global(_, _) => {
                 todo!("inderect call")
             }
             _ => {
@@ -391,7 +413,7 @@ impl<'a> ExprParser<'a> {
         }
     }
 
-    fn add_macro(&mut self, name: &str, args: &[ts::Node<'a>], loc: b::Loc) -> Value {
+    fn add_macro(&mut self, name: &str, args: &[ts::Node<'t>], loc: b::Loc) -> Value {
         match name {
             "str_len" | "array_len" => {
                 // TODO: better error handling
@@ -440,16 +462,19 @@ impl<'a> ExprParser<'a> {
         }
     }
 
-    fn add_stmt_node(&mut self, node: ts::Node<'a>) {
+    fn add_stmt_node(&mut self, node: ts::Node<'t>) {
         match node.kind() {
             "var_decl" => {
                 let value = self.add_expr_node(node.required_field("value"), false);
                 let pat_node = node.required_field("pat");
                 match pat_node.kind() {
                     "ident" => {
-                        let ident = pat_node.get_text(self.src.content(0));
-                        self.idents
-                            .insert(ident, value.with_loc(Loc::from_node(0, &node)));
+                        let ident = pat_node
+                            .get_text(&self.ctx.source(self.src_idx).content().text);
+                        self.idents.insert(
+                            ident.to_string(),
+                            value.with_loc(Loc::from_node(self.src_idx, &node)),
+                        );
                     }
                     kind => panic!("Found unexpected pattern `{kind}`"),
                 }
@@ -460,6 +485,6 @@ impl<'a> ExprParser<'a> {
 }
 
 #[derive(Debug, Clone, new)]
-struct ScopePayload<'a> {
-    idents: HashMap<&'a str, Value>,
+struct ScopePayload {
+    idents: HashMap<String, Value>,
 }

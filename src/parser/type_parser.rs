@@ -1,46 +1,28 @@
 use std::collections::HashMap;
 
+use derive_new::new;
 use itertools::Itertools;
 use tree_sitter as ts;
 
-use crate::bytecode as b;
-use crate::sources::Sources;
 use crate::utils::{IntoItem, TreeSitterUtils};
+use crate::{bytecode as b, context};
 
+#[derive(new)]
 pub struct TypeParser<'a> {
+    #[new(default)]
     pub typedefs: Vec<b::TypeDef>,
-    pub idents: HashMap<&'a str, b::TypeBody>,
-    src: &'a Sources<'a>,
+    #[new(value = "default_idents()")]
+    pub idents: HashMap<String, b::TypeBody>,
+    ctx: &'a context::BuildContext<'a>,
+    src_idx: usize,
+    mod_idx: usize,
 }
 
 impl<'a> TypeParser<'a> {
-    pub fn new(src: &'a Sources<'a>) -> Self {
-        let idents = HashMap::from([
-            ("bool", b::TypeBody::Bool),
-            ("i8", b::TypeBody::I8),
-            ("i16", b::TypeBody::I16),
-            ("i32", b::TypeBody::I32),
-            ("i64", b::TypeBody::I64),
-            ("u8", b::TypeBody::U8),
-            ("u16", b::TypeBody::U16),
-            ("u32", b::TypeBody::U32),
-            ("u64", b::TypeBody::U64),
-            ("usize", b::TypeBody::USize),
-            ("f32", b::TypeBody::F32),
-            ("f64", b::TypeBody::F64),
-            ("str", b::TypeBody::String(b::StringType { len: None })),
-        ]);
-        TypeParser {
-            src,
-            typedefs: vec![],
-            idents,
-        }
-    }
-
-    pub fn parse_type(&self, node: ts::Node<'a>) -> b::Type {
+    pub fn parse_type<'t>(&self, node: ts::Node<'t>) -> b::Type {
         let body = match node.kind() {
             "ident" => {
-                let ident = node.get_text(self.src.content(0));
+                let ident = node.get_text(&self.ctx.source(self.src_idx).content().text);
                 match self.idents.get(ident) {
                     Some(body) => body.clone(),
                     None => {
@@ -52,7 +34,7 @@ impl<'a> TypeParser<'a> {
             "array_type" => {
                 let item_ty = self.parse_type(node.required_field("item_type"));
                 let len = node.field("length").map(|n| {
-                    n.get_text(self.src.content(0))
+                    n.get_text(&self.ctx.source(self.src_idx).content().text)
                         .parse::<usize>()
                         .expect("Cannot cast length to integer")
                 });
@@ -62,7 +44,7 @@ impl<'a> TypeParser<'a> {
                 let name = node
                     .required_field("name")
                     .of_kind("ident")
-                    .get_text(&self.src.content(0));
+                    .get_text(&self.ctx.source(self.src_idx).content().text);
 
                 let args = node
                     .iter_field("args")
@@ -80,10 +62,10 @@ impl<'a> TypeParser<'a> {
             }
             k => panic!("Found unexpected type `{}`", k),
         };
-        b::Type::new(body, Some(b::Loc::from_node(0, &node)))
+        b::Type::new(body, Some(b::Loc::from_node(self.src_idx, &node)))
     }
 
-    pub fn add_type(&mut self, name: &'a str, node: ts::Node<'a>) {
+    pub fn add_type<'t>(&mut self, name: &'a str, node: ts::Node<'t>) {
         assert_eq!(node.kind(), "type_decl");
 
         let body_node = node.required_field("body");
@@ -92,16 +74,18 @@ impl<'a> TypeParser<'a> {
                 .iter_field("fields")
                 .map(|field_node| {
                     let name_node = field_node.required_field("name");
-                    let name = name_node.get_text(self.src.content(0)).to_string();
+                    let name = name_node
+                        .get_text(&self.ctx.source(self.src_idx).content().text)
+                        .to_string();
                     (
                         name.clone(),
                         b::RecordField::new(
                             b::RecordFieldName::new(
                                 name,
-                                b::Loc::from_node(0, &name_node),
+                                b::Loc::from_node(self.src_idx, &name_node),
                             ),
                             self.parse_type(field_node.required_field("type")),
-                            b::Loc::from_node(0, &field_node),
+                            b::Loc::from_node(self.src_idx, &field_node),
                         ),
                     )
                 })
@@ -111,9 +95,33 @@ impl<'a> TypeParser<'a> {
 
         self.typedefs.push(b::TypeDef {
             body: b::TypeDefBody::Record(b::RecordType { fields }),
-            loc: b::Loc::from_node(0, &node),
+            loc: b::Loc::from_node(self.src_idx, &node),
         });
         let type_idx = self.typedefs.len() - 1;
-        self.idents.insert(name, b::TypeBody::TypeRef(type_idx));
+        self.idents.insert(
+            name.to_string(),
+            b::TypeBody::TypeRef(self.mod_idx, type_idx),
+        );
     }
+}
+
+fn default_idents() -> HashMap<String, b::TypeBody> {
+    HashMap::from([
+        ("bool".to_string(), b::TypeBody::Bool),
+        ("i8".to_string(), b::TypeBody::I8),
+        ("i16".to_string(), b::TypeBody::I16),
+        ("i32".to_string(), b::TypeBody::I32),
+        ("i64".to_string(), b::TypeBody::I64),
+        ("u8".to_string(), b::TypeBody::U8),
+        ("u16".to_string(), b::TypeBody::U16),
+        ("u32".to_string(), b::TypeBody::U32),
+        ("u64".to_string(), b::TypeBody::U64),
+        ("usize".to_string(), b::TypeBody::USize),
+        ("f32".to_string(), b::TypeBody::F32),
+        ("f64".to_string(), b::TypeBody::F64),
+        (
+            "str".to_string(),
+            b::TypeBody::String(b::StringType { len: None }),
+        ),
+    ])
 }

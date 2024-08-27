@@ -4,25 +4,27 @@ use derive_more::{Display, From};
 use derive_new::new;
 use thiserror::Error;
 
-use crate::sources::Sources;
-use crate::{bytecode as b, utils};
+use crate::{bytecode as b, context, utils};
 
 #[derive(Debug, Clone, Error, new)]
 pub struct Error<'a> {
     detail: ErrorDetail,
-    src: &'a Sources<'a>,
+    ctx: &'a context::BuildContext<'a>,
     loc: b::Loc,
 }
 impl fmt::Display for Error<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let idx = self.loc.source_idx;
+        let src = self.ctx.source(idx);
+
         let line = self.loc.start_line;
         let col = self.loc.start_col;
-        writeln!(f, "{}:{line}:{col}", self.src.path(idx).display())?;
+        writeln!(f, "{}:{line}:{col}", src.path.display())?;
 
         let num = format!("{line}");
+        let line_content = src.content().line(line).expect("line should be valid");
         writeln!(f, "{} |", " ".repeat(num.len()))?;
-        writeln!(f, "{num} | {}", self.src.line(idx, line))?;
+        writeln!(f, "{num} | {line_content}",)?;
         writeln!(f, "{} | {}^", " ".repeat(num.len()), " ".repeat(col - 1))?;
         writeln!(f, "error: {}", self.detail)?;
 

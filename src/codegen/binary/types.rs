@@ -16,10 +16,10 @@ pub struct RuntimeValue<'a> {
 impl RuntimeValue<'_> {
     pub fn native_type(
         &self,
-        module: &b::Module,
+        modules: &[b::Module],
         obj_module: &impl cl::Module,
     ) -> cl::Type {
-        get_type(&self.ty, module, obj_module)
+        get_type(&self.ty, modules, obj_module)
     }
     pub fn serialize(
         &self,
@@ -128,12 +128,12 @@ impl From<f64> for F64Bits {
 pub fn tuple_from_record<'a>(
     fields: impl Iterator<Item = (&'a String, RuntimeValue<'a>)> + 'a,
     ty: &b::Type,
-    module: &b::Module,
+    modules: &[b::Module],
 ) -> Vec<RuntimeValue<'a>> {
     let fields: HashMap<_, _> = fields.collect();
 
     match &ty.body {
-        b::TypeBody::TypeRef(i) => match &module.typedefs[*i].body {
+        b::TypeBody::TypeRef(i, j) => match &modules[*i].typedefs[*j].body {
             b::TypeDefBody::Record(rec) => rec
                 .fields
                 .keys()
@@ -151,7 +151,7 @@ pub fn tuple_from_record<'a>(
 
 pub fn get_type(
     ty: &b::Type,
-    module: &b::Module,
+    modules: &[b::Module],
     obj_module: &impl cl::Module,
 ) -> cl::Type {
     match &ty.body {
@@ -170,7 +170,7 @@ pub fn get_type(
         | b::TypeBody::String(_)
         | b::TypeBody::Array(_)
         | b::TypeBody::Ptr(_) => obj_module.isa().pointer_type(),
-        b::TypeBody::TypeRef(i) => match &module.typedefs[*i].body {
+        b::TypeBody::TypeRef(i, j) => match &modules[*i].typedefs[*j].body {
             b::TypeDefBody::Record(_) => obj_module.isa().pointer_type(),
         },
         b::TypeBody::AnyNumber
@@ -181,19 +181,23 @@ pub fn get_type(
     }
 }
 
-pub fn get_size(ty: &b::Type, module: &b::Module, obj_module: &impl cl::Module) -> usize {
+pub fn get_size(
+    ty: &b::Type,
+    modules: &[b::Module],
+    obj_module: &impl cl::Module,
+) -> usize {
     let ptr = obj_module.isa().pointer_bytes() as usize;
 
     match &ty.body {
         b::TypeBody::String(s) => s.len.map_or(ptr, |len| len + 1),
         b::TypeBody::Array(a) => a.len.map_or(ptr, |len| {
-            len * get_type(&a.item, module, obj_module).bytes() as usize
+            len * get_type(&a.item, modules, obj_module).bytes() as usize
         }),
-        b::TypeBody::TypeRef(i) => match &module.typedefs[*i].body {
+        b::TypeBody::TypeRef(i, j) => match &modules[*i].typedefs[*j].body {
             b::TypeDefBody::Record(rec) => rec
                 .fields
                 .values()
-                .map(|field| get_type(&field.ty, module, obj_module).bytes() as usize)
+                .map(|field| get_type(&field.ty, modules, obj_module).bytes() as usize)
                 .sum(),
         },
         b::TypeBody::Bool
@@ -208,7 +212,7 @@ pub fn get_size(ty: &b::Type, module: &b::Module, obj_module: &impl cl::Module) 
         | b::TypeBody::USize
         | b::TypeBody::F32
         | b::TypeBody::F64
-        | b::TypeBody::Ptr(_) => get_type(ty, module, obj_module).bytes() as usize,
+        | b::TypeBody::Ptr(_) => get_type(ty, modules, obj_module).bytes() as usize,
         b::TypeBody::AnyNumber
         | b::TypeBody::AnySignedNumber
         | b::TypeBody::AnyFloat

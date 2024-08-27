@@ -10,7 +10,7 @@ use crate::utils;
 pub enum InstrBody {
     Dup(usize),
 
-    GetGlobal(usize),
+    GetGlobal(usize, usize),
     GetField(String),
     CreateBool(bool),
     CreateNumber(Type, String),
@@ -31,7 +31,7 @@ pub enum InstrBody {
     Lt,
     Lte,
 
-    Call(usize),
+    Call(usize, usize),
 
     If(Type),
     Else,
@@ -56,7 +56,9 @@ impl Display for Instr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.body {
             InstrBody::Dup(v) => write!(f, "dup ^{v}")?,
-            InstrBody::GetGlobal(idx) => write!(f, "get_global {idx}")?,
+            InstrBody::GetGlobal(mod_idx, global_idx) => {
+                write!(f, "get_global {mod_idx}-{global_idx}")?
+            }
             InstrBody::GetField(field) => write!(f, "get_field .{field}")?,
             InstrBody::CreateBool(v) => write!(f, "create_bool {v}")?,
             InstrBody::CreateNumber(ty, v) => write!(f, "create_number {ty} {v}")?,
@@ -81,7 +83,7 @@ impl Display for Instr {
             InstrBody::Gte => write!(f, "gte")?,
             InstrBody::Lt => write!(f, "lt")?,
             InstrBody::Lte => write!(f, "lte")?,
-            InstrBody::Call(idx) => write!(f, "call {idx}")?,
+            InstrBody::Call(mod_idx, func_idx) => write!(f, "call {mod_idx}-{func_idx}")?,
             InstrBody::If(ty) => write!(f, "if {ty}")?,
             InstrBody::Else => write!(f, "else")?,
             InstrBody::Loop(ty, n) => write!(f, "loop {ty} {n}")?,
