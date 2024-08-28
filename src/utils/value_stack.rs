@@ -45,6 +45,9 @@ impl<V, S> ValueStack<V, S> {
     }
 
     pub fn pop_many(&mut self, len: usize) -> Vec<V> {
+        if len == 0 {
+            return vec![];
+        }
         let at = self.stack.len() - len;
         assert!(
             at >= self.get_scope().start,

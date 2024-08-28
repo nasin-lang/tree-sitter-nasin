@@ -13,7 +13,7 @@ pub struct TypeParser<'a> {
     pub typedefs: Vec<b::TypeDef>,
     #[new(value = "default_idents()")]
     pub idents: HashMap<String, b::TypeBody>,
-    ctx: &'a context::BuildContext<'a>,
+    ctx: &'a context::BuildContext,
     src_idx: usize,
     mod_idx: usize,
 }
@@ -93,15 +93,16 @@ impl<'a> TypeParser<'a> {
             v => panic!("Unexpected type body kind: {v}"),
         };
 
-        self.typedefs.push(b::TypeDef {
+        let value = b::TypeDef {
+            name: name.to_string(),
             body: b::TypeDefBody::Record(b::RecordType { fields }),
             loc: b::Loc::from_node(self.src_idx, &node),
-        });
-        let type_idx = self.typedefs.len() - 1;
+        };
         self.idents.insert(
-            name.to_string(),
-            b::TypeBody::TypeRef(self.mod_idx, type_idx),
+            value.name.clone(),
+            b::TypeBody::TypeRef(self.mod_idx, self.typedefs.len()),
         );
+        self.typedefs.push(value);
     }
 }
 

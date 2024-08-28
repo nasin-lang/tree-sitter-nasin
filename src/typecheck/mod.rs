@@ -29,7 +29,7 @@ struct FuncEntry {
 
 #[derive(Debug, Clone, new)]
 pub struct TypeChecker<'a> {
-    ctx: &'a context::BuildContext<'a>,
+    ctx: &'a context::BuildContext,
     mod_idx: usize,
     #[new(default)]
     entries: Vec<TypeCheckEntry>,
@@ -40,8 +40,8 @@ pub struct TypeChecker<'a> {
 }
 
 impl<'a> TypeChecker<'a> {
-    pub fn check(&mut self) -> Vec<errors::Error<'a>> {
-        let errors = {
+    pub fn check(&mut self) {
+        {
             let module = &self.ctx.lock_modules()[self.mod_idx];
 
             for func in &module.funcs {
@@ -73,9 +73,9 @@ impl<'a> TypeChecker<'a> {
                 self.globals[i].instrs =
                     self.add_body(&global.body, &[], self.globals[i].result, None);
             }
-
-            self.validate()
         };
+
+        self.validate();
 
         {
             let module = &mut self.ctx.lock_modules_mut()[self.mod_idx];
@@ -107,8 +107,6 @@ impl<'a> TypeChecker<'a> {
                 finish_body!(func.body, entry);
             }
         }
-
-        errors
     }
 
     fn add_body(
@@ -196,10 +194,11 @@ impl<'a> TypeChecker<'a> {
             }
             b::InstrBody::CreateArray(ty, len) => {
                 assert!(stack.len() >= *len);
-                if *len == 0 {
-                    todo!();
-                }
-                let item_entry = self.merge_entries(&stack.pop_many(*len));
+                let item_entry = if *len > 0 {
+                    self.merge_entries(&stack.pop_many(*len))
+                } else {
+                    self.add_entry(instr.loc)
+                };
                 let entry = self.add_entry(instr.loc);
                 self.add_constraint(entry, Constraint::Is(ty.clone()));
                 self.add_constraint(entry, Constraint::Array(item_entry));
@@ -208,9 +207,6 @@ impl<'a> TypeChecker<'a> {
             }
             b::InstrBody::CreateRecord(ty, fields) => {
                 assert!(stack.len() >= fields.len());
-                if fields.len() == 0 {
-                    todo!();
-                }
                 let values = stack.pop_many(fields.len());
                 let entry = self.add_entry(instr.loc);
                 self.add_constraint(entry, Constraint::Is(ty.clone()));
@@ -490,28 +486,24 @@ impl<'a> TypeChecker<'a> {
         head
     }
 
-    fn validate(&mut self) -> Vec<errors::Error<'a>> {
-        let mut errors = vec![];
+    fn validate(&mut self) {
         let mut visited = HashSet::new();
-
         for entry in 0..self.entries.len() {
-            errors.extend(self.validate_entry(entry, &mut visited));
+            self.validate_entry(entry, &mut visited);
         }
-
-        errors
     }
 
     fn validate_entry(
         &mut self,
         idx: TypeCheckEntryIdx,
         visited: &mut HashSet<TypeCheckEntryIdx>,
-    ) -> Vec<errors::Error<'a>> {
+    ) -> bool {
         if visited.contains(&idx) {
-            return vec![];
+            return true;
         }
         visited.insert(idx);
 
-        let mut errors = vec![];
+        let mut success = true;
 
         if self.entries[idx].same_of.len() > 0 {
             let tys: Vec<_> = self.entries[idx]
@@ -519,31 +511,28 @@ impl<'a> TypeChecker<'a> {
                 .clone()
                 .into_iter()
                 .map(|same_of| {
-                    errors.extend(self.validate_entry(same_of, visited));
-                    let ty = self.entries[same_of].ty.clone();
-                    ty
+                    success = self.validate_entry(same_of, visited) && success;
+                    self.entries[same_of].ty.clone()
                 })
                 .collect();
 
-            if errors.len() > 0 {
-                return errors;
-            }
+            if !success {
+                return false;
+            };
 
             let mut result_ty = tys[0].clone();
             for ty in &tys[1..] {
                 if let Some(ty) = result_ty.common_type(ty, &self.ctx.lock_modules()) {
                     result_ty = ty;
                 } else {
-                    return vec![errors::Error::new(
+                    self.ctx.push_error(errors::Error::new(
                         errors::TypeMisatch::new(tys).into(),
-                        self.ctx,
                         self.entries[idx].loc,
-                    )];
+                    ));
+                    return false;
                 }
             }
             self.entries[idx].ty = result_ty;
-
-            return vec![];
         }
 
         for cons in self.entries[idx].constraints.clone() {
@@ -554,8 +543,7 @@ impl<'a> TypeChecker<'a> {
                 | Constraint::Ptr(target) => target,
                 Constraint::Is(_) => continue,
             };
-
-            errors.extend(self.validate_entry(dep, visited));
+            success = self.validate_entry(dep, visited) && success;
         }
 
         let mut merge_with = self.entries[idx]
@@ -607,17 +595,31 @@ impl<'a> TypeChecker<'a> {
                     self.entries[idx].ty = res;
                 }
                 None => {
-                    errors.push(errors::Error::new(
+                    self.ctx.push_error(errors::Error::new(
                         errors::UnexpectedType::new(entry_ty.to_owned(), ty.clone())
                             .into(),
-                        self.ctx,
                         self.entries[idx].loc,
                     ));
+                    success = false;
                 }
             }
         }
 
-        errors
+        if matches!(
+            &self.entries[idx].ty.body,
+            b::TypeBody::AnyNumber
+                | b::TypeBody::AnySignedNumber
+                | b::TypeBody::AnyFloat
+                | b::TypeBody::Inferred(_)
+        ) {
+            self.ctx.push_error(errors::Error::new(
+                errors::ErrorDetail::UnknownType,
+                self.entries[idx].loc,
+            ));
+            success = false;
+        }
+
+        success
     }
 
     fn property(

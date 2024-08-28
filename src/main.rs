@@ -5,6 +5,7 @@ use std::process::exit;
 use clap::{Parser, Subcommand};
 use nasin::config::BuildConfig;
 use nasin::context;
+use nasin::errors::DisplayError;
 
 #[derive(Parser, Debug)]
 #[command(name = "Nasin Language")]
@@ -66,6 +67,7 @@ fn main() {
                 dump_clif,
             });
 
+            ctx.parse_library();
             let src_idx = ctx.preload(file).expect("file not found");
 
             ctx.parse(src_idx);
@@ -74,7 +76,7 @@ fn main() {
                 let errors = ctx.errors.lock().unwrap();
                 if errors.len() > 0 {
                     for err in errors.iter() {
-                        eprintln!("{err}");
+                        eprintln!("{}", DisplayError::new(&ctx, err));
                     }
                     exit(1);
                 }

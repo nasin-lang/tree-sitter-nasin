@@ -9,7 +9,7 @@ use super::module_parser::ModuleParser;
 use super::parser_value::{Value, ValueBody};
 use crate::bytecode::Loc;
 use crate::utils::{TreeSitterUtils, ValueStack};
-use crate::{bytecode as b, context, utils};
+use crate::{bytecode as b, context, errors, utils};
 
 type Stack = ValueStack<(), ScopePayload>;
 
@@ -18,7 +18,7 @@ pub struct ExprParser<'a, 't> {
     pub instrs: Vec<b::Instr>,
     pub is_loop: bool,
     pub idents: HashMap<String, Value>,
-    ctx: &'a context::BuildContext<'a>,
+    ctx: &'a context::BuildContext,
     src_idx: usize,
     mod_idx: usize,
     func_idx: Option<usize>,
@@ -27,7 +27,7 @@ pub struct ExprParser<'a, 't> {
 
 impl<'a, 't> ExprParser<'a, 't> {
     pub fn new(
-        ctx: &'a context::BuildContext<'a>,
+        ctx: &'a context::BuildContext,
         module_parser: ModuleParser<'a, 't>,
         src_idx: usize,
         mod_idx: usize,
@@ -145,16 +145,18 @@ impl<'a, 't> ExprParser<'a, 't> {
             }
             "ident" => {
                 let ident = node.get_text(&self.ctx.source(self.src_idx).content().text);
-                let Some(value) = self.idents.get(ident) else {
-                    // TODO: better error handling
-                    panic!("Value \"{ident}\" not found");
-                };
-                value.with_loc(loc)
+                if let Some(value) = self.idents.get(ident) {
+                    value.with_loc(loc)
+                } else {
+                    self.ctx.push_error(errors::Error::new(
+                        errors::ValueNotFound::new(ident.to_string()).into(),
+                        loc,
+                    ));
+                    Value::new(ValueBody::CompileError, loc)
+                }
             }
             "bin_op" => {
-                let op = node
-                    .required_field("op")
-                    .get_text(&self.ctx.source(self.src_idx).content().text);
+                let op = node.required_field("op");
                 let left = self.add_expr_node(node.required_field("left"), false);
                 let right = self.add_expr_node(node.required_field("right"), false);
                 self.add_bin_op(op, left, right)
@@ -232,7 +234,11 @@ impl<'a, 't> ExprParser<'a, 't> {
 
                     else_value
                 } else {
-                    todo!("if without else");
+                    self.ctx.push_error(errors::Error::new(
+                        errors::Todo::new("if without else".to_string()).into(),
+                        loc,
+                    ));
+                    Value::new(ValueBody::CompileError, loc)
                 };
 
                 assert!(self.stack.scope_len() >= block_len + 1);
@@ -284,7 +290,16 @@ impl<'a, 't> ExprParser<'a, 't> {
                         ),
                     );
                 }
-                ValueBody::Func(_, _) => todo!("func as value"),
+                ValueBody::Func(_, _) => {
+                    self.ctx.push_error(errors::Error::new(
+                        errors::Todo::new("function as value".to_string()).into(),
+                        value.loc,
+                    ));
+                    self.add_instr_with_result(
+                        0,
+                        b::Instr::new(b::InstrBody::CompileError, value.loc),
+                    );
+                }
                 ValueBody::Local(idx) => {
                     assert!(*idx <= self.stack.len() - 1);
                     let rel_value = self.stack.len() - idx - 1;
@@ -322,7 +337,7 @@ impl<'a, 't> ExprParser<'a, 't> {
                         ),
                     );
                 }
-                ValueBody::Never => {
+                ValueBody::Never | ValueBody::CompileError => {
                     self.add_instr_with_result(
                         0,
                         b::Instr::new(b::InstrBody::CompileError, value.loc),
@@ -341,15 +356,22 @@ impl<'a, 't> ExprParser<'a, 't> {
         self.stack.len() - 1
     }
 
-    fn add_bin_op(&mut self, op: &str, left: Value, right: Value) -> Value {
+    fn add_bin_op(&mut self, op: ts::Node, left: Value, right: Value) -> Value {
         self.push_values([&left, &right], false);
-        let body = match op {
+        let op_text = op.get_text(&self.ctx.source(self.src_idx).content().text);
+        let body = match op_text {
             "+" => b::InstrBody::Add,
             "-" => b::InstrBody::Sub,
             "%" => b::InstrBody::Mod,
             "*" => b::InstrBody::Mul,
             "/" => b::InstrBody::Div,
-            "**" => todo!("pow"),
+            "**" => {
+                self.ctx.push_error(errors::Error::new(
+                    errors::Todo::new("exponentiation".to_string()).into(),
+                    Loc::from_node(self.src_idx, &op),
+                ));
+                b::InstrBody::CompileError
+            }
             "==" => b::InstrBody::Eq,
             "!=" => b::InstrBody::Neq,
             ">" => b::InstrBody::Gt,
@@ -404,8 +426,13 @@ impl<'a, 't> ExprParser<'a, 't> {
                 }
             }
             ValueBody::Local(_) | ValueBody::Global(_, _) => {
-                todo!("inderect call")
+                self.ctx.push_error(errors::Error::new(
+                    errors::Todo::new("inderect call".to_string()).into(),
+                    loc,
+                ));
+                callee.with_loc(loc)
             }
+            ValueBody::CompileError => callee.with_loc(loc),
             _ => {
                 // TODO: better error handling
                 panic!("Value is not a function")

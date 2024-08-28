@@ -74,6 +74,7 @@ impl Display for Module {
 
 #[derive(Debug, Clone)]
 pub struct TypeDef {
+    pub name: String,
     pub body: TypeDefBody,
     pub loc: Loc,
 }

@@ -1,0 +1,18 @@
+STDIN_FILENO:  i32 = 0
+STDOUT_FILENO: i32 = 1
+STDERR_FILENO: i32 = 2
+
+_write(f: i32, buf: Ptr(u8), len: usize): i32 @extern("write")
+
+NL := "\n"
+
+print(message: str): bool =
+    _ := _write(STDOUT_FILENO, @str_ptr(message, 0), @str_len(message))
+    _ := _write(STDOUT_FILENO, @str_ptr(NL, 0), @str_len(NL))
+    true
+
+eprint(message: str): bool =
+    _ := _write(STDERR_FILENO, @str_ptr(message, 0), @str_len(message))
+    _ := _write(STDERR_FILENO, @str_ptr(NL, 0), @str_len(NL))
+    true
+

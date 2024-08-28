@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use derive_new::new;
+use itertools::enumerate;
 use tree_sitter as ts;
 
 use super::parser_value::Value;
@@ -20,7 +21,7 @@ pub struct ModuleParser<'a, 't> {
     pub funcs: Vec<DeclaredFunc<'t>>,
     #[new(default)]
     pub idents: HashMap<String, Value>,
-    ctx: &'a context::BuildContext<'a>,
+    ctx: &'a context::BuildContext,
     src_idx: usize,
     mod_idx: usize,
 }
@@ -76,6 +77,44 @@ impl<'a, 't> ModuleParser<'a, 't> {
                 "global_var_decl" => self.add_global(ident, sym_node),
                 _ => panic!("Unexpected symbol kind: {}", sym_node.kind()),
             }
+        }
+    }
+    pub fn open_module(&mut self, mod_idx: usize) {
+        let module = &self.ctx.lock_modules()[mod_idx];
+
+        for (i, item) in enumerate(&module.typedefs) {
+            if item.name.starts_with('_') {
+                continue;
+            }
+            let ty = b::TypeBody::TypeRef(mod_idx, i);
+            self.types.idents.insert(item.name.clone(), ty);
+        }
+
+        for (i, item) in enumerate(&module.funcs) {
+            if item.name.starts_with('_') {
+                continue;
+            }
+            let value = Value::new(ValueBody::Func(mod_idx, i), item.loc);
+            self.idents.insert(item.name.clone(), value);
+        }
+
+        for (i, item) in enumerate(&module.globals) {
+            if item.name.starts_with('_') {
+                continue;
+            }
+            let mut value = Value::new(ValueBody::Global(mod_idx, i), item.loc);
+            if item.body.len() == 1 {
+                match &item.body[0].body {
+                    b::InstrBody::CreateNumber(_, v) => {
+                        value.body = ValueBody::Number(v.clone());
+                    }
+                    b::InstrBody::CreateBool(v) => {
+                        value.body = ValueBody::Bool(*v);
+                    }
+                    _ => {}
+                }
+            }
+            self.idents.insert(item.name.clone(), value);
         }
     }
 

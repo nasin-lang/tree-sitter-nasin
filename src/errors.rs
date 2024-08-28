@@ -7,18 +7,23 @@ use thiserror::Error;
 use crate::{bytecode as b, context, utils};
 
 #[derive(Debug, Clone, Error, new)]
-pub struct Error<'a> {
+#[error("{}:{}:{}: error: {detail}", loc.source_idx, loc.start_line, loc.start_col)]
+pub struct Error {
     detail: ErrorDetail,
-    ctx: &'a context::BuildContext<'a>,
     loc: b::Loc,
 }
-impl fmt::Display for Error<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let idx = self.loc.source_idx;
-        let src = self.ctx.source(idx);
 
-        let line = self.loc.start_line;
-        let col = self.loc.start_col;
+#[derive(Debug, Clone, Error, new)]
+pub struct DisplayError<'a>(&'a context::BuildContext, &'a Error);
+impl fmt::Display for DisplayError<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let DisplayError(ctx, err) = self;
+
+        let idx = err.loc.source_idx;
+        let src = ctx.source(idx);
+
+        let line = err.loc.start_line;
+        let col = err.loc.start_col;
         writeln!(f, "{}:{line}:{col}", src.path.display())?;
 
         let num = format!("{line}");
@@ -26,7 +31,7 @@ impl fmt::Display for Error<'_> {
         writeln!(f, "{} |", " ".repeat(num.len()))?;
         writeln!(f, "{num} | {line_content}",)?;
         writeln!(f, "{} | {}^", " ".repeat(num.len()), " ".repeat(col - 1))?;
-        writeln!(f, "error: {}", self.detail)?;
+        writeln!(f, "error: {}", err.detail)?;
 
         Ok(())
     }
@@ -34,8 +39,18 @@ impl fmt::Display for Error<'_> {
 
 #[derive(Debug, Clone, Display, From)]
 pub enum ErrorDetail {
+    ValueNotFound(ValueNotFound),
     UnexpectedType(UnexpectedType),
     TypeMisatch(TypeMisatch),
+    #[display("Type sould be known at this point")]
+    UnknownType,
+    Todo(Todo),
+}
+
+#[derive(Debug, Clone, Display, new)]
+#[display("Cannot find value `{ident}` on the current scope")]
+pub struct ValueNotFound {
+    pub ident: String,
 }
 
 #[derive(Debug, Clone, Display, new)]
@@ -52,4 +67,10 @@ pub struct UnexpectedType {
 )]
 pub struct TypeMisatch {
     pub types: Vec<b::Type>,
+}
+
+#[derive(Debug, Clone, Display, new)]
+#[display("Feature is not implemented yet: {feature}")]
+pub struct Todo {
+    pub feature: String,
 }

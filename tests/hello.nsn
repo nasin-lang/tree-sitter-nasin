@@ -1,4 +1,3 @@
-write(f: i32, buf: Ptr(u8), len: usize): i32 @extern("write")
-
-main :=
-    write(1, @str_ptr("Hello\n", 0), 6)
+main: i32 =
+    _ := print("Hello")
+    0

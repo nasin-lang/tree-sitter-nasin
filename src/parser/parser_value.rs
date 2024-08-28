@@ -10,6 +10,7 @@ pub enum ValueBody {
     Bool(bool),
     Number(String),
     Never,
+    CompileError,
 }
 
 #[derive(Debug, Clone, Hash, Eq, PartialEq, new)]
