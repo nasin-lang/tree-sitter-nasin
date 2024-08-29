@@ -1,7 +1,7 @@
 true_msg  := "it's true!"
 false_msg := "it's false"
 
-main: i32 =
+main :=
     if_result := if true then
         true_msg
     else
@@ -12,6 +12,4 @@ main: i32 =
         true_msg
     else
         false_msg
-    _ := print(if_result)
-
-    0
+    print(if_result)

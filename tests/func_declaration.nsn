@@ -1,6 +1,5 @@
-main: i32 :=
-    _ := foo("Hello")
-    0
+main :=
+    foo("Hello")
 
 foo(msg) :=
     print(msg)

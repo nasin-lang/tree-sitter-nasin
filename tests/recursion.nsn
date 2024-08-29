@@ -6,6 +6,5 @@ rec(i: u8) :=
     else
         rec(i + 1)
 
-main: i32 =
-    _ := print(rec(0))
-    0
+main :=
+    print(rec(0))

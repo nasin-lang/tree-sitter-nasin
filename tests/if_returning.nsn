@@ -7,7 +7,6 @@ get_msg(cond) :=
     else
         false_msg
 
-main: i32 =
+main :=
     _ := print(get_msg(true))
-    _ := print(get_msg(false))
-    0
+    print(get_msg(false))

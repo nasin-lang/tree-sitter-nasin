@@ -4,6 +4,5 @@ type Foo {
 
 msg: Foo = {.data="Hello from record"}
 
-main: i32 =
-    _ := print(msg.data)
-    0
+main :=
+    print(msg.data)

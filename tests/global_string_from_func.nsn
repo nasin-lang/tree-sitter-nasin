@@ -3,6 +3,5 @@ msg := "Hello from global"
 print_hello() :=
     print(msg)
 
-main: i32 =
-    _ := print_hello()
-    0
+main :=
+    print_hello()

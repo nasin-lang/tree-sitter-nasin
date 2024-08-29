@@ -8,7 +8,7 @@ use std::fs::File;
 use std::io::BufWriter;
 use std::path::Path;
 
-use cranelift_shim::{self as cl, Module};
+use cranelift_shim::{self as cl, InstBuilder, Module};
 use itertools::Itertools;
 use target_lexicon::Triple;
 
@@ -149,9 +149,11 @@ impl BinaryCodegen<'_> {
                 codegen.add_instr(instr);
             }
             let exit_code = codegen
-                .stack
-                .pop()
-                .add_to_func(&mut codegen.obj_module, codegen.builder.as_mut().unwrap());
+                .builder
+                .as_mut()
+                .unwrap()
+                .ins()
+                .iconst(cl::types::I32, 0);
             codegen.call(exit_func_id, &[exit_code]);
 
             (this.obj_module, this.globals, this.funcs) = codegen.return_never();
