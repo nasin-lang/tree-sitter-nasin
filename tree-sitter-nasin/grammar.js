@@ -1,3 +1,5 @@
+/// <reference types="./global.d.ts" />
+
 const PREC = {
     IF: 0,
     BLOCK: 1,
@@ -13,6 +15,11 @@ const PREC = {
     INSTANCE: 11,
 }
 
+/**
+ * @param {number} prec_lvl
+ * @param {Rule} operator
+ * @param {Rule} operand
+ */
 function bin_op(prec_lvl, operator, operand) {
     return prec.left(
         prec_lvl,
@@ -241,7 +248,7 @@ module.exports = grammar({
         lt_eq: () => "<=",
 
         ident: ($) => prec(PREC.ATOM, $._ident),
-        _ident: () => /[\p{L}_][\p{L}\p{Nd}_]*/,
+        _ident: () => /[\p{L}_][\p{L}\p{Nd}_]*/u,
 
         true: () => prec(PREC.KEYWORD, "true"),
         false: () => prec(PREC.KEYWORD, "false"),
