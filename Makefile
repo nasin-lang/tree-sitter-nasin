@@ -33,8 +33,9 @@ bin/nasin: Cargo.toml $(RUST_SRC) tree-sitter-nasin/src
 	&& cp -T target/debug/nasin bin/nasin
 
 tree-sitter-nasin/src: tree-sitter-nasin/grammar.js tree-sitter-nasin/node_modules
-	cd tree-sitter-nasin \
-	&& bun run generate
+	cd tree-sitter-nasin        \
+	&& bun tree-sitter generate \
+	&& bun tree-sitter build
 
 tree-sitter-nasin/node_modules: tree-sitter-nasin/package.json
 	cd tree-sitter-nasin \

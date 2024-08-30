@@ -35,7 +35,7 @@ impl BuildContext {
     pub fn parse(&self, src_idx: usize) -> usize {
         let mut ts_parser = ts::Parser::new();
         ts_parser
-            .set_language(tree_sitter_nasin::language())
+            .set_language(&tree_sitter_nasin::LANGUAGE.into())
             .unwrap();
         let tree = ts_parser
             .parse(&self.source_manager.source(src_idx).content().text, None)
