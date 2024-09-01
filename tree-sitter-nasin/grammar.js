@@ -1,4 +1,4 @@
-/// <reference types="./global.d.ts" />
+/// <reference types="./node_modules/tree-sitter-cli/dsl.d.ts" />
 
 let iota = 0
 const PREC = {
@@ -336,8 +336,8 @@ function token_with_nl(token) {
 /**
  * Creates a rule for a binary operation
  * @param {number} level
- * @param {Rule} operator
- * @param {Rule} operand
+ * @param {RuleOrLiteral} operator
+ * @param {RuleOrLiteral} operand
  */
 function bin_op(level, operator, operand) {
     return prec.left(
@@ -349,8 +349,8 @@ function bin_op(level, operator, operand) {
 /**
  * Creates a rule that can be replaced with a new line. It will always consume trailing
  * new lines.
- * @param {Rule} rule
- * @param {Rule} newline
+ * @param {RuleOrLiteral} rule
+ * @param {RuleOrLiteral} newline
  */
 function or_nl(rule, newline) {
     const with_nl = seq(rule, optional(newline))
@@ -360,8 +360,8 @@ function or_nl(rule, newline) {
 /**
  * Creates a rule for a list of one or more items separated by a separator. Allow repeated
  * and trailing separators.
- * @param {Rule} separator
- * @param {Rule} rule
+ * @param {RuleOrLiteral} separator
+ * @param {RuleOrLiteral} rule
  */
 function sep1(separator, rule) {
     return seq(rule, repeat(seq(separator, optional(rule))))
@@ -370,8 +370,8 @@ function sep1(separator, rule) {
 /**
  * Creates a rule for a list of zero or more items separated by a separator. Allows
  * repeated and trailing separators.
- * @param {Rule} separator
- * @param {Rule} rule
+ * @param {RuleOrLiteral} separator
+ * @param {RuleOrLiteral} rule
  */
 function sep(separator, rule) {
     return optional(sep1(separator, rule))
