@@ -40,16 +40,23 @@ impl fmt::Display for DisplayError<'_> {
 #[derive(Debug, Clone, Display, From)]
 pub enum ErrorDetail {
     ValueNotFound(ValueNotFound),
+    TypeNotFound(TypeNotFound),
     UnexpectedType(UnexpectedType),
     TypeMisatch(TypeMisatch),
-    #[display("Type sould be known at this point")]
-    UnknownType,
+    #[display("Type should be known at this point")]
+    TypeNotFinal,
     Todo(Todo),
 }
 
 #[derive(Debug, Clone, Display, new)]
 #[display("Cannot find value `{ident}` on the current scope")]
 pub struct ValueNotFound {
+    pub ident: String,
+}
+
+#[derive(Debug, Clone, Display, new)]
+#[display("Cannot find type `{ident}` on the current scope")]
+pub struct TypeNotFound {
     pub ident: String,
 }
 

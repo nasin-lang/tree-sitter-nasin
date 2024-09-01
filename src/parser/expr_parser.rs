@@ -358,27 +358,26 @@ impl<'a, 't> ExprParser<'a, 't> {
 
     fn add_bin_op(&mut self, op: ts::Node, left: Value, right: Value) -> Value {
         self.push_values([&left, &right], false);
-        let op_text = op.get_text(&self.ctx.source(self.src_idx).content().text);
-        let body = match op_text {
-            "+" => b::InstrBody::Add,
-            "-" => b::InstrBody::Sub,
-            "%" => b::InstrBody::Mod,
-            "*" => b::InstrBody::Mul,
-            "/" => b::InstrBody::Div,
-            "**" => {
+        let body = match op.kind() {
+            "plus" => b::InstrBody::Add,
+            "minus" => b::InstrBody::Sub,
+            "percent" => b::InstrBody::Mod,
+            "star" => b::InstrBody::Mul,
+            "slash" => b::InstrBody::Div,
+            "double_star" => {
                 self.ctx.push_error(errors::Error::new(
                     errors::Todo::new("exponentiation".to_string()).into(),
                     Loc::from_node(self.src_idx, &op),
                 ));
                 b::InstrBody::CompileError
             }
-            "==" => b::InstrBody::Eq,
-            "!=" => b::InstrBody::Neq,
-            ">" => b::InstrBody::Gt,
-            "<" => b::InstrBody::Lt,
-            ">=" => b::InstrBody::Gte,
-            "<=" => b::InstrBody::Lte,
-            op => panic!("Unhandled binary operator: {op}"),
+            "double_eq" => b::InstrBody::Eq,
+            "not_eq" => b::InstrBody::Neq,
+            "gt" => b::InstrBody::Gt,
+            "lt" => b::InstrBody::Lt,
+            "gt_eq" => b::InstrBody::Gte,
+            "lt_eq" => b::InstrBody::Lte,
+            kind => panic!("Unhandled binary operator: {kind}"),
         };
         let loc = left.loc.merge(&right.loc);
         let idx = self.add_instr_with_result(2, b::Instr::new(body, loc));

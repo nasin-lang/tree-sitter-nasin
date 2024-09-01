@@ -7,8 +7,8 @@ all: bin/nasin $(LIB_DIR)
 .PHONY: clean
 clean:
 	rm -rf bin
-	rm -rf tree-sitter-nasin/node_modules
-	rm -rf tree-sitter-nasin/src
+	rm -f tree-sitter-nasin/src/parser.c
+	rm -f tree-sitter-nasin/nasin.so
 	rm -rf $(LIB_DIR)
 	cargo clean
 
@@ -27,12 +27,12 @@ $(LIB_DIR): $(LIB_SRC)
 	&& cp -r library $(LIB_DIR)
 
 RUST_SRC = $(shell find src/ -type f -name '*.rs')
-bin/nasin: Cargo.toml $(RUST_SRC) tree-sitter-nasin/src
+bin/nasin: Cargo.toml $(RUST_SRC) tree-sitter-nasin/src/parser.c
 	LIB_DIR=$(LIB_DIR) cargo build \
 	&& mkdir -p bin                \
 	&& cp -T target/debug/nasin bin/nasin
 
-tree-sitter-nasin/src: tree-sitter-nasin/grammar.js tree-sitter-nasin/node_modules
+tree-sitter-nasin/src/parser.c: tree-sitter-nasin/grammar.js tree-sitter-nasin/node_modules
 	cd tree-sitter-nasin        \
 	&& bun tree-sitter generate \
 	&& bun tree-sitter build

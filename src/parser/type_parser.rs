@@ -5,7 +5,7 @@ use itertools::Itertools;
 use tree_sitter as ts;
 
 use crate::utils::{IntoItem, TreeSitterUtils};
-use crate::{bytecode as b, context};
+use crate::{bytecode as b, context, errors};
 
 #[derive(new)]
 pub struct TypeParser<'a> {
@@ -26,8 +26,11 @@ impl<'a> TypeParser<'a> {
                 match self.idents.get(ident) {
                     Some(body) => body.clone(),
                     None => {
-                        // TODO: improve error handling
-                        panic!("Type \"{ident}\" not found");
+                        self.ctx.push_error(errors::Error::new(
+                            errors::TypeNotFound::new(ident.to_string()).into(),
+                            b::Loc::from_node(self.src_idx, &node),
+                        ));
+                        b::TypeBody::Inferred(b::InferredType::new([]))
                     }
                 }
             }
@@ -60,7 +63,7 @@ impl<'a> TypeParser<'a> {
                     _ => panic!("unhandled generic type: `{name}`"),
                 }
             }
-            k => panic!("Found unexpected type `{}`", k),
+            k => panic!("Unhandled type node `{k}`"),
         };
         b::Type::new(body, Some(b::Loc::from_node(self.src_idx, &node)))
     }

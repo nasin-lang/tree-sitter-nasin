@@ -1,71 +1,73 @@
 /// <reference types="./global.d.ts" />
 
+let iota = 0
 const PREC = {
-    IF: 0,
-    BLOCK: 1,
-    BLOCK_CLAUSE: 2,
-    LOGICAL: 3,
-    SUM: 4,
-    MUL: 5,
-    POW: 6,
-    ATOM: 7,
-    GET_PROP: 10,
-    KEYWORD: 9,
-    CALL: 10,
-    INSTANCE: 11,
-}
-
-/**
- * @param {number} prec_lvl
- * @param {Rule} operator
- * @param {Rule} operand
- */
-function bin_op(prec_lvl, operator, operand) {
-    return prec.left(
-        prec_lvl,
-        seq(field("left", operand), field("op", operator), field("right", operand)),
-    )
+    IF: iota++,
+    BLOCK: iota++,
+    BLOCK_BODY: iota++,
+    LOGICAL: iota++,
+    SUM: iota++,
+    MUL: iota++,
+    POW: iota++,
+    ATOM: iota++,
+    GET_PROP: iota++,
+    KEYWORD: iota++,
+    CALL: iota++,
+    INSTANCE: iota++,
 }
 
 module.exports = grammar({
     name: "nasin",
     word: ($) => $._ident,
+    extras: ($) => [$._whitespace],
     rules: {
-        root: ($) => repeat($._module_stmt),
+        root: ($) => seq(optional($._newline), sep($._newline, $._module_stmt)),
 
         _module_stmt: ($) => choice($.func_decl, $.global_var_decl, $.type_decl),
 
         func_decl: ($) =>
             seq(
                 field("name", $.ident),
-                "(",
-                repeat(seq(field("params", $.func_param), optional(","))),
-                ")",
+                $._func_params,
+                ":",
+                optional($._newline),
+                // tree-sitter was adding this spaces to the return type ident (???) so we
+                // consume them here
+                optional($._whitespace),
                 choice(
                     seq(
-                        ":",
-                        field("ret_type", $._type_expr),
-                        repeat(field("directives", $.directive)),
-                        optional(seq("=", field("return", $._expr))),
-                    ),
-                    seq(
-                        repeat(field("directives", $.directive)),
-                        ":",
-                        "=",
+                        optional(field("ret_type", $._type_expr)),
+                        optional($._func_directives),
+                        token_with_nl("="),
+                        optional($._newline),
                         field("return", $._expr),
                     ),
+                    seq(field("ret_type", $._type_expr), optional($._func_directives)),
                 ),
             ),
+        _func_params: ($) =>
+            seq(
+                "(",
+                optional($._newline),
+                sep(or_nl(",", $._newline), field("params", $.func_param)),
+                ")",
+            ),
+        _func_directives: ($) => repeat1(field("directives", $.directive)),
 
         func_param: ($) =>
-            seq(field("pat", $._pat), optional(seq(":", field("type", $._type_expr)))),
+            seq(
+                field("pat", $._pat),
+                optional(seq(":", optional($._newline), field("type", $._type_expr))),
+            ),
 
         global_var_decl: ($) =>
             seq(
                 field("name", $.ident),
                 ":",
-                optional(field("type", $._type_expr)),
+                optional(seq(optional($._newline), field("type", $._type_expr))),
+                optional($._newline),
                 "=",
+                optional($._newline),
                 field("value", $._expr),
             ),
 
@@ -73,22 +75,34 @@ module.exports = grammar({
             seq(
                 field("pat", $._pat),
                 ":",
-                optional(field("type", $._type_expr)),
+                optional(seq(optional($._newline), field("type", $._type_expr))),
+                optional($._newline),
                 "=",
+                optional($._newline),
                 field("value", $._expr),
             ),
 
         directive: ($) =>
+            seq(token_with_nl("@"), field("name", $.ident), optional($._directive_args)),
+        _directive_args: ($) =>
             seq(
-                "@",
-                field("name", $.ident),
-                optional(seq("(", optional($._directive_args_list), seq(")"))),
+                "(",
+                optional($._newline),
+                sep(or_nl(",", $._newline), field("args", $._directive_arg)),
+                ")",
             ),
-        _directive_args_list: ($) =>
-            repeat1(seq(field("args", $._directive_arg), optional(","))),
         _directive_arg: ($) =>
             choice(
-                prec(PREC.ATOM, seq("(", $._directive_arg, ")")),
+                prec(
+                    PREC.ATOM,
+                    seq(
+                        "(",
+                        optional($._newline),
+                        $._directive_arg,
+                        optional($._newline),
+                        ")",
+                    ),
+                ),
                 $.true,
                 $.false,
                 $.ident,
@@ -99,7 +113,10 @@ module.exports = grammar({
 
         _expr: ($) =>
             choice(
-                prec(PREC.ATOM, seq("(", $._expr, ")")),
+                prec(
+                    PREC.ATOM,
+                    seq("(", optional($._newline), $._expr, optional($._newline), ")"),
+                ),
                 $.true,
                 $.false,
                 $.ident,
@@ -117,44 +134,41 @@ module.exports = grammar({
 
         bin_op: ($) =>
             choice(
-                bin_op(PREC.LOGICAL, $.double_eq, $._expr),
-                bin_op(PREC.LOGICAL, $.not_eq, $._expr),
-                bin_op(PREC.LOGICAL, $.gt, $._expr),
-                bin_op(PREC.LOGICAL, $.lt, $._expr),
-                bin_op(PREC.LOGICAL, $.gt_eq, $._expr),
-                bin_op(PREC.LOGICAL, $.lt_eq, $._expr),
-                bin_op(PREC.SUM, $.plus, $._expr),
-                bin_op(PREC.SUM, $.minus, $._expr),
-                bin_op(PREC.MUL, $.star, $._expr),
-                bin_op(PREC.MUL, $.slash, $._expr),
-                bin_op(PREC.MUL, $.percent, $._expr),
-                bin_op(PREC.POW, $.double_star, $._expr),
+                bin_op(PREC.LOGICAL, seq($.double_eq, optional($._newline)), $._expr),
+                bin_op(PREC.LOGICAL, seq($.not_eq, optional($._newline)), $._expr),
+                bin_op(PREC.LOGICAL, seq($.gt, optional($._newline)), $._expr),
+                bin_op(PREC.LOGICAL, seq($.lt, optional($._newline)), $._expr),
+                bin_op(PREC.LOGICAL, seq($.gt_eq, optional($._newline)), $._expr),
+                bin_op(PREC.LOGICAL, seq($.lt_eq, optional($._newline)), $._expr),
+                bin_op(PREC.SUM, seq($.plus, optional($._newline)), $._expr),
+                bin_op(PREC.SUM, seq($.minus, optional($._newline)), $._expr),
+                bin_op(PREC.MUL, seq($.star, optional($._newline)), $._expr),
+                bin_op(PREC.MUL, seq($.slash, optional($._newline)), $._expr),
+                bin_op(PREC.MUL, seq($.percent, optional($._newline)), $._expr),
+                bin_op(PREC.POW, seq($.double_star, optional($._newline)), $._expr),
             ),
 
-        call: ($) =>
-            prec.left(
-                PREC.CALL,
-                seq(field("callee", $._expr), "(", optional($._call_args_list), ")"),
+        call: ($) => prec.left(PREC.CALL, seq(field("callee", $._expr), $._call_args)),
+        _call_args: ($) =>
+            seq(
+                "(",
+                optional($._newline),
+                sep(or_nl(",", $._newline), field("args", $._expr)),
+                ")",
             ),
-        _call_args_list: ($) =>
-            prec(PREC.CALL, repeat1(seq(field("args", $._expr), optional(",")))),
 
         macro: ($) =>
-            prec.left(
-                PREC.CALL,
-                seq(
-                    "@",
-                    field("name", $.ident),
-                    "(",
-                    optional($._call_args_list),
-                    seq(")"),
-                ),
-            ),
+            prec.left(PREC.CALL, seq("@", field("name", $.ident), $._call_args)),
 
         get_prop: ($) =>
             prec.left(
                 PREC.GET_PROP,
-                seq(field("parent", $._expr), ".", field("prop_name", $.ident)),
+                seq(
+                    field("parent", $._expr),
+                    $.dot,
+                    optional($._newline),
+                    field("prop_name", $.ident),
+                ),
             ),
 
         string_lit: ($) =>
@@ -162,33 +176,50 @@ module.exports = grammar({
                 PREC.ATOM,
                 seq('"', field("content", $.string_lit_content), token.immediate('"')),
             ),
-        string_lit_content: () => token.immediate(/\\"|[^"]+/),
+        string_lit_content: () => token.immediate(/(?:\\"|[^"])+/),
 
         array_lit: ($) =>
             prec(
                 PREC.ATOM,
-                seq("[", repeat(seq(field("items", $._expr), optional(","))), "]"),
+                seq(
+                    "[",
+                    optional($._newline),
+                    sep(or_nl(",", $._newline), field("items", $._expr)),
+                    "]",
+                ),
             ),
 
         record_lit: ($) =>
             prec(
                 PREC.INSTANCE,
-                seq("{", repeat(field("fields", $.record_lit_field)), "}"),
-            ),
-        record_lit_field: ($) =>
-            seq(".", field("name", $.ident), "=", field("value", $._expr), optional(",")),
-
-        block: ($) => prec(PREC.BLOCK, $._block),
-        _block: ($) => prec.left($._block_clause),
-        _block_clause: ($) =>
-            prec.right(
-                PREC.BLOCK_CLAUSE,
                 seq(
-                    field("body", $._block_stmt),
-                    optional(";"),
-                    choice(field("value", $._expr), $._block_clause),
+                    "{",
+                    optional($._newline),
+                    sep(or_nl(",", $._newline), field("fields", $.record_lit_field)),
+                    "}",
                 ),
             ),
+        record_lit_field: ($) =>
+            seq(
+                ".",
+                field("name", $.ident),
+                optional($._newline),
+                "=",
+                optional($._newline),
+                field("value", $._expr),
+            ),
+
+        block: ($) => prec(PREC.BLOCK, $._block),
+        _block: ($) =>
+            prec.right(
+                PREC.BLOCK_BODY,
+                seq(
+                    field("body", $._block_stmt),
+                    $._newline,
+                    choice($._block, field("value", $._expr)),
+                ),
+            ),
+
         _block_stmt: ($) => choice($.var_decl),
 
         if: ($) =>
@@ -196,10 +227,20 @@ module.exports = grammar({
                 PREC.IF,
                 seq(
                     "if",
+                    optional($._newline),
                     field("cond", $._expr),
+                    optional($._newline),
                     "then",
+                    optional($._newline),
                     field("then", $._expr),
-                    optional(seq("else", field("else", $._expr))),
+                    optional(
+                        seq(
+                            optional($._newline),
+                            "else",
+                            optional($._newline),
+                            field("else", $._expr),
+                        ),
+                    ),
                 ),
             ),
 
@@ -210,19 +251,29 @@ module.exports = grammar({
                 PREC.ATOM,
                 seq(
                     "[",
+                    optional($._newline),
                     field("item_type", $._type_expr),
-                    optional(seq(";", field("length", $.number))),
+                    optional(
+                        seq(
+                            optional($._newline),
+                            ";",
+                            optional($._newline),
+                            field("length", $.number),
+                        ),
+                    ),
+                    optional($._newline),
                     "]",
                 ),
             ),
 
-        generic_type: ($) =>
-            prec(
-                PREC.CALL,
-                seq(field("name", $.ident), "(", optional($._type_args_list), ")"),
+        generic_type: ($) => prec(PREC.CALL, seq(field("name", $.ident), $._type_args)),
+        _type_args: ($) =>
+            seq(
+                "(",
+                optional($._newline),
+                sep(or_nl(",", $._newline), field("args", $._type_expr)),
+                ")",
             ),
-        _type_args_list: ($) =>
-            prec(PREC.CALL, repeat1(seq(field("args", $._type_expr), optional(",")))),
 
         _pat: ($) => choice($.ident),
 
@@ -230,22 +281,35 @@ module.exports = grammar({
             seq("type", field("name", $.ident), field("body", $._type_decl_body)),
         _type_decl_body: ($) => choice($.record_type),
 
-        record_type: ($) => seq("{", repeat(field("fields", $.record_type_field)), "}"),
+        record_type: ($) =>
+            seq(
+                "{",
+                optional($._newline),
+                sep(or_nl(",", $._newline), field("fields", $.record_type_field)),
+                "}",
+            ),
         record_type_field: ($) =>
-            seq(field("name", $.ident), ":", field("type", $._type_expr), optional(",")),
+            seq(
+                field("name", $.ident),
+                optional($._newline),
+                ":",
+                optional($._newline),
+                field("type", $._type_expr),
+            ),
 
-        plus: () => "+",
-        minus: () => "-",
-        star: () => "*",
-        double_star: () => "**",
-        slash: () => "/",
-        percent: () => "%",
-        double_eq: () => "==",
-        not_eq: () => "!=",
-        gt: () => ">",
-        lt: () => "<",
-        gt_eq: () => ">=",
-        lt_eq: () => "<=",
+        plus: () => token_with_nl("+"),
+        minus: () => token_with_nl("-"),
+        star: () => token_with_nl("*"),
+        double_star: () => token_with_nl("**"),
+        slash: () => token_with_nl("/"),
+        percent: () => token_with_nl("%"),
+        double_eq: () => token_with_nl("=="),
+        not_eq: () => token_with_nl("!="),
+        gt: () => token_with_nl(">"),
+        lt: () => token_with_nl("<"),
+        gt_eq: () => token_with_nl(">="),
+        lt_eq: () => token_with_nl("<="),
+        dot: () => token_with_nl("."),
 
         ident: ($) => prec(PREC.ATOM, $._ident),
         _ident: () => /[\p{L}_][\p{L}\p{Nd}_]*/u,
@@ -254,5 +318,61 @@ module.exports = grammar({
         false: () => prec(PREC.KEYWORD, "false"),
 
         number: () => prec(PREC.ATOM, /(\d(_?\d)*)?\.?\d(_?\d)*/),
+
+        _whitespace: () => /[ \t]+/,
+        _newline: () => /(\r?\n)+/,
     },
 })
+
+/**
+ * Creates a token that can be placed in the next line
+ * @param {string} token
+ */
+function token_with_nl(token) {
+    token = token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+    return new RegExp(`[ \\t\\f\\n\\r]*${token}`)
+}
+
+/**
+ * Creates a rule for a binary operation
+ * @param {number} level
+ * @param {Rule} operator
+ * @param {Rule} operand
+ */
+function bin_op(level, operator, operand) {
+    return prec.left(
+        level,
+        seq(field("left", operand), field("op", operator), field("right", operand)),
+    )
+}
+
+/**
+ * Creates a rule that can be replaced with a new line. It will always consume trailing
+ * new lines.
+ * @param {Rule} rule
+ * @param {Rule} newline
+ */
+function or_nl(rule, newline) {
+    const with_nl = seq(rule, optional(newline))
+    return choice(with_nl, seq(newline, optional(with_nl)))
+}
+
+/**
+ * Creates a rule for a list of one or more items separated by a separator. Allow repeated
+ * and trailing separators.
+ * @param {Rule} separator
+ * @param {Rule} rule
+ */
+function sep1(separator, rule) {
+    return seq(rule, repeat(seq(separator, optional(rule))))
+}
+
+/**
+ * Creates a rule for a list of zero or more items separated by a separator. Allows
+ * repeated and trailing separators.
+ * @param {Rule} separator
+ * @param {Rule} rule
+ */
+function sep(separator, rule) {
+    return optional(sep1(separator, rule))
+}

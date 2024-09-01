@@ -15,4 +15,3 @@ eprint(message: str): bool =
     _ := _write(STDERR_FILENO, @str_ptr(message, 0), @str_len(message))
     _ := _write(STDERR_FILENO, @str_ptr(NL, 0), @str_len(NL))
     true
-

@@ -613,7 +613,7 @@ impl<'a> TypeChecker<'a> {
                 | b::TypeBody::Inferred(_)
         ) {
             self.ctx.push_error(errors::Error::new(
-                errors::ErrorDetail::UnknownType,
+                errors::ErrorDetail::TypeNotFinal,
                 self.entries[idx].loc,
             ));
             success = false;
