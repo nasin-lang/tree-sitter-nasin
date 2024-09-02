@@ -1,4 +1,4 @@
-msg := "Hello from global"
+msg = "Hello from global"
 
-main :=
+main =
     print(msg)

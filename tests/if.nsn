@@ -1,14 +1,14 @@
-true_msg  := "it's true!"
-false_msg := "it's false"
+true_msg  = "it's true"
+false_msg = "it's false"
 
-main :=
-    if_result := if true then
+main =
+    let if_result = if true then
         true_msg
     else
         false_msg
-    _ := print(if_result)
+    let _ = print(if_result)
 
-    if_result := if false then
+    let if_result = if false then
         true_msg
     else
         false_msg

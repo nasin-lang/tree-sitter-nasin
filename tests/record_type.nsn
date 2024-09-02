@@ -2,7 +2,7 @@ type Foo {
     data: str
 }
 
-msg: Foo = {.data="Hello from record"}
+msg: Foo = {data="Hello from record"}
 
-main :=
+main =
     print(msg.data)

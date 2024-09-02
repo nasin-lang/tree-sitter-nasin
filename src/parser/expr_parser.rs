@@ -490,7 +490,7 @@ impl<'a, 't> ExprParser<'a, 't> {
 
     fn add_stmt_node(&mut self, node: ts::Node<'t>) {
         match node.kind() {
-            "var_decl" => {
+            "let_stmt" => {
                 let value = self.add_expr_node(node.required_field("value"), false);
                 let pat_node = node.required_field("pat");
                 match pat_node.kind() {

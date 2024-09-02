@@ -38,9 +38,9 @@ Hello from global
 :b shell 60
 ./bin/nasin b tests/if.nsn -o tests/out/if && ./tests/out/if
 :i returncode 0
-:b stdout 55
+:b stdout 54
 Compiled program to tests/out/if
-it's true!
+it's true
 it's false
 
 :b stderr 0

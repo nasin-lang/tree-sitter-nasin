@@ -32,11 +32,8 @@ bin/nasin: Cargo.toml $(RUST_SRC) tree-sitter-nasin/src/parser.c
 	&& mkdir -p bin                \
 	&& cp -T target/debug/nasin bin/nasin
 
-tree-sitter-nasin/src/parser.c: tree-sitter-nasin/grammar.js tree-sitter-nasin/node_modules
+tree-sitter-nasin/src/parser.c: tree-sitter-nasin/grammar.js tree-sitter-nasin/package.json
 	cd tree-sitter-nasin        \
+	&& bun install              \
 	&& bun tree-sitter generate \
 	&& bun tree-sitter build
-
-tree-sitter-nasin/node_modules: tree-sitter-nasin/package.json
-	cd tree-sitter-nasin \
-	&& bun install

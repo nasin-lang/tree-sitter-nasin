@@ -1,7 +1,7 @@
-msg := "Hello from global"
+msg = "Hello from global"
 
-print_hello() :=
+print_hello() =
     print(msg)
 
-main :=
+main =
     print_hello()

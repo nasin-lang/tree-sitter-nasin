@@ -23,26 +23,26 @@ module.exports = grammar({
     rules: {
         root: ($) => seq(optional($._newline), sep($._newline, $._module_stmt)),
 
-        _module_stmt: ($) => choice($.func_decl, $.global_var_decl, $.type_decl),
+        _module_stmt: ($) => choice($.func_decl, $.global_decl, $.type_decl),
 
         func_decl: ($) =>
             seq(
                 field("name", $.ident),
                 $._func_params,
-                ":",
-                optional($._newline),
-                // tree-sitter was adding this spaces to the return type ident (???) so we
-                // consume them here
-                optional($._whitespace),
-                choice(
+                optional(
                     seq(
-                        optional(field("ret_type", $._type_expr)),
-                        optional($._func_directives),
+                        token_with_nl(":"),
+                        optional($._newline),
+                        field("ret_type", $._type_expr),
+                    ),
+                ),
+                optional($._func_directives),
+                optional(
+                    seq(
                         token_with_nl("="),
                         optional($._newline),
                         field("return", $._expr),
                     ),
-                    seq(field("ret_type", $._type_expr), optional($._func_directives)),
                 ),
             ),
         _func_params: ($) =>
@@ -60,24 +60,34 @@ module.exports = grammar({
                 optional(seq(":", optional($._newline), field("type", $._type_expr))),
             ),
 
-        global_var_decl: ($) =>
+        global_decl: ($) =>
             seq(
                 field("name", $.ident),
-                ":",
-                optional(seq(optional($._newline), field("type", $._type_expr))),
-                optional($._newline),
-                "=",
+                optional(
+                    seq(
+                        token_with_nl(":"),
+                        optional($._newline),
+                        field("type", $._type_expr),
+                    ),
+                ),
+                token_with_nl("="),
                 optional($._newline),
                 field("value", $._expr),
             ),
 
-        var_decl: ($) =>
+        let_stmt: ($) =>
             seq(
-                field("pat", $._pat),
-                ":",
-                optional(seq(optional($._newline), field("type", $._type_expr))),
+                "let",
                 optional($._newline),
-                "=",
+                field("pat", $._pat),
+                optional(
+                    seq(
+                        token_with_nl(":"),
+                        optional($._newline),
+                        field("type", $._type_expr),
+                    ),
+                ),
+                token_with_nl("="),
                 optional($._newline),
                 field("value", $._expr),
             ),
@@ -201,7 +211,6 @@ module.exports = grammar({
             ),
         record_lit_field: ($) =>
             seq(
-                ".",
                 field("name", $.ident),
                 optional($._newline),
                 "=",
@@ -220,7 +229,7 @@ module.exports = grammar({
                 ),
             ),
 
-        _block_stmt: ($) => choice($.var_decl),
+        _block_stmt: ($) => choice($.let_stmt),
 
         if: ($) =>
             prec.right(
@@ -291,8 +300,7 @@ module.exports = grammar({
         record_type_field: ($) =>
             seq(
                 field("name", $.ident),
-                optional($._newline),
-                ":",
+                token_with_nl(":"),
                 optional($._newline),
                 field("type", $._type_expr),
             ),

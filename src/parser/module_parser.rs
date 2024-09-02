@@ -74,7 +74,7 @@ impl<'a, 't> ModuleParser<'a, 't> {
             match sym_node.kind() {
                 "type_decl" => self.types.add_type(ident, sym_node),
                 "func_decl" => self.add_func(ident, sym_node),
-                "global_var_decl" => self.add_global(ident, sym_node),
+                "global_decl" => self.add_global(ident, sym_node),
                 _ => panic!("Unexpected symbol kind: {}", sym_node.kind()),
             }
         }
@@ -196,7 +196,7 @@ impl<'a, 't> ModuleParser<'a, 't> {
         });
     }
     fn add_global(&mut self, name: &'a str, node: ts::Node<'t>) {
-        assert_eq!(node.kind(), "global_var_decl");
+        assert_eq!(node.kind(), "global_decl");
 
         let ty = match node.field("type") {
             Some(ty_node) => self.types.parse_type(ty_node),

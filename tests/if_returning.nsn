@@ -1,12 +1,12 @@
-true_msg  := "it's true"
-false_msg := "it's false"
+true_msg  = "it's true"
+false_msg = "it's false"
 
-get_msg(cond) :=
+get_msg(cond) =
     if cond then
         true_msg
     else
         false_msg
 
-main :=
-    _ := print(get_msg(true))
+main =
+    let _ = print(get_msg(true))
     print(get_msg(false))
