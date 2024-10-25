@@ -8,7 +8,7 @@ use tree_sitter as ts;
 use super::module_parser::ModuleParser;
 use super::parser_value::{Value, ValueBody};
 use crate::bytecode::Loc;
-use crate::utils::{TreeSitterUtils, ValueStack};
+use crate::utils::{SortedMap, TreeSitterUtils, ValueStack};
 use crate::{bytecode as b, context, errors, utils};
 
 type Stack = ValueStack<(), ScopePayload>;
@@ -125,12 +125,14 @@ impl<'a, 't> ExprParser<'a, 't> {
                     })
                     .collect();
                 self.push_values(fields.values(), false);
+                let members: SortedMap<_, _> = fields
+                    .keys()
+                    .map(|k| (k.clone(), b::Type::unknown(None)))
+                    .collect();
                 let ty = b::Type::new(
                     b::TypeBody::Inferred(b::InferredType {
-                        properties: fields
-                            .keys()
-                            .map(|k| (k.clone(), b::Type::unknown(None)))
-                            .collect(),
+                        properties: members.clone(),
+                        members,
                     }),
                     None,
                 );
@@ -388,7 +390,7 @@ impl<'a, 't> ExprParser<'a, 't> {
         self.push_values([&parent], false);
         let idx = self.add_instr_with_result(
             1,
-            b::Instr::new(b::InstrBody::GetField(prop_name.to_string()), loc),
+            b::Instr::new(b::InstrBody::GetProperty(prop_name.to_string()), loc),
         );
         Value::new(ValueBody::Local(idx), loc)
     }
@@ -425,15 +427,17 @@ impl<'a, 't> ExprParser<'a, 't> {
                 }
             }
             ValueBody::Local(_) | ValueBody::Global(_, _) => {
-                self.ctx.push_error(errors::Error::new(
-                    errors::Todo::new("inderect call".to_string()).into(),
-                    loc,
-                ));
-                callee.with_loc(loc)
+                self.push_values(&args, false);
+                self.push_values([&callee], false);
+
+                let idx = self.add_instr_with_result(
+                    args.len(),
+                    b::Instr::new(b::InstrBody::IndirectCall(args.len()), loc),
+                );
+                Value::new(ValueBody::Local(idx), loc)
             }
-            ValueBody::CompileError => callee.with_loc(loc),
+            ValueBody::CompileError => Value::new(ValueBody::CompileError, loc),
             _ => {
-                // TODO: better error handling
                 panic!("Value is not a function")
             }
         }

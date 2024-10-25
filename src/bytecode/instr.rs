@@ -11,7 +11,9 @@ pub enum InstrBody {
     Dup(usize),
 
     GetGlobal(usize, usize),
+    GetProperty(String),
     GetField(String),
+    GetMethod(String),
     CreateBool(bool),
     CreateNumber(Type, String),
     CreateString(String),
@@ -32,6 +34,7 @@ pub enum InstrBody {
     Lte,
 
     Call(usize, usize),
+    IndirectCall(usize),
 
     If(Type),
     Else,
@@ -59,7 +62,9 @@ impl Display for Instr {
             InstrBody::GetGlobal(mod_idx, global_idx) => {
                 write!(f, "get_global {mod_idx}-{global_idx}")?
             }
+            InstrBody::GetProperty(prop) => write!(f, "get_property .{prop}")?,
             InstrBody::GetField(field) => write!(f, "get_field .{field}")?,
+            InstrBody::GetMethod(field) => write!(f, "get_method .{field}")?,
             InstrBody::CreateBool(v) => write!(f, "create_bool {v}")?,
             InstrBody::CreateNumber(ty, v) => write!(f, "create_number {ty} {v}")?,
             InstrBody::CreateString(v) => {
@@ -84,6 +89,7 @@ impl Display for Instr {
             InstrBody::Lt => write!(f, "lt")?,
             InstrBody::Lte => write!(f, "lte")?,
             InstrBody::Call(mod_idx, func_idx) => write!(f, "call {mod_idx}-{func_idx}")?,
+            InstrBody::IndirectCall(n) => write!(f, "indirect_call {n}")?,
             InstrBody::If(ty) => write!(f, "if {ty}")?,
             InstrBody::Else => write!(f, "else")?,
             InstrBody::Loop(ty, n) => write!(f, "loop {ty} {n}")?,

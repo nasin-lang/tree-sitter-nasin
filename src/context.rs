@@ -6,6 +6,7 @@ use derive_more::{Deref, DerefMut};
 use derive_new::new;
 use tree_sitter as ts;
 
+use crate::utils::indented;
 use crate::{bytecode as b, codegen, config, errors, parser, sources, typecheck};
 
 #[derive(Debug, Deref, DerefMut, new)]
@@ -67,7 +68,10 @@ impl BuildContext {
         typecheck::TypeChecker::new(self, mod_idx).check();
 
         if self.cfg.dump_bytecode {
-            println!("{}", &self.lock_modules()[mod_idx]);
+            println!(
+                "module {mod_idx}:\n{}",
+                indented(4, [&self.lock_modules()[mod_idx]])
+            );
         }
 
         mod_idx

@@ -1,4 +1,4 @@
-:i count 8
+:i count 9
 :b shell 69
 ./bin/nasin b tests/hello.nsn -o tests/out/hello && ./tests/out/hello
 :i returncode 0
@@ -70,6 +70,16 @@ Hello from record
 :b stdout 47
 Compiled program to tests/out/recursion
 got 10
+
+:b stderr 0
+
+:b shell 72
+./bin/nasin b tests/method.nsn -o tests/out/method && ./tests/out/method
+:i returncode 0
+:b stdout 65
+Compiled program to tests/out/method
+Hello from record
+Hi method
 
 :b stderr 0
 

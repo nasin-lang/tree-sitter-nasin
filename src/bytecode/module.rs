@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::{cmp, fmt};
 
-use derive_more::Display;
+use derive_more::{Display, From};
 use derive_new::new;
 use tree_sitter as ts;
 
@@ -23,8 +23,6 @@ pub struct Module {
 }
 impl Display for Module {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, "module:")?;
-
         for (i, typedef) in self.typedefs.iter().enumerate() {
             write!(f, "type {i} {}:", typedef.loc)?;
 
@@ -33,6 +31,9 @@ impl Display for Module {
                     write!(f, " (record")?;
                     for (name, field) in &v.fields {
                         write!(f, "\n    {name}: {field}")?;
+                    }
+                    for (name, method) in &v.methods {
+                        write!(f, "\n    {name}(): {method}")?;
                     }
                     write!(f, ")")?;
                 }
@@ -98,7 +99,7 @@ pub struct Func {
     pub loc: Loc,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, From)]
 pub enum TypeDefBody {
     Record(RecordType),
 }
@@ -106,19 +107,28 @@ pub enum TypeDefBody {
 #[derive(Debug, Clone)]
 pub struct RecordType {
     pub fields: SortedMap<String, RecordField>,
+    pub methods: SortedMap<String, Method>,
 }
 
 #[derive(Debug, Clone, Display, new)]
 #[display("{ty} {loc}")]
 pub struct RecordField {
-    pub name: RecordFieldName,
+    pub name: NameWithLoc,
     pub ty: Type,
     pub loc: Loc,
 }
 
+#[derive(Debug, Clone, Display, new)]
+#[display("({}, {}) {loc}", func_ref.0, func_ref.1)]
+pub struct Method {
+    pub name: NameWithLoc,
+    pub func_ref: (usize, usize),
+    pub loc: Loc,
+}
+
 #[derive(Debug, Clone, new)]
-pub struct RecordFieldName {
-    pub name: String,
+pub struct NameWithLoc {
+    pub value: String,
     pub loc: Loc,
 }
 

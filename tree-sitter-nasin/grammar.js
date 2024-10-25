@@ -29,14 +29,8 @@ module.exports = grammar({
             seq(
                 field("name", $.ident),
                 $._func_params,
-                optional(
-                    seq(
-                        token_with_nl(":"),
-                        optional($._newline),
-                        field("ret_type", $._type_expr),
-                    ),
-                ),
-                optional($._func_directives),
+                optional($._func_ret_type),
+                repeat(field("directives", $.directive)),
                 optional(
                     seq(
                         token_with_nl("="),
@@ -52,7 +46,12 @@ module.exports = grammar({
                 sep(or_nl(",", $._newline), field("params", $.func_param)),
                 ")",
             ),
-        _func_directives: ($) => repeat1(field("directives", $.directive)),
+        _func_ret_type: ($) =>
+            seq(
+                token_with_nl(":"),
+                optional($._newline),
+                field("ret_type", $._type_expr),
+            ),
 
         func_param: ($) =>
             seq(
@@ -294,7 +293,13 @@ module.exports = grammar({
             seq(
                 "{",
                 optional($._newline),
-                sep(or_nl(",", $._newline), field("fields", $.record_type_field)),
+                sep(
+                    or_nl(",", $._newline),
+                    choice(
+                        field("fields", $.record_type_field),
+                        field("methods", $.method),
+                    ),
+                ),
                 "}",
             ),
         record_type_field: ($) =>
@@ -303,6 +308,15 @@ module.exports = grammar({
                 token_with_nl(":"),
                 optional($._newline),
                 field("type", $._type_expr),
+            ),
+        method: ($) =>
+            seq(
+                field("name", $.ident),
+                $._func_params,
+                optional($._func_ret_type),
+                token_with_nl("="),
+                optional($._newline),
+                field("return", $._expr),
             ),
 
         plus: () => token_with_nl("+"),

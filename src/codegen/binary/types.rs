@@ -52,6 +52,7 @@ impl RuntimeValue<'_> {
                 func.ins()
                     .stack_addr(obj_module.isa().pointer_type(), ss, 0)
             }
+            ValueSource::AppliedMethod(..) => todo!("function references"),
         }
     }
 }
@@ -67,6 +68,7 @@ pub enum ValueSource {
     Value(cl::Value),
     Data(cl::DataId),
     StackSlot(cl::StackSlot),
+    AppliedMethod(cl::Value, (usize, usize)),
 }
 impl ValueSource {
     pub fn serialize(
@@ -90,9 +92,10 @@ impl ValueSource {
             ValueSource::I64(n) => serialize_number!(n),
             ValueSource::F32(n) => serialize_number!(n.to_float()),
             ValueSource::F64(n) => serialize_number!(n.to_float()),
-            ValueSource::Value(_) | ValueSource::Data(_) | ValueSource::StackSlot(_) => {
-                return Err(())
-            }
+            ValueSource::Value(..)
+            | ValueSource::Data(..)
+            | ValueSource::StackSlot(..)
+            | ValueSource::AppliedMethod(..) => return Err(()),
         }
 
         Ok(())
@@ -178,6 +181,7 @@ pub fn get_type(
         | b::TypeBody::AnyFloat
         | b::TypeBody::Inferred(_) => panic!("Type must be resolved before codegen"),
         b::TypeBody::AnyOpaque => panic!("anyopaque cannot be used directly"),
+        b::TypeBody::Func(_) => todo!("first-class functions are not supported yet"),
     }
 }
 
@@ -218,5 +222,6 @@ pub fn get_size(
         | b::TypeBody::AnyFloat
         | b::TypeBody::Inferred(_) => panic!("Type must be resolved before codegen"),
         b::TypeBody::AnyOpaque => panic!("anyopaque cannot be used directly"),
+        b::TypeBody::Func(_) => todo!("first-class functions are not supported yet"),
     }
 }

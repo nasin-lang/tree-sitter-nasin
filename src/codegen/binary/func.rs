@@ -321,6 +321,39 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
                     ));
                 }
             }
+            b::InstrBody::IndirectCall(n) => {
+                let builder = expect_builder!(self);
+
+                let func = self.stack.pop();
+
+                let mut args = self
+                    .stack
+                    .pop_many(*n)
+                    .into_iter()
+                    .map(|arg| arg.add_to_func(&mut self.obj_module, builder))
+                    .collect_vec();
+
+                match &func.src {
+                    types::ValueSource::AppliedMethod(
+                        self_value,
+                        (mod_idx, func_idx),
+                    ) => {
+                        let func_id =
+                            self.funcs.get(&(*mod_idx, *func_idx)).unwrap().func_id;
+                        let func = &self.modules[*mod_idx].funcs[*func_idx];
+
+                        args.push(*self_value);
+
+                        if let Some(value) = self.call(func_id, &args) {
+                            self.stack.push(types::RuntimeValue::new(
+                                Cow::Borrowed(&func.ret),
+                                value.into(),
+                            ));
+                        }
+                    }
+                    _ => todo!("function as value"),
+                }
+            }
             b::InstrBody::GetField(name) => {
                 let builder = expect_builder!(self);
 
@@ -330,7 +363,7 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
                     ..
                 } = source.ty.as_ref()
                 else {
-                    panic!("type should be a record type");
+                    panic!("type should be a typeref");
                 };
                 let b::TypeDefBody::Record(rec) =
                     &self.modules[*mod_idx].typedefs[*ty_idx].body
@@ -338,19 +371,16 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
                     panic!("type should be a record type");
                 };
 
-                let field = rec
-                    .fields
-                    .get(name)
-                    .expect("field should be present in record");
-
                 let mut offset = 0;
-                for (field_name, field) in &rec.fields {
-                    if field_name == name {
+                let mut field = None;
+                for (k, v) in &rec.fields {
+                    if k == name {
+                        field = Some(v);
                         break;
                     }
-
-                    offset += get_type(&field.ty, self.modules, &self.obj_module).bytes();
+                    offset += get_type(&v.ty, self.modules, &self.obj_module).bytes();
                 }
+                let field = field.expect("field should be present in record");
 
                 let source_value = source.add_to_func(&mut self.obj_module, builder);
                 let value = builder.ins().load(
@@ -363,6 +393,37 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
                     Cow::Borrowed(&field.ty),
                     value.into(),
                 ));
+            }
+            b::InstrBody::GetMethod(name) => {
+                let builder = expect_builder!(self);
+
+                let source = self.stack.pop();
+                let b::Type {
+                    body: b::TypeBody::TypeRef(mod_idx, ty_idx),
+                    ..
+                } = source.ty.as_ref()
+                else {
+                    panic!("type should be a typeref");
+                };
+
+                let method = match &self.modules[*mod_idx].typedefs[*ty_idx].body {
+                    b::TypeDefBody::Record(rec) => rec
+                        .methods
+                        .iter()
+                        .find(|(k, _)| k == name)
+                        .map(|(_, v)| v)
+                        .expect("method should be present in record"),
+                };
+                let ty = source
+                    .ty
+                    .property(name, &self.modules)
+                    .expect("method should be present in type");
+
+                let value = source.add_to_func(&self.obj_module, builder);
+                self.stack.push(types::RuntimeValue::new(
+                    Cow::Owned(ty.as_ref().clone()),
+                    types::ValueSource::AppliedMethod(value, method.func_ref),
+                ))
             }
             b::InstrBody::ArrayLen | b::InstrBody::StrLen => {
                 let builder = expect_builder!(self);
@@ -438,8 +499,8 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
                     value.into(),
                 ));
             }
-            b::InstrBody::CompileError => {
-                panic!("never should try to compile CompileError")
+            b::InstrBody::GetProperty(..) | b::InstrBody::CompileError => {
+                panic!("never should try to compile {}", &instr)
             }
             b::InstrBody::Dup(..)
             | b::InstrBody::CreateNumber(..)
@@ -517,7 +578,8 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
                             | b::TypeBody::AnyOpaque
                             | b::TypeBody::AnyNumber
                             | b::TypeBody::AnySignedNumber
-                            | b::TypeBody::AnyFloat => panic!("Cannot parse {n} as {ty}"),
+                            | b::TypeBody::AnyFloat
+                            | b::TypeBody::Func(_) => panic!("Cannot parse {n} as {ty}"),
                         }
                     }
                     b::InstrBody::CreateBool(b) => Some(types::RuntimeValue::new(

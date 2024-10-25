@@ -1,9 +1,10 @@
-use std::collections::HashSet;
+use std::borrow::Cow;
 use std::fmt;
-use std::fmt::Display;
 use std::hash::Hash;
 
+use derive_more::Display;
 use derive_new::new;
+use itertools::{chain, izip, Itertools};
 
 use super::{Loc, Module, TypeDefBody};
 use crate::utils;
@@ -33,6 +34,7 @@ pub enum TypeBody {
     String(StringType),
     Array(ArrayType),
     Ptr(Box<Type>),
+    Func(Box<FuncType>),
     TypeRef(usize, usize),
 }
 impl Display for TypeBody {
@@ -55,10 +57,14 @@ impl Display for TypeBody {
             TypeBody::F32 => write!(f, "f32")?,
             TypeBody::F64 => write!(f, "f64")?,
             TypeBody::Inferred(v) => {
-                write!(f, "infered")?;
-                for (name, t) in &v.properties {
-                    write!(f, " .{}: {}", name, t)?;
+                write!(f, "infered {{")?;
+                for (name, t) in &v.members {
+                    write!(f, " {name}: {t}")?;
                 }
+                for (name, t) in &v.properties {
+                    write!(f, " .{name}: {t}")?;
+                }
+                write!(f, " }}")?;
             }
             TypeBody::String(v) => {
                 write!(f, "string")?;
@@ -73,9 +79,26 @@ impl Display for TypeBody {
                 }
             }
             TypeBody::Ptr(ty) => write!(f, "ptr {ty}")?,
+            TypeBody::Func(func) => {
+                write!(f, "func {}: {}", func.params.iter().join(", "), &func.ret)?
+            }
             TypeBody::TypeRef(mod_idx, ty_idx) => write!(f, "type {mod_idx}-{ty_idx}")?,
         }
         Ok(())
+    }
+}
+impl TypeBody {
+    pub fn unknown() -> Self {
+        TypeBody::Inferred(InferredType {
+            members: utils::SortedMap::new(),
+            properties: utils::SortedMap::new(),
+        })
+    }
+    pub fn is_unknown(&self) -> bool {
+        if let TypeBody::Inferred(i) = self {
+            return i.members.is_empty() && i.properties.is_empty();
+        }
+        false
     }
 }
 
@@ -104,19 +127,11 @@ macro_rules! body {
 }
 impl Type {
     pub fn unknown(loc: Option<Loc>) -> Self {
-        Type::new(
-            TypeBody::Inferred(InferredType {
-                properties: utils::SortedMap::new(),
-            }),
-            loc,
-        )
+        Type::new(TypeBody::unknown(), loc)
     }
 
     pub fn is_unknown(&self) -> bool {
-        if let TypeBody::Inferred(i) = &self.body {
-            return i.properties.is_empty();
-        }
-        false
+        self.body.is_unknown()
     }
 
     pub fn is_inferred(&self) -> bool {
@@ -171,9 +186,9 @@ impl Type {
         )
     }
 
-    pub fn property<'a>(&'a self, name: &str, modules: &'a [Module]) -> Option<&'a Type> {
+    pub fn field<'a>(&'a self, name: &str, modules: &'a [Module]) -> Option<&'a Type> {
         match &self.body {
-            TypeBody::Inferred(v) => v.properties.get(name),
+            TypeBody::Inferred(v) => v.members.get(name),
             TypeBody::TypeRef(mod_idx, ty_idx) => {
                 match &modules.get(*mod_idx)?.typedefs.get(*ty_idx)?.body {
                     TypeDefBody::Record(rec) => Some(&rec.fields.get(name)?.ty),
@@ -181,6 +196,67 @@ impl Type {
             }
             _ => None,
         }
+    }
+
+    pub fn method<'a>(
+        &'a self,
+        name: &str,
+        modules: &'a [Module],
+    ) -> Option<Cow<'a, Type>> {
+        match &self.body {
+            TypeBody::TypeRef(mod_idx, ty_idx) => {
+                let typedef = modules.get(*mod_idx)?.typedefs.get(*ty_idx)?;
+                let method = match &typedef.body {
+                    TypeDefBody::Record(rec) => rec.methods.get(name),
+                }?;
+                let func = &modules[method.func_ref.0].funcs[method.func_ref.1];
+                Some(Cow::Owned(Type::new(
+                    TypeBody::Func(Box::new(FuncType::new(
+                        func.params.iter().map(|p| p.ty.clone()).collect(),
+                        func.ret.clone(),
+                    ))),
+                    Some(method.loc),
+                )))
+            }
+            _ => None,
+        }
+    }
+
+    pub fn property<'a>(
+        &'a self,
+        name: &str,
+        modules: &'a [Module],
+    ) -> Option<Cow<'a, Type>> {
+        if let Some(ty) = self.method(name, modules) {
+            let TypeBody::Func(func) = &ty.body else {
+                return None;
+            };
+            let [params @ .., self_param] = &func.params[..] else {
+                return None;
+            };
+            // is static?
+            if self_param.body != self.body {
+                return None;
+            }
+            // functions without parameters are just values
+            if params.len() == 0 {
+                return Some(Cow::Owned(func.ret.clone()));
+            }
+            return Some(Cow::Owned(Type::new(
+                TypeBody::Func(Box::new(FuncType::new(
+                    params.to_vec(),
+                    func.ret.clone(),
+                ))),
+                ty.loc,
+            )));
+        }
+        if let TypeBody::Inferred(v) = &self.body {
+            return v.properties.get(name).map(|v| Cow::Borrowed(v));
+        }
+        if let Some(ty) = self.field(name, modules) {
+            return Some(Cow::Borrowed(ty));
+        }
+        None
     }
 
     pub fn intersection(&self, other: &Type, modules: &[Module]) -> Option<Type> {
@@ -218,31 +294,54 @@ impl Type {
             (body!(TypeBody::Ptr(a)), body!(TypeBody::Ptr(b))) => {
                 TypeBody::Ptr(a.intersection(&b, modules)?.into())
             }
+            (body!(TypeBody::Func(a)), body!(TypeBody::Func(b))) => {
+                TypeBody::Func(a.intersection(b, modules)?.into())
+            }
             (body!(TypeBody::Inferred(a)), body!(TypeBody::Inferred(b))) => {
-                let mut props = utils::SortedMap::new();
-                let prop_names: HashSet<_> =
-                    a.properties.keys().chain(b.properties.keys()).collect();
-                for prop_name in prop_names {
-                    let a_prop_ty = a.properties.get(prop_name);
-                    let b_prop_ty = b.properties.get(prop_name);
-                    let ty = match (a_prop_ty, b_prop_ty) {
-                        (Some(a_prop), Some(b_prop)) => {
-                            a_prop.intersection(b_prop, modules)?
-                        }
-                        (Some(prop), None) | (None, Some(prop)) => prop.clone(),
-                        (None, None) => return None, // this should never happen
-                    };
-                    props.insert(prop_name.to_string(), ty);
-                }
-                TypeBody::Inferred(InferredType { properties: props })
+                let fields = chain!(a.members.keys(), b.members.keys())
+                    .unique()
+                    .map(|name| {
+                        let ty = match (a.members.get(name), b.members.get(name)) {
+                            (Some(a_member), Some(b_member)) => {
+                                a_member.intersection(b_member, modules)?
+                            }
+                            unordered!(Some(field), None) => field.clone(),
+                            _ => unreachable!(),
+                        };
+                        Some((name.to_string(), ty))
+                    })
+                    .collect::<Option<_>>()?;
+                let methods = chain!(a.properties.keys(), b.properties.keys())
+                    .unique()
+                    .map(|name| {
+                        let method =
+                            match (a.properties.get(name), b.properties.get(name)) {
+                                (Some(a_method), Some(b_method)) => {
+                                    a_method.intersection(b_method, modules)?
+                                }
+                                unordered!(Some(method), None) => method.clone(),
+                                _ => unreachable!(),
+                            };
+                        Some((name.to_string(), method))
+                    })
+                    .collect::<Option<_>>()?;
+                TypeBody::Inferred(InferredType {
+                    members: fields,
+                    properties: methods,
+                })
             }
             unordered!(body!(TypeBody::Inferred(a)), b) => {
-                let has_all_properties = a.properties.iter().all(|(name, a_ty)| {
+                let has_all_members = a.members.iter().all(|(name, a_ty)| {
                     other
-                        .property(name, modules)
+                        .field(name, modules)
                         .is_some_and(|b_ty| a_ty.intersection(b_ty, modules).is_some())
                 });
-                if has_all_properties {
+                let has_all_props = a.properties.iter().all(|(name, a_ty)| {
+                    other
+                        .property(name, modules)
+                        .is_some_and(|b_ty| a_ty.intersection(&b_ty, modules).is_some())
+                });
+                if has_all_members && has_all_props {
                     b.body.clone()
                 } else {
                     return None;
@@ -265,7 +364,7 @@ impl Type {
         Some(Type::new(body, loc))
     }
 
-    pub fn common_type(&self, other: &Type, modules: &[Module]) -> Option<Type> {
+    pub fn union(&self, other: &Type, modules: &[Module]) -> Option<Type> {
         let body = match (self, other) {
             (body!(TypeBody::String(a)), body!(TypeBody::String(b))) => {
                 TypeBody::String(StringType {
@@ -274,41 +373,70 @@ impl Type {
             }
             (body!(TypeBody::Array(a)), body!(TypeBody::Array(b))) => {
                 TypeBody::Array(ArrayType {
-                    item: a.item.common_type(&b.item, modules)?.into(),
+                    item: a.item.union(&b.item, modules)?.into(),
                     len: if a.len == b.len { a.len.clone() } else { None },
                 })
             }
             (body!(TypeBody::Ptr(a)), body!(TypeBody::Ptr(b))) => {
-                TypeBody::Ptr(a.common_type(&b, modules)?.into())
+                TypeBody::Ptr(a.union(&b, modules)?.into())
+            }
+            (body!(TypeBody::Func(a)), body!(TypeBody::Func(b))) => {
+                TypeBody::Func(a.union(b, modules)?.into())
             }
             (body!(TypeBody::Inferred(a)), body!(TypeBody::Inferred(b))) => {
-                let mut props = utils::SortedMap::new();
-                let prop_names: HashSet<_> =
-                    a.properties.keys().chain(b.properties.keys()).collect();
-                for prop_name in prop_names {
-                    let a_prop_ty = a.properties.get(prop_name);
-                    let b_prop_ty = b.properties.get(prop_name);
-                    let ty = match (a_prop_ty, b_prop_ty) {
-                        (Some(a_prop), Some(b_prop)) => {
-                            a_prop.common_type(b_prop, modules)?
-                        }
-                        (Some(prop), None) | (None, Some(prop)) => prop.clone(),
-                        (None, None) => return None, // this should never happen
-                    };
-                    props.insert(prop_name.to_string(), ty);
-                }
-                TypeBody::Inferred(InferredType { properties: props })
+                let fields = chain!(a.members.keys(), b.members.keys())
+                    .unique()
+                    .map(|name| {
+                        let ty = match (a.members.get(name), b.members.get(name)) {
+                            (Some(a_member), Some(b_member)) => {
+                                a_member.union(b_member, modules)?
+                            }
+                            _ => unreachable!(),
+                        };
+                        Some((name.to_string(), ty))
+                    })
+                    .collect::<Option<_>>()?;
+                let props = chain!(a.properties.keys(), b.properties.keys())
+                    .unique()
+                    .filter_map(|name| {
+                        let prop = match (a.properties.get(name), b.properties.get(name))
+                        {
+                            (Some(a_prop), Some(b_prop)) => {
+                                match a_prop.union(b_prop, modules) {
+                                    Some(p) => p,
+                                    // If there's no common signature, so the type is
+                                    // impossible
+                                    None => return Some(None),
+                                }
+                            }
+                            // Omit field present in only one
+                            unordered!(Some(_), None) => return None,
+                            _ => unreachable!(),
+                        };
+                        Some(Some((name.to_string(), prop))) // that's so ugly
+                    })
+                    .collect::<Option<_>>()?;
+                TypeBody::Inferred(InferredType {
+                    members: fields,
+                    properties: props,
+                })
             }
             unordered!(body!(TypeBody::Inferred(a)), b) => {
-                for (prop_name, prop_ty) in &a.properties {
-                    if prop_ty
-                        .common_type(other.property(prop_name, modules)?, modules)
-                        .is_none()
-                    {
-                        return None;
-                    }
+                let has_all_members = a.members.iter().all(|(name, a_ty)| {
+                    other
+                        .field(name, modules)
+                        .is_some_and(|b_ty| a_ty.union(b_ty, modules).is_some())
+                });
+                let has_all_props = a.properties.iter().all(|(name, a_ty)| {
+                    other
+                        .property(name, modules)
+                        .is_some_and(|b_ty| a_ty.union(&b_ty, modules).is_some())
+                });
+                if has_all_members && has_all_props {
+                    b.body.clone()
+                } else {
+                    return None;
                 }
-                return Some(b.clone());
             }
             (a, b) => {
                 if &a.body == &b.body {
@@ -338,45 +466,7 @@ impl Hash for Type {
 }
 impl Display for Type {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "(")?;
-        match &self.body {
-            TypeBody::Bool => write!(f, "bool")?,
-            TypeBody::AnyNumber => write!(f, "AnyNumber")?,
-            TypeBody::AnySignedNumber => write!(f, "AnySignedNumber")?,
-            TypeBody::AnyFloat => write!(f, "AnyFloat")?,
-            TypeBody::AnyOpaque => write!(f, "anyopaque")?,
-            TypeBody::I8 => write!(f, "i8")?,
-            TypeBody::I16 => write!(f, "i16")?,
-            TypeBody::I32 => write!(f, "i32")?,
-            TypeBody::I64 => write!(f, "i64")?,
-            TypeBody::U8 => write!(f, "u8")?,
-            TypeBody::U16 => write!(f, "u16")?,
-            TypeBody::U32 => write!(f, "u32")?,
-            TypeBody::U64 => write!(f, "u64")?,
-            TypeBody::USize => write!(f, "usize")?,
-            TypeBody::F32 => write!(f, "f32")?,
-            TypeBody::F64 => write!(f, "f64")?,
-            TypeBody::Inferred(v) => {
-                write!(f, "infered")?;
-                for (name, t) in &v.properties {
-                    write!(f, " .{}: {}", name, t)?;
-                }
-            }
-            TypeBody::String(v) => {
-                write!(f, "string")?;
-                if let Some(len) = v.len {
-                    write!(f, " {}", len)?;
-                }
-            }
-            TypeBody::Array(v) => {
-                write!(f, "array {}", v.item)?;
-                if let Some(len) = v.len {
-                    write!(f, " {}", len)?;
-                }
-            }
-            TypeBody::Ptr(ty) => write!(f, "ptr {ty}")?,
-            TypeBody::TypeRef(mod_idx, ty_idx) => write!(f, "type {mod_idx}-{ty_idx}")?,
-        }
+        write!(f, "({}", &self.body)?;
         if let Some(loc) = &self.loc {
             write!(f, " {loc}")?;
         }
@@ -387,13 +477,20 @@ impl Display for Type {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct InferredType {
+    /// Fields used in the constructors
+    pub members: utils::SortedMap<String, Type>,
+    /// Fields or applied methods
     pub properties: utils::SortedMap<String, Type>,
 }
 
 impl InferredType {
-    pub fn new(properties: impl IntoIterator<Item = (String, Type)>) -> Self {
+    pub fn new(
+        members: impl IntoIterator<Item = (String, Type)>,
+        props: impl IntoIterator<Item = (String, Type)>,
+    ) -> Self {
         Self {
-            properties: properties.into_iter().collect(),
+            members: members.into_iter().collect(),
+            properties: props.into_iter().collect(),
         }
     }
 }
@@ -407,4 +504,34 @@ pub struct StringType {
 pub struct ArrayType {
     pub item: Box<Type>,
     pub len: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Display, new)]
+#[display("func({}): {ret}", params.iter().join(", "))]
+pub struct FuncType {
+    pub params: Vec<Type>,
+    pub ret: Type,
+}
+impl FuncType {
+    pub fn intersection(&self, other: &FuncType, modules: &[Module]) -> Option<FuncType> {
+        if self.params.len() != other.params.len() {
+            return None;
+        }
+        let params = izip!(&self.params, &other.params)
+            .map(|(a_param, b_param)| a_param.union(b_param, modules))
+            .collect::<Option<_>>()?;
+        Some(FuncType::new(
+            params,
+            self.ret.intersection(&other.ret, modules)?,
+        ))
+    }
+    pub fn union(&self, other: &FuncType, modules: &[Module]) -> Option<FuncType> {
+        if self.params.len() != other.params.len() {
+            return None;
+        }
+        let params = izip!(&self.params, &other.params)
+            .map(|(a_param, b_param)| a_param.intersection(b_param, modules))
+            .collect::<Option<_>>()?;
+        Some(FuncType::new(params, self.ret.union(&other.ret, modules)?))
+    }
 }

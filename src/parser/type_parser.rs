@@ -19,7 +19,7 @@ pub struct TypeParser<'a> {
 }
 
 impl<'a> TypeParser<'a> {
-    pub fn parse_type<'t>(&self, node: ts::Node<'t>) -> b::Type {
+    pub fn parse_type_expr<'t>(&self, node: ts::Node<'t>) -> b::Type {
         let body = match node.kind() {
             "ident" => {
                 let ident = node.get_text(&self.ctx.source(self.src_idx).content().text);
@@ -30,12 +30,12 @@ impl<'a> TypeParser<'a> {
                             errors::TypeNotFound::new(ident.to_string()).into(),
                             b::Loc::from_node(self.src_idx, &node),
                         ));
-                        b::TypeBody::Inferred(b::InferredType::new([]))
+                        b::TypeBody::unknown()
                     }
                 }
             }
             "array_type" => {
-                let item_ty = self.parse_type(node.required_field("item_type"));
+                let item_ty = self.parse_type_expr(node.required_field("item_type"));
                 let len = node.field("length").map(|n| {
                     n.get_text(&self.ctx.source(self.src_idx).content().text)
                         .parse::<usize>()
@@ -51,7 +51,7 @@ impl<'a> TypeParser<'a> {
 
                 let args = node
                     .iter_field("args")
-                    .map(|arg_node| self.parse_type(arg_node))
+                    .map(|arg_node| self.parse_type_expr(arg_node))
                     .collect_vec();
 
                 match name {
@@ -68,37 +68,67 @@ impl<'a> TypeParser<'a> {
         b::Type::new(body, Some(b::Loc::from_node(self.src_idx, &node)))
     }
 
-    pub fn add_type<'t>(&mut self, name: &'a str, node: ts::Node<'t>) {
+    pub fn parse_type_decl<'t>(
+        &mut self,
+        name: String,
+        node: ts::Node<'t>,
+        methods_idx: HashMap<&str, (usize, usize)>,
+    ) {
         assert_eq!(node.kind(), "type_decl");
 
         let body_node = node.required_field("body");
-        let fields = match body_node.kind() {
-            "record_type" => body_node
-                .iter_field("fields")
-                .map(|field_node| {
-                    let name_node = field_node.required_field("name");
-                    let name = name_node
-                        .get_text(&self.ctx.source(self.src_idx).content().text)
-                        .to_string();
-                    (
-                        name.clone(),
-                        b::RecordField::new(
-                            b::RecordFieldName::new(
-                                name,
+        let (fields, methods) = match body_node.kind() {
+            "record_type" => {
+                let fields = body_node
+                    .iter_field("fields")
+                    .map(|field_node| {
+                        let name_node = field_node.required_field("name");
+                        let name = name_node
+                            .get_text(&self.ctx.source(self.src_idx).content().text)
+                            .to_string();
+                        let record_field = b::RecordField::new(
+                            b::NameWithLoc::new(
+                                name.clone(),
                                 b::Loc::from_node(self.src_idx, &name_node),
                             ),
-                            self.parse_type(field_node.required_field("type")),
+                            self.parse_type_expr(field_node.required_field("type")),
                             b::Loc::from_node(self.src_idx, &field_node),
-                        ),
-                    )
-                })
-                .collect(),
+                        );
+                        (name, record_field)
+                    })
+                    .collect();
+
+                let methods = body_node
+                    .iter_field("methods")
+                    .map(|method_node| {
+                        let name_node = method_node.required_field("name");
+                        let name = name_node
+                            .get_text(&self.ctx.source(self.src_idx).content().text)
+                            .to_string();
+                        let func_ref = methods_idx
+                            .get(&name as &str)
+                            .expect("index of method's function should already be known");
+
+                        let method = b::Method::new(
+                            b::NameWithLoc::new(
+                                name.clone(),
+                                b::Loc::from_node(self.src_idx, &name_node),
+                            ),
+                            *func_ref,
+                            b::Loc::from_node(self.src_idx, &method_node),
+                        );
+                        (name, method)
+                    })
+                    .collect();
+
+                (fields, methods)
+            }
             v => panic!("Unexpected type body kind: {v}"),
         };
 
         let value = b::TypeDef {
-            name: name.to_string(),
-            body: b::TypeDefBody::Record(b::RecordType { fields }),
+            name,
+            body: b::TypeDefBody::Record(b::RecordType { fields, methods }),
             loc: b::Loc::from_node(self.src_idx, &node),
         };
         self.idents.insert(

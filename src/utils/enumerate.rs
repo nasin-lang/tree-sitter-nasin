@@ -19,6 +19,20 @@ macro_rules! number_enum {
                 }
             }
         }
+        impl PartialOrd for $name {
+            fn partial_cmp(&self, other: &$name) -> Option<std::cmp::Ordering> {
+                let self_n: $ty = (*self).into();
+                let other_n: $ty = (*other).into();
+                self_n.partial_cmp(&other_n)
+            }
+        }
+        impl Ord for $name {
+            fn cmp(&self, other: &$name) -> std::cmp::Ordering {
+                let self_n: $ty = (*self).into();
+                let other_n: $ty = (*other).into();
+                self_n.cmp(&other_n)
+            }
+        }
     };
 }
 

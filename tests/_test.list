@@ -6,3 +6,4 @@
 ./bin/nasin b tests/if_returning.nsn -o tests/out/if_returning && ./tests/out/if_returning
 ./bin/nasin b tests/record_type.nsn -o tests/out/record_type && ./tests/out/record_type
 ./bin/nasin b tests/recursion.nsn -o tests/out/recursion && ./tests/out/recursion
+./bin/nasin b tests/method.nsn -o tests/out/method && ./tests/out/method

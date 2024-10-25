@@ -1,0 +1,13 @@
+type Foo {
+    data: str
+
+    print(text, self: Self) =
+        let _ = print(self.data)
+        let _ = print(text)
+        true
+}
+
+msg: Foo = {data="Hello from record"}
+
+main =
+    msg.print("Hi method")
