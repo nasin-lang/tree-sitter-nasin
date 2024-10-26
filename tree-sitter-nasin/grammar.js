@@ -9,6 +9,7 @@ const PREC = {
     SUM: iota++,
     MUL: iota++,
     POW: iota++,
+    TYPE_BIND: iota++,
     UNARY: iota++,
     ATOM: iota++,
     GET_PROP: iota++,
@@ -139,6 +140,7 @@ module.exports = grammar({
                 $.record_lit,
                 $.un_op,
                 $.bin_op,
+                $.type_bind,
                 $.block,
                 $.if,
             ),
@@ -160,6 +162,17 @@ module.exports = grammar({
                 bin_op(PREC.MUL, seq($.slash, optional($._newline)), $._expr),
                 bin_op(PREC.MUL, seq($.percent, optional($._newline)), $._expr),
                 bin_op(PREC.POW, seq($.double_star, optional($._newline)), $._expr),
+            ),
+
+        type_bind: ($) =>
+            prec.left(
+                PREC.TYPE_BIND,
+                seq(
+                    field("value", $._expr),
+                    $.colon,
+                    optional($._newline),
+                    field("type", $._type_expr),
+                ),
             ),
 
         call: ($) => prec.left(PREC.CALL, seq(field("callee", $._expr), $._call_args)),
@@ -337,6 +350,7 @@ module.exports = grammar({
         gt_eq: () => token_with_nl(">="),
         lt_eq: () => token_with_nl("<="),
         dot: () => token_with_nl("."),
+        colon: () => token_with_nl(":"),
 
         ident: ($) => prec(PREC.ATOM, $._ident),
         _ident: () => /[\p{L}_][\p{L}\p{Nd}_]*/u,

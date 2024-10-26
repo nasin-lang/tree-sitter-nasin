@@ -515,6 +515,12 @@ impl<'a> TypeChecker<'a> {
                 stack.push(entry);
                 Some(entry)
             }
+            b::InstrBody::Type(ty) => {
+                assert!(stack.scope_len() >= 1);
+                let entry = *stack.get(0).unwrap();
+                self.add_constraint(entry, Constraint::Is(ty.clone()));
+                Some(entry)
+            }
             b::InstrBody::CompileError => {
                 Some(self.add_entry_from_type(b::Type::unknown(None), instr.loc))
             }
@@ -575,20 +581,26 @@ impl<'a> TypeChecker<'a> {
         let head = entries[0];
         visited.insert(head);
 
-        for idx in &entries[1..] {
-            if visited.contains(idx) {
+        let mut merge_with = entries[1..].to_vec();
+
+        while let Some(idx) = merge_with.pop() {
+            if visited.contains(&idx) {
                 continue;
             }
 
-            self.entries[*idx].same_of.insert(head);
+            if self.entries[idx].same_of.len() > 0 {
+                merge_with.extend(self.entries[idx].same_of.iter().cloned());
+            }
+
+            self.entries[idx].same_of.insert(head);
             let constraints =
-                mem::replace(&mut self.entries[*idx].constraints, HashSet::new());
+                mem::replace(&mut self.entries[idx].constraints, HashSet::new());
 
             for constraint in constraints {
                 self.add_constraint(head, constraint);
             }
 
-            visited.insert(*idx);
+            visited.insert(idx);
         }
 
         head

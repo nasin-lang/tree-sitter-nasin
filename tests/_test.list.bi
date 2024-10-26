@@ -1,4 +1,4 @@
-:i count 9
+:i count 10
 :b shell 69
 ./bin/nasin b tests/hello.nsn -o tests/out/hello && ./tests/out/hello
 :i returncode 0
@@ -7,6 +7,15 @@ Compiled program to tests/out/hello
 Hello
 
 :b stderr 0
+
+:b shell 81
+./bin/nasin b tests/operators.nsn -o tests/out/operators && ./tests/out/operators
+:i returncode 70
+:b stdout 40
+Compiled program to tests/out/operators
+
+:b stderr 29
+sanity check, this will fail
 
 :b shell 102
 ./bin/nasin b tests/func_declaration.nsn -o tests/out/func_declaration && ./tests/out/func_declaration
@@ -37,23 +46,29 @@ Hello from global
 
 :b shell 60
 ./bin/nasin b tests/if.nsn -o tests/out/if && ./tests/out/if
-:i returncode 0
-:b stdout 54
-Compiled program to tests/out/if
-it's true
-it's false
+:i returncode 1
+:b stdout 0
 
-:b stderr 0
+:b stderr 117
+tests/if.nsn:2:13
+  |
+2 | false_msg = "it's false"
+  |             ^
+error: Expected type string 10, found string 9
+
 
 :b shell 90
 ./bin/nasin b tests/if_returning.nsn -o tests/out/if_returning && ./tests/out/if_returning
-:i returncode 0
-:b stdout 64
-Compiled program to tests/out/if_returning
-it's true
-it's false
+:i returncode 1
+:b stdout 0
 
-:b stderr 0
+:b stderr 127
+tests/if_returning.nsn:2:13
+  |
+2 | false_msg = "it's false"
+  |             ^
+error: Expected type string 10, found string 9
+
 
 :b shell 87
 ./bin/nasin b tests/record_type.nsn -o tests/out/record_type && ./tests/out/record_type

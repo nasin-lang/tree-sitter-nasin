@@ -168,6 +168,16 @@ impl<'a, 't> ExprParser<'a, 't> {
                 let right = self.add_expr_node(node.required_field("right"), false);
                 self.add_bin_op(op, left, right)
             }
+            "type_bind" => {
+                let mut value =
+                    self.add_expr_node(node.required_field("value"), returning);
+                let ty = self
+                    .module_parser
+                    .types
+                    .parse_type_expr(node.required_field("type"));
+                value.ty = Some(ty);
+                value
+            }
             "get_prop" => {
                 let parent = self.add_expr_node(node.required_field("parent"), false);
                 let prop_name_node = node.required_field("prop_name");
@@ -351,6 +361,12 @@ impl<'a, 't> ExprParser<'a, 't> {
                     );
                 }
             }
+            if let Some(ty) = &value.ty {
+                self.instrs.push(b::Instr::new(
+                    b::InstrBody::Type(ty.clone()),
+                    ty.loc.unwrap_or(value.loc),
+                ));
+            }
         }
     }
 
@@ -511,8 +527,11 @@ impl<'a, 't> ExprParser<'a, 't> {
     fn add_stmt_node(&mut self, node: ts::Node<'t>) {
         match node.kind() {
             "let_stmt" => {
-                let value = self.add_expr_node(node.required_field("value"), false);
+                let mut value = self.add_expr_node(node.required_field("value"), false);
                 let pat_node = node.required_field("pat");
+                if let Some(ty_node) = node.field("type") {
+                    value.ty = Some(self.module_parser.types.parse_type_expr(ty_node));
+                }
                 match pat_node.kind() {
                     "ident" => {
                         let ident = pat_node

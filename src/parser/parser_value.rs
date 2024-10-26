@@ -16,6 +16,8 @@ pub enum ValueBody {
 #[derive(Debug, Clone, Hash, Eq, PartialEq, new)]
 pub struct Value {
     pub body: ValueBody,
+    #[new(default)]
+    pub ty: Option<b::Type>,
     pub loc: b::Loc,
 }
 impl Value {

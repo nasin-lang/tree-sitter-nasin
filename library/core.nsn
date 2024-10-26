@@ -2,7 +2,26 @@ STDIN_FILENO:  i32 = 0
 STDOUT_FILENO: i32 = 1
 STDERR_FILENO: i32 = 2
 
+EX_OK:          i32 = 0 
+EX__BASE:       i32 = 64
+EX_USAGE:       i32 = 64
+EX_DATAERR:     i32 = 65
+EX_NOINPUT:     i32 = 66
+EX_NOUSER:      i32 = 67
+EX_NOHOST:      i32 = 68
+EX_UNAVAILABLE: i32 = 69
+EX_SOFTWARE:    i32 = 70
+EX_OSERR:       i32 = 71
+EX_OSFILE:      i32 = 72
+EX_CANTCREAT:   i32 = 73
+EX_IOERR:       i32 = 74
+EX_TEMPFAIL:    i32 = 75
+EX_PROTOCOL:    i32 = 76
+EX_NOPERM:      i32 = 77
+EX_CONFIG:      i32 = 78
+
 _write(f: i32, buf: Ptr(u8), len: usize): i32 @extern("write")
+_exit(code: i32): never @extern("exit")
 
 NL = "\n"
 
@@ -15,3 +34,10 @@ eprint(message: str): bool =
     let _ = _write(STDERR_FILENO, @str_ptr(message, 0), @str_len(message))
     let _ = _write(STDERR_FILENO, @str_ptr(NL, 0), @str_len(NL))
     true
+
+assert(cond: bool, desc: str): bool =
+    if not cond then
+        let _ = eprint(desc)
+        _exit(EX_SOFTWARE)
+    else
+        true

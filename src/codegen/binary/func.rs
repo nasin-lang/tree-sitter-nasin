@@ -154,13 +154,13 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
                         };
                         func.ins().icmp(cond, lhs, rhs)
                     } else if ty.is_float() {
-                        let cond = match (&instr.body, ty.is_sint()) {
-                            (b::InstrBody::Eq, _) => cl::FloatCC::Equal,
-                            (b::InstrBody::Neq, _) => cl::FloatCC::NotEqual,
-                            (b::InstrBody::Gt, true) => cl::FloatCC::GreaterThan,
-                            (b::InstrBody::Lt, true) => cl::FloatCC::LessThan,
-                            (b::InstrBody::Gte, true) => cl::FloatCC::GreaterThanOrEqual,
-                            (b::InstrBody::Lte, true) => cl::FloatCC::LessThanOrEqual,
+                        let cond = match &instr.body {
+                            b::InstrBody::Eq => cl::FloatCC::Equal,
+                            b::InstrBody::Neq => cl::FloatCC::NotEqual,
+                            b::InstrBody::Gt => cl::FloatCC::GreaterThan,
+                            b::InstrBody::Lt => cl::FloatCC::LessThan,
+                            b::InstrBody::Gte => cl::FloatCC::GreaterThanOrEqual,
+                            b::InstrBody::Lte => cl::FloatCC::LessThanOrEqual,
                             _ => unreachable!(),
                         };
                         func.ins().fcmp(cond, lhs, rhs)
@@ -522,6 +522,7 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
                     value.into(),
                 ));
             }
+            b::InstrBody::Type(_) => {}
             b::InstrBody::GetProperty(..) | b::InstrBody::CompileError => {
                 panic!("never should try to compile {}", &instr)
             }

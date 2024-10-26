@@ -1,4 +1,5 @@
 ./bin/nasin b tests/hello.nsn -o tests/out/hello && ./tests/out/hello
+./bin/nasin b tests/operators.nsn -o tests/out/operators && ./tests/out/operators
 ./bin/nasin b tests/func_declaration.nsn -o tests/out/func_declaration && ./tests/out/func_declaration
 ./bin/nasin b tests/global_string.nsn -o tests/out/global_string && ./tests/out/global_string
 ./bin/nasin b tests/global_string_from_func.nsn -o tests/out/global_string_from_func && ./tests/out/global_string_from_func

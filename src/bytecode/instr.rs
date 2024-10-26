@@ -48,6 +48,8 @@ pub enum InstrBody {
     StrLen,
     StrPtr(u64),
 
+    Type(Type),
+
     CompileError,
 }
 
@@ -101,6 +103,7 @@ impl Display for Instr {
             InstrBody::ArrayPtr(idx) => write!(f, "array_ptr {idx}")?,
             InstrBody::StrLen => write!(f, "str_len")?,
             InstrBody::StrPtr(idx) => write!(f, "str_ptr {idx}")?,
+            InstrBody::Type(ty) => write!(f, "type {ty}")?,
             InstrBody::CompileError => write!(f, "compile_error")?,
         }
         write!(f, " {}", &self.loc)?;
