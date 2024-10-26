@@ -11,6 +11,8 @@ use crate::utils;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TypeBody {
+    Void,
+    Never,
     Bool,
     AnyOpaque,
     // FIXME: use interface/trait for this
@@ -40,6 +42,8 @@ pub enum TypeBody {
 impl Display for TypeBody {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            TypeBody::Void => write!(f, "void")?,
+            TypeBody::Never => write!(f, "never")?,
             TypeBody::Bool => write!(f, "bool")?,
             TypeBody::AnyNumber => write!(f, "AnyNumber")?,
             TypeBody::AnySignedNumber => write!(f, "AnySignedNumber")?,
@@ -261,6 +265,11 @@ impl Type {
 
     pub fn intersection(&self, other: &Type, modules: &[Module]) -> Option<Type> {
         let body = match (self, other) {
+            // INFO: This is not correct, an intersection with `never` and `a` should be
+            // `never`, not `a`, but due to the way that `if` branches are checked, this
+            // was necessary, and I reckon it won't be all that harmful. Maybe I'll fix it
+            // later when it becomes a problem
+            unordered!(body!(TypeBody::Never), body!(a)) => a.clone(),
             number!(U8) => TypeBody::U8,
             number!(U16) => TypeBody::U16,
             number!(U32) => TypeBody::U32,
@@ -366,6 +375,7 @@ impl Type {
 
     pub fn union(&self, other: &Type, modules: &[Module]) -> Option<Type> {
         let body = match (self, other) {
+            unordered!(body!(TypeBody::Never), body!(a)) => a.clone(),
             (body!(TypeBody::String(a)), body!(TypeBody::String(b))) => {
                 TypeBody::String(StringType {
                     len: if a.len == b.len { a.len.clone() } else { None },

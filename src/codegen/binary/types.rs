@@ -180,7 +180,9 @@ pub fn get_type(
         | b::TypeBody::AnySignedNumber
         | b::TypeBody::AnyFloat
         | b::TypeBody::Inferred(_) => panic!("Type must be resolved before codegen"),
-        b::TypeBody::AnyOpaque => panic!("anyopaque cannot be used directly"),
+        b::TypeBody::Void => panic!("void type cannot be used directly"),
+        b::TypeBody::Never => panic!("never type cannot be used directly"),
+        b::TypeBody::AnyOpaque => panic!("anyopaque type cannot be used directly"),
         b::TypeBody::Func(_) => todo!("first-class functions are not supported yet"),
     }
 }
@@ -193,6 +195,7 @@ pub fn get_size(
     let ptr = obj_module.isa().pointer_bytes() as usize;
 
     match &ty.body {
+        b::TypeBody::Void | b::TypeBody::Never => 0,
         b::TypeBody::String(s) => s.len.map_or(ptr, |len| len + 1),
         b::TypeBody::Array(a) => a.len.map_or(ptr, |len| {
             len * get_type(&a.item, modules, obj_module).bytes() as usize

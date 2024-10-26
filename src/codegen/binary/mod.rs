@@ -181,11 +181,13 @@ impl BinaryCodegen<'_> {
                 &self.obj_module,
             )));
         }
-        sig.returns.push(cl::AbiParam::new(types::get_type(
-            &decl.ret,
-            self.modules,
-            &self.obj_module,
-        )));
+        if !matches!(&decl.ret.body, b::TypeBody::Void | b::TypeBody::Never) {
+            sig.returns.push(cl::AbiParam::new(types::get_type(
+                &decl.ret,
+                self.modules,
+                &self.obj_module,
+            )));
+        }
 
         let user_func_name =
             cl::UserFuncName::user(FuncNS::User.into(), self.next_func_id);

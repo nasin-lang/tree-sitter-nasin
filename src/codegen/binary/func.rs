@@ -169,6 +169,29 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
                     }
                 });
             }
+            b::InstrBody::Not => {
+                let builder = expect_builder!(self);
+                let cond = self.stack.pop().add_to_func(&mut self.obj_module, builder);
+
+                let next_block = builder.create_block();
+                builder.append_block_param(next_block, cl::types::I8);
+
+                let v_true = builder.ins().iconst(cl::types::I8, 1);
+                let v_false = builder.ins().iconst(cl::types::I8, 0);
+
+                builder
+                    .ins()
+                    .brif(cond, next_block, &[v_false], next_block, &[v_true]);
+                builder.switch_to_block(next_block);
+
+                let block_params = builder.block_params(next_block);
+                assert!(block_params.len() == 1);
+
+                self.stack.push(types::RuntimeValue::new(
+                    Cow::Owned(b::Type::new(b::TypeBody::Bool, None)),
+                    block_params[0].into(),
+                ));
+            }
             b::InstrBody::If(ty) => {
                 let builder = expect_builder!(self);
                 let cond = self.stack.pop().add_to_func(&mut self.obj_module, builder);
@@ -569,7 +592,9 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
                             }
                             b::TypeBody::F32 => parse_num!(f32, F32),
                             b::TypeBody::F64 => parse_num!(f64, F64),
-                            b::TypeBody::Bool
+                            b::TypeBody::Void
+                            | b::TypeBody::Never
+                            | b::TypeBody::Bool
                             | b::TypeBody::String(_)
                             | b::TypeBody::TypeRef(_, _)
                             | b::TypeBody::Array(_)

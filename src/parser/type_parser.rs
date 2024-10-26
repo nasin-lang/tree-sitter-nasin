@@ -141,6 +141,8 @@ impl<'a> TypeParser<'a> {
 
 fn default_idents() -> HashMap<String, b::TypeBody> {
     HashMap::from([
+        ("void".to_string(), b::TypeBody::Void),
+        ("never".to_string(), b::TypeBody::Never),
         ("bool".to_string(), b::TypeBody::Bool),
         ("i8".to_string(), b::TypeBody::I8),
         ("i16".to_string(), b::TypeBody::I16),

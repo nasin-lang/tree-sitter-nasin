@@ -32,6 +32,7 @@ pub enum InstrBody {
     Gte,
     Lt,
     Lte,
+    Not,
 
     Call(usize, usize),
     IndirectCall(usize),
@@ -88,6 +89,7 @@ impl Display for Instr {
             InstrBody::Gte => write!(f, "gte")?,
             InstrBody::Lt => write!(f, "lt")?,
             InstrBody::Lte => write!(f, "lte")?,
+            InstrBody::Not => write!(f, "not")?,
             InstrBody::Call(mod_idx, func_idx) => write!(f, "call {mod_idx}-{func_idx}")?,
             InstrBody::IndirectCall(n) => write!(f, "indirect_call {n}")?,
             InstrBody::If(ty) => write!(f, "if {ty}")?,

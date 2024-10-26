@@ -157,6 +157,11 @@ impl<'a, 't> ExprParser<'a, 't> {
                     Value::new(ValueBody::CompileError, loc)
                 }
             }
+            "un_op" => {
+                let op = node.required_field("op");
+                let operand = self.add_expr_node(node.required_field("operand"), false);
+                self.add_un_op(op, operand)
+            }
             "bin_op" => {
                 let op = node.required_field("op");
                 let left = self.add_expr_node(node.required_field("left"), false);
@@ -356,6 +361,17 @@ impl<'a, 't> ExprParser<'a, 't> {
         }
         self.stack.push(());
         self.stack.len() - 1
+    }
+
+    fn add_un_op(&mut self, op: ts::Node, operand: Value) -> Value {
+        self.push_values([&operand], false);
+        let body = match op.kind() {
+            "not" => b::InstrBody::Not,
+            kind => panic!("Unhandled unary operator: {kind}"),
+        };
+        let loc = b::Loc::from_node(self.src_idx, &op).merge(&operand.loc);
+        let idx = self.add_instr_with_result(1, b::Instr::new(body, loc));
+        Value::new(ValueBody::Local(idx), loc)
     }
 
     fn add_bin_op(&mut self, op: ts::Node, left: Value, right: Value) -> Value {

@@ -9,6 +9,7 @@ const PREC = {
     SUM: iota++,
     MUL: iota++,
     POW: iota++,
+    UNARY: iota++,
     ATOM: iota++,
     GET_PROP: iota++,
     KEYWORD: iota++,
@@ -136,10 +137,14 @@ module.exports = grammar({
                 $.call,
                 $.macro,
                 $.record_lit,
+                $.un_op,
                 $.bin_op,
                 $.block,
                 $.if,
             ),
+
+        un_op: ($) =>
+            choice(un_op(PREC.UNARY, seq($.not, optional($._newline)), $._expr)),
 
         bin_op: ($) =>
             choice(
@@ -338,6 +343,7 @@ module.exports = grammar({
 
         true: () => prec(PREC.KEYWORD, "true"),
         false: () => prec(PREC.KEYWORD, "false"),
+        not: () => prec(PREC.KEYWORD, "not"),
 
         number: () => prec(PREC.ATOM, /(\d(_?\d)*)?\.?\d(_?\d)*/),
 
@@ -353,6 +359,16 @@ module.exports = grammar({
 function token_with_nl(token) {
     token = token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
     return new RegExp(`[ \\t\\f\\n\\r]*${token}`)
+}
+
+/**
+ * Creates a rule for a unary operation
+ * @param {number} level
+ * @param {RuleOrLiteral} operator
+ * @param {RuleOrLiteral} operand
+ */
+function un_op(level, operator, operand) {
+    return prec(level, seq(field("op", operator), field("operand", operand)))
 }
 
 /**

@@ -299,6 +299,17 @@ impl<'a> TypeChecker<'a> {
                 stack.push(entry);
                 Some(entry)
             }
+            b::InstrBody::Not => {
+                assert!(stack.len() >= 1);
+                let entry = stack.pop();
+                // FIXME: use interface/trait
+                self.add_constraint(
+                    entry,
+                    Constraint::Is(b::Type::new(b::TypeBody::Bool, None)),
+                );
+                stack.push(entry);
+                Some(entry)
+            }
             b::InstrBody::Eq
             | b::InstrBody::Neq
             | b::InstrBody::Gt
