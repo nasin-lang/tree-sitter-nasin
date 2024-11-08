@@ -51,7 +51,7 @@ impl<'a> Globals<'a> {
                 FuncCodegen::new(self.modules, None, obj_module, s, HashMap::new());
 
             for instr in &global.body {
-                if let Some(value) = codegen.value_from_instr(instr) {
+                if let Some(value) = codegen.value_from_instr(instr, mod_idx) {
                     codegen.stack.push(value);
                 } else {
                     let (data_id, module) = codegen

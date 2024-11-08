@@ -153,9 +153,17 @@ impl<'a> TypeChecker<'a> {
                 self.add_constraint(v, Constraint::Is(ty));
                 stack.push(v);
             }
-            b::InstrBody::CreateNumber(ty, _) => {
+            b::InstrBody::CreateNumber(num) => {
                 let v = instr.results[0];
-                self.add_constraint(v, Constraint::Is(ty.clone()));
+                // TODO: use better type
+                let ty_body = if num.contains('.') {
+                    b::TypeBody::AnyFloat
+                } else if num.starts_with('-') {
+                    b::TypeBody::AnySignedNumber
+                } else {
+                    b::TypeBody::AnyNumber
+                };
+                self.add_constraint(v, Constraint::Is(b::Type::new(ty_body, None)));
                 stack.push(v);
             }
             b::InstrBody::CreateString(x) => {
@@ -167,10 +175,9 @@ impl<'a> TypeChecker<'a> {
                 self.add_constraint(v, Constraint::Is(ty.clone()));
                 stack.push(v);
             }
-            b::InstrBody::CreateArray(ty, len) => {
+            b::InstrBody::CreateArray(len) => {
                 assert!(stack.len() >= *len);
                 let v = instr.results[0];
-                self.add_constraint(v, Constraint::Is(ty.clone()));
                 if *len > 0 {
                     let items = stack.pop_many(*len);
                     self.merge_types(&items);
@@ -188,11 +195,10 @@ impl<'a> TypeChecker<'a> {
                 }
                 stack.push(v);
             }
-            b::InstrBody::CreateRecord(ty, fields) => {
+            b::InstrBody::CreateRecord(fields) => {
                 assert!(stack.len() >= fields.len());
                 let v = instr.results[0];
                 let values = stack.pop_many(fields.len());
-                self.add_constraint(v, Constraint::Is(ty.clone()));
                 self.add_constraint(
                     v,
                     Constraint::Members(
@@ -329,7 +335,7 @@ impl<'a> TypeChecker<'a> {
 
                 stack.push(result);
             }
-            b::InstrBody::Loop(_, n) => {
+            b::InstrBody::Loop(n) => {
                 todo!()
                 //assert!(stack.len() >= *n);
                 //let loop_args = stack.pop_many(*n);
@@ -864,28 +870,6 @@ impl<'a> TypeChecker<'a> {
                 let module = &self.ctx.lock_modules_mut()[self.mod_idx];
                 get_body(module)[i].results.clone()
             };
-
-            {
-                let modules = &mut self.ctx.lock_modules_mut();
-
-                let results_tys = results
-                    .iter()
-                    .map(|v| modules[self.mod_idx].values[*v].ty.clone())
-                    .collect_vec();
-
-                let instr = &mut get_body_mut(&mut modules[self.mod_idx])[i];
-                match &mut instr.body {
-                    b::InstrBody::CreateNumber(ty, _)
-                    | b::InstrBody::CreateArray(ty, _)
-                    | b::InstrBody::CreateRecord(ty, _)
-                    | b::InstrBody::Loop(ty, _) => {
-                        assert!(results_tys.len() == 1);
-                        *ty = results_tys.into_iter().next().unwrap();
-                        continue;
-                    }
-                    _ => {}
-                }
-            }
 
             let get_property_key = {
                 let modules = &self.ctx.lock_modules()[self.mod_idx];

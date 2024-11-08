@@ -63,7 +63,7 @@ impl<'a, 't> ExprParser<'a, 't> {
             self.instrs.insert(
                 0,
                 b::Instr::new(
-                    b::InstrBody::Loop(b::Type::unknown(None), func.params_desc.len()),
+                    b::InstrBody::Loop(func.params_desc.len()),
                     self.instrs[0].loc,
                 ),
             );
@@ -106,16 +106,9 @@ impl<'a, 't> ExprParser<'a, 't> {
                 for item in &items {
                     self.push_value_ref(&item, None);
                 }
-                let ty = b::Type::new(
-                    b::TypeBody::Array(b::ArrayType::new(
-                        b::Type::unknown(None).into(),
-                        Some(items.len()),
-                    )),
-                    None,
-                );
                 self.stack.pop_many(items.len());
                 let (idx, v) = self.add_instr_with_result_and_push(
-                    b::Instr::new(b::InstrBody::CreateArray(ty, items.len()), loc),
+                    b::Instr::new(b::InstrBody::CreateArray(items.len()), loc),
                     target,
                 );
                 ValueRef::new(ValueRefBody::Value(idx, v), loc)
@@ -142,17 +135,10 @@ impl<'a, 't> ExprParser<'a, 't> {
                     .keys()
                     .map(|k| (k.clone(), b::Type::unknown(None)))
                     .collect();
-                let ty = b::Type::new(
-                    b::TypeBody::Inferred(b::InferredType {
-                        properties: members.clone(),
-                        members,
-                    }),
-                    None,
-                );
                 self.stack.pop_many(fields.len());
                 let (idx, v) = self.add_instr_with_result_and_push(
                     b::Instr::new(
-                        b::InstrBody::CreateRecord(ty, fields.keys().cloned().collect()),
+                        b::InstrBody::CreateRecord(fields.keys().cloned().collect()),
                         loc,
                     ),
                     target,
@@ -359,22 +345,8 @@ impl<'a, 't> ExprParser<'a, 't> {
                 );
             }
             ValueRefBody::Number(v) => {
-                // TODO: use better type
-                let ty_body = if v.contains('.') {
-                    b::TypeBody::AnyFloat
-                } else if v.starts_with('-') {
-                    b::TypeBody::AnySignedNumber
-                } else {
-                    b::TypeBody::AnyNumber
-                };
                 self.add_instr_with_result_and_push(
-                    b::Instr::new(
-                        b::InstrBody::CreateNumber(
-                            b::Type::new(ty_body, None),
-                            v.clone(),
-                        ),
-                        value.loc,
-                    ),
+                    b::Instr::new(b::InstrBody::CreateNumber(v.clone()), value.loc),
                     target,
                 );
             }

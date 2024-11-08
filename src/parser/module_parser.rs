@@ -150,7 +150,7 @@ impl<'a, 't> ModuleParser<'a, 't> {
             let mut value = ValueRef::new(ValueRefBody::Global(mod_idx, i), item.loc);
             if item.body.len() == 1 {
                 match &item.body[0].body {
-                    b::InstrBody::CreateNumber(_, v) => {
+                    b::InstrBody::CreateNumber(v) => {
                         value.body = ValueRefBody::Number(v.clone());
                     }
                     b::InstrBody::CreateBool(v) => {

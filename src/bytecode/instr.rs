@@ -16,10 +16,10 @@ pub enum InstrBody {
     GetField(String),
     GetMethod(String),
     CreateBool(bool),
-    CreateNumber(Type, String),
+    CreateNumber(String),
     CreateString(String),
-    CreateArray(Type, usize),
-    CreateRecord(Type, Vec<String>),
+    CreateArray(usize),
+    CreateRecord(Vec<String>),
 
     Add,
     Sub,
@@ -40,7 +40,7 @@ pub enum InstrBody {
 
     If(ValueIdx),
     Else,
-    Loop(Type, usize),
+    Loop(usize),
     End,
     Continue,
 
@@ -64,13 +64,13 @@ impl Display for InstrBody {
             InstrBody::GetField(field) => write!(f, "get_field .{field}")?,
             InstrBody::GetMethod(field) => write!(f, "get_method .{field}")?,
             InstrBody::CreateBool(v) => write!(f, "create_bool {v}")?,
-            InstrBody::CreateNumber(ty, v) => write!(f, "create_number {ty} {v}")?,
+            InstrBody::CreateNumber(v) => write!(f, "create_number {v}")?,
             InstrBody::CreateString(v) => {
                 write!(f, "create_string {}", utils::encode_string_lit(v))?
             }
-            InstrBody::CreateArray(ty, len) => write!(f, "create_array {ty} {len}")?,
-            InstrBody::CreateRecord(ty, fields) => {
-                write!(f, "create_record {ty}")?;
+            InstrBody::CreateArray(len) => write!(f, "create_array {len}")?,
+            InstrBody::CreateRecord(fields) => {
+                write!(f, "create_record")?;
                 for field in fields {
                     write!(f, " .{field}")?;
                 }
@@ -91,7 +91,7 @@ impl Display for InstrBody {
             InstrBody::IndirectCall(n) => write!(f, "indirect_call {n}")?,
             InstrBody::If(v) => write!(f, "if -> v{v}")?,
             InstrBody::Else => write!(f, "else")?,
-            InstrBody::Loop(ty, n) => write!(f, "loop {ty} {n}")?,
+            InstrBody::Loop(n) => write!(f, "loop {n}")?,
             InstrBody::End => write!(f, "end")?,
             InstrBody::Continue => write!(f, "continue")?,
             InstrBody::ArrayLen => write!(f, "array_len")?,

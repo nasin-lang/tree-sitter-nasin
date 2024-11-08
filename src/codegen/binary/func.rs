@@ -57,7 +57,7 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
             return;
         }
 
-        if let Some(value) = self.value_from_instr(instr) {
+        if let Some(value) = self.value_from_instr(instr, mod_idx) {
             self.stack.push(value);
             return;
         }
@@ -241,45 +241,46 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
 
                 builder.switch_to_block(else_block);
             }
-            b::InstrBody::Loop(ty, n) => {
-                let builder = expect_builder!(self);
-                let args = self.stack.pop_many(*n);
-                let mut args_values = vec![];
-                let mut loop_params = vec![];
-
-                let loop_block = builder.create_block();
-                for arg in &args {
-                    let value = builder.append_block_param(
-                        loop_block,
-                        get_type(&arg.ty, self.modules, &self.obj_module),
-                    );
-                    args_values.push(arg.add_to_func(&mut self.obj_module, builder));
-                    loop_params
-                        .push(types::RuntimeValue::new(arg.ty.clone(), value.into()))
-                }
-
-                builder.ins().jump(loop_block, &args_values);
-                builder.switch_to_block(loop_block);
-
-                let next_block = builder.create_block();
-                builder.append_block_param(
-                    next_block,
-                    get_type(ty, self.modules, &self.obj_module),
-                );
-
-                self.stack.get_scope_mut().payload.block = Some(next_block);
-
-                let scope = self.stack.create_scope(ScopePayload {
-                    start_block: Some(loop_block),
-                    block: Some(loop_block),
-                    next_block: Some(next_block),
-                    ty: Some(Cow::Borrowed(ty)),
-                    branches: vec![],
-                });
-                scope.is_loop = true;
-                scope.loop_arity = *n;
-
-                self.stack.extend(loop_params);
+            b::InstrBody::Loop(n) => {
+                todo!();
+                //let builder = expect_builder!(self);
+                //let args = self.stack.pop_many(*n);
+                //let mut args_values = vec![];
+                //let mut loop_params = vec![];
+                //
+                //let loop_block = builder.create_block();
+                //for arg in &args {
+                //    let value = builder.append_block_param(
+                //        loop_block,
+                //        get_type(&arg.ty, self.modules, &self.obj_module),
+                //    );
+                //    args_values.push(arg.add_to_func(&mut self.obj_module, builder));
+                //    loop_params
+                //        .push(types::RuntimeValue::new(arg.ty.clone(), value.into()))
+                //}
+                //
+                //builder.ins().jump(loop_block, &args_values);
+                //builder.switch_to_block(loop_block);
+                //
+                //let next_block = builder.create_block();
+                //builder.append_block_param(
+                //    next_block,
+                //    get_type(ty, self.modules, &self.obj_module),
+                //);
+                //
+                //self.stack.get_scope_mut().payload.block = Some(next_block);
+                //
+                //let scope = self.stack.create_scope(ScopePayload {
+                //    start_block: Some(loop_block),
+                //    block: Some(loop_block),
+                //    next_block: Some(next_block),
+                //    ty: Some(Cow::Borrowed(ty)),
+                //    branches: vec![],
+                //});
+                //scope.is_loop = true;
+                //scope.loop_arity = *n;
+                //
+                //self.stack.extend(loop_params);
             }
             b::InstrBody::End => {
                 let builder = expect_builder!(self);
@@ -560,12 +561,16 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
     pub fn value_from_instr(
         &mut self,
         instr: &'a b::Instr,
+        mod_idx: usize,
     ) -> Option<types::RuntimeValue<'a>> {
         utils::replace_with(self, |mut this| {
             let v = 'match_b: {
                 match &instr.body {
                     b::InstrBody::Dup(n) => Some(this.stack.get(*n).unwrap().clone()),
-                    b::InstrBody::CreateNumber(ty, n) => {
+                    b::InstrBody::CreateNumber(n) => {
+                        let module = &self.modules[mod_idx];
+                        let ty = &module.values[instr.results[0]].ty;
+
                         macro_rules! parse_num {
                             ($ty:ty, $variant:ident) => {{
                                 let value: $ty = n.parse().unwrap();
@@ -627,7 +632,10 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
                             data.into(),
                         ))
                     }
-                    b::InstrBody::CreateArray(ty, n) => {
+                    b::InstrBody::CreateArray(n) => {
+                        let module = &self.modules[mod_idx];
+                        let ty = &module.values[instr.results[0]].ty;
+
                         let values = this.stack.pop_many(*n);
                         let (data, module) =
                             this.globals.data_for_array(values.clone(), this.obj_module);
@@ -641,7 +649,10 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
                         };
                         Some(types::RuntimeValue::new(Cow::Borrowed(ty), src))
                     }
-                    b::InstrBody::CreateRecord(ty, fields) => {
+                    b::InstrBody::CreateRecord(fields) => {
+                        let module = &self.modules[mod_idx];
+                        let ty = &module.values[instr.results[0]].ty;
+
                         let values = types::tuple_from_record(
                             izip!(fields, this.stack.pop_many(fields.len())),
                             ty,
