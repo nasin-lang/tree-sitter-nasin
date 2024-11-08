@@ -1,13 +1,13 @@
 use std::collections::HashMap;
 
 use derive_new::new;
-use itertools::enumerate;
+use itertools::{enumerate, multizip, Itertools};
 use tree_sitter as ts;
 
-use super::parser_value::Value;
+use super::parser_value::ValueRef;
 use super::type_parser::TypeParser;
 use crate::parser::expr_parser::ExprParser;
-use crate::parser::parser_value::ValueBody;
+use crate::parser::parser_value::ValueRefBody;
 use crate::utils::TreeSitterUtils;
 use crate::{bytecode as b, context, utils};
 
@@ -22,7 +22,9 @@ pub struct ModuleParser<'a, 't> {
     #[new(default)]
     pub funcs: Vec<DeclaredFunc<'t>>,
     #[new(default)]
-    pub idents: HashMap<String, Value>,
+    pub values: Vec<b::Value>,
+    #[new(default)]
+    pub idents: HashMap<String, ValueRef>,
     ctx: &'a context::BuildContext,
     src_idx: usize,
     mod_idx: usize,
@@ -35,12 +37,13 @@ impl<'a, 't> ModuleParser<'a, 't> {
 
         for i in 0..self.globals.len() {
             let value_node = self.globals[i].value_node.clone();
+            let v = self.globals[i].value;
 
             let mut value_parser =
                 ExprParser::new(self.ctx, self, src_idx, mod_idx, None, []);
 
-            let value = value_parser.add_expr_node(value_node, true);
-            value_parser.push_values([&value], true);
+            let value = value_parser.add_expr_node(value_node, Some(v), true);
+            value_parser.push_value_ref(&value, Some(v));
 
             (self, self.globals[i].global.body) = value_parser.finish();
         }
@@ -49,13 +52,14 @@ impl<'a, 't> ModuleParser<'a, 't> {
             let Some(value_node) = self.funcs[i].value_node else {
                 continue;
             };
-            let params_names = self.funcs[i].params_names.clone();
+            let params = self.funcs[i].params.clone();
+            let v = self.funcs[i].ret;
 
             let mut value_parser =
-                ExprParser::new(self.ctx, self, src_idx, mod_idx, Some(i), params_names);
+                ExprParser::new(self.ctx, self, src_idx, mod_idx, Some(i), params);
 
-            let value = value_parser.add_expr_node(value_node, true);
-            value_parser.push_values([&value], true);
+            let value = value_parser.add_expr_node(value_node, Some(v), true);
+            value_parser.push_value_ref(&value, Some(v));
 
             (self, self.funcs[i].func.body) = value_parser.finish();
         }
@@ -64,6 +68,7 @@ impl<'a, 't> ModuleParser<'a, 't> {
         module.typedefs = self.types.typedefs;
         module.globals = self.globals.into_iter().map(|x| x.global).collect();
         module.funcs = self.funcs.into_iter().map(|x| x.func).collect();
+        module.values = self.values;
     }
     pub fn add_root(&mut self, node: ts::Node<'t>) {
         node.of_kind("root");
@@ -134,7 +139,7 @@ impl<'a, 't> ModuleParser<'a, 't> {
             if item.name.starts_with('_') {
                 continue;
             }
-            let value = Value::new(ValueBody::Func(mod_idx, i), item.loc);
+            let value = ValueRef::new(ValueRefBody::Func(mod_idx, i), item.loc);
             self.idents.insert(item.name.clone(), value);
         }
 
@@ -142,14 +147,14 @@ impl<'a, 't> ModuleParser<'a, 't> {
             if item.name.starts_with('_') {
                 continue;
             }
-            let mut value = Value::new(ValueBody::Global(mod_idx, i), item.loc);
+            let mut value = ValueRef::new(ValueRefBody::Global(mod_idx, i), item.loc);
             if item.body.len() == 1 {
                 match &item.body[0].body {
                     b::InstrBody::CreateNumber(_, v) => {
-                        value.body = ValueBody::Number(v.clone());
+                        value.body = ValueRefBody::Number(v.clone());
                     }
                     b::InstrBody::CreateBool(v) => {
-                        value.body = ValueBody::Bool(*v);
+                        value.body = ValueRefBody::Bool(*v);
                     }
                     _ => {}
                 }
@@ -157,11 +162,20 @@ impl<'a, 't> ModuleParser<'a, 't> {
             self.idents.insert(item.name.clone(), value);
         }
     }
+    pub fn create_value(&mut self, ty: b::Type, loc: b::Loc) -> b::ValueIdx {
+        self.values.push(b::Value::new(ty, loc));
+        self.values.len() - 1
+    }
 
     fn add_func(&mut self, name: String, node: ts::Node<'t>) -> usize {
         assert!(matches!(node.kind(), "func_decl" | "method"));
 
-        let (params, params_names): (Vec<_>, Vec<_>) = node
+        let (params_desc, params, params_names, params_locs): (
+            Vec<_>,
+            Vec<_>,
+            Vec<_>,
+            Vec<_>,
+        ) = node
             .iter_field("params")
             .map(|param_node| {
                 let param_name_node = param_node.required_field("pat").of_kind("ident");
@@ -173,18 +187,18 @@ impl<'a, 't> ModuleParser<'a, 't> {
                     None => b::Type::unknown(None),
                 };
 
+                let loc = b::Loc::from_node(self.src_idx, &param_node);
                 (
                     b::Param {
-                        ty: param_ty,
-                        loc: b::Loc::from_node(self.src_idx, &param_node),
+                        ty: param_ty.clone(),
+                        loc,
                     },
-                    (
-                        param_name.to_string(),
-                        b::Loc::from_node(self.src_idx, &param_name_node),
-                    ),
+                    self.create_value(param_ty, loc),
+                    param_name.to_string(),
+                    b::Loc::from_node(self.src_idx, &param_name_node),
                 )
             })
-            .unzip();
+            .multiunzip();
 
         let ret_ty = match node.field("ret_type") {
             Some(ty_node) => self.types.parse_type_expr(ty_node),
@@ -215,10 +229,13 @@ impl<'a, 't> ModuleParser<'a, 't> {
         }
 
         let loc = b::Loc::from_node(self.src_idx, &node);
+        let ret = self.create_value(ret_ty.clone(), loc);
         let func = b::Func {
             name,
-            params,
-            ret: ret_ty,
+            params_desc,
+            ret_ty,
+            params: params.clone(),
+            ret,
             extn,
             body: vec![],
             loc,
@@ -226,12 +243,13 @@ impl<'a, 't> ModuleParser<'a, 't> {
         let func_idx = self.funcs.len();
         self.idents.insert(
             func.name.clone(),
-            Value::new(ValueBody::Func(self.mod_idx, func_idx), loc),
+            ValueRef::new(ValueRefBody::Func(self.mod_idx, func_idx), loc),
         );
         self.funcs.push(DeclaredFunc {
             func,
             value_node: node.field("return"),
-            params_names,
+            params: multizip((params_names, params, params_locs)).collect(),
+            ret,
         });
 
         func_idx
@@ -245,23 +263,26 @@ impl<'a, 't> ModuleParser<'a, 't> {
         };
 
         let is_entry_point = name == "main";
+        let value = self.create_value(ty.clone(), b::Loc::from_node(self.src_idx, &node));
         let global = b::Global {
             name,
             ty,
+            value,
             body: vec![],
             is_entry_point,
             loc: b::Loc::from_node(self.src_idx, &node),
         };
         self.idents.insert(
             global.name.clone(),
-            Value::new(
-                ValueBody::Global(self.mod_idx, self.globals.len()),
+            ValueRef::new(
+                ValueRefBody::Global(self.mod_idx, self.globals.len()),
                 b::Loc::from_node(self.src_idx, &node),
             ),
         );
         self.globals.push(DeclaredGlobal {
             global,
             value_node: node.required_field("value"),
+            value,
         });
     }
 }
@@ -269,10 +290,12 @@ impl<'a, 't> ModuleParser<'a, 't> {
 pub struct DeclaredFunc<'t> {
     pub func: b::Func,
     value_node: Option<ts::Node<'t>>,
-    params_names: Vec<(String, b::Loc)>,
+    params: Vec<(String, b::ValueIdx, b::Loc)>,
+    ret: b::ValueIdx,
 }
 
 pub struct DeclaredGlobal<'t> {
     pub global: b::Global,
     value_node: ts::Node<'t>,
+    value: b::ValueIdx,
 }

@@ -2,8 +2,9 @@ use std::fmt;
 use std::fmt::Display;
 
 use derive_new::new;
+use itertools::Itertools;
 
-use super::{Loc, Type};
+use super::{Loc, Type, ValueIdx};
 use crate::utils;
 
 #[derive(Debug, Clone)]
@@ -37,7 +38,7 @@ pub enum InstrBody {
     Call(usize, usize),
     IndirectCall(usize),
 
-    If(Type),
+    If(ValueIdx),
     Else,
     Loop(Type, usize),
     End,
@@ -52,15 +53,9 @@ pub enum InstrBody {
 
     CompileError,
 }
-
-#[derive(Debug, Clone, new)]
-pub struct Instr {
-    pub body: InstrBody,
-    pub loc: Loc,
-}
-impl Display for Instr {
+impl Display for InstrBody {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match &self.body {
+        match self {
             InstrBody::Dup(v) => write!(f, "dup ^{v}")?,
             InstrBody::GetGlobal(mod_idx, global_idx) => {
                 write!(f, "get_global {mod_idx}-{global_idx}")?
@@ -94,7 +89,7 @@ impl Display for Instr {
             InstrBody::Not => write!(f, "not")?,
             InstrBody::Call(mod_idx, func_idx) => write!(f, "call {mod_idx}-{func_idx}")?,
             InstrBody::IndirectCall(n) => write!(f, "indirect_call {n}")?,
-            InstrBody::If(ty) => write!(f, "if {ty}")?,
+            InstrBody::If(v) => write!(f, "if -> v{v}")?,
             InstrBody::Else => write!(f, "else")?,
             InstrBody::Loop(ty, n) => write!(f, "loop {ty} {n}")?,
             InstrBody::End => write!(f, "end")?,
@@ -106,7 +101,33 @@ impl Display for Instr {
             InstrBody::Type(ty) => write!(f, "type {ty}")?,
             InstrBody::CompileError => write!(f, "compile_error")?,
         }
-        write!(f, " {}", &self.loc)?;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, new)]
+pub struct Instr {
+    pub body: InstrBody,
+    pub loc: Loc,
+    #[new(default)]
+    pub results: Vec<ValueIdx>,
+}
+impl Instr {
+    pub fn with_results(mut self, results: impl IntoIterator<Item = ValueIdx>) -> Self {
+        self.results = results.into_iter().collect();
+        self
+    }
+}
+impl Display for Instr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.results.len() > 0 {
+            write!(
+                f,
+                "{} = ",
+                self.results.iter().map(|n| format!("v{n}")).join(", ")
+            )?;
+        }
+        write!(f, "{} {}", &self.body, &self.loc)?;
         Ok(())
     }
 }

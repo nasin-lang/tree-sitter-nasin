@@ -56,6 +56,11 @@ impl<V, S> ValueStack<V, S> {
         self.stack.split_off(at)
     }
 
+    pub fn pop_all(&mut self) -> Vec<V> {
+        let scope = self.scopes.pop().unwrap();
+        self.stack.split_off(min(scope.start, self.stack.len()))
+    }
+
     pub fn dup(&mut self, pos: usize)
     where
         V: Clone,

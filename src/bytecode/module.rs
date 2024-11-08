@@ -1,18 +1,23 @@
 use std::collections::HashSet;
+use std::iter::zip;
 use std::path::PathBuf;
 use std::{cmp, fmt};
 
-use derive_more::{Display, From};
+use derive_more::{Debug, Display, From};
 use derive_new::new;
+use itertools::Itertools;
 use tree_sitter as ts;
 
 use super::instr::*;
 use super::ty::*;
+use super::value::*;
 use crate::utils;
 use crate::utils::SortedMap;
 
 #[derive(Debug, Clone, new)]
 pub struct Module {
+    #[new(default)]
+    pub values: Vec<Value>,
     #[new(default)]
     pub typedefs: Vec<TypeDef>,
     #[new(default)]
@@ -23,6 +28,24 @@ pub struct Module {
 }
 impl Display for Module {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for (i, value) in self.values.iter().enumerate() {
+            write!(f, "v{i}: {}", &value.ty)?;
+            if let Some(redirects_to) = &value.redirects_to {
+                write!(f, " = v{redirects_to}")?;
+            } else if value.same_type_of.len() > 0 {
+                write!(
+                    f,
+                    ", type of {}",
+                    value
+                        .same_type_of
+                        .iter()
+                        .map(|v| format!("v{v}"))
+                        .join(" | ")
+                )?;
+            }
+            writeln!(f, " {}", value.loc)?;
+        }
+
         for (i, typedef) in self.typedefs.iter().enumerate() {
             write!(f, "type {i} {}:", typedef.loc)?;
 
@@ -43,7 +66,11 @@ impl Display for Module {
         }
 
         for (i, global) in self.globals.iter().enumerate() {
-            writeln!(f, "global {i} {}: {}", global.loc, global.ty)?;
+            writeln!(
+                f,
+                "global {i} {}: -> v{} {}",
+                global.loc, global.value, global.ty
+            )?;
             write_body(f, &global.body, 4)?;
         }
 
@@ -54,15 +81,15 @@ impl Display for Module {
                 write!(f, " (extern {})", utils::encode_string_lit(name))?;
             }
 
-            if func.params.len() > 0 {
+            if func.params_desc.len() > 0 {
                 write!(f, " (params")?;
-                for param in &func.params {
-                    write!(f, " ({} {})", param.ty, param.loc)?;
+                for (v, param_desc) in zip(&func.params, &func.params_desc) {
+                    write!(f, " (v{v} {} {})", param_desc.ty, param_desc.loc)?;
                 }
                 write!(f, ")")?;
             }
 
-            writeln!(f, " (returns {})", &func.ret)?;
+            writeln!(f, " -> v{} {}", &func.ret, &func.ret_ty)?;
 
             write_body(f, &func.body, 4)?;
         }
@@ -84,6 +111,7 @@ pub struct TypeDef {
 pub struct Global {
     pub name: String,
     pub ty: Type,
+    pub value: ValueIdx,
     pub body: Vec<Instr>,
     pub is_entry_point: bool,
     pub loc: Loc,
@@ -92,8 +120,10 @@ pub struct Global {
 #[derive(Debug, Clone)]
 pub struct Func {
     pub name: String,
-    pub params: Vec<Param>,
-    pub ret: Type,
+    pub params_desc: Vec<Param>,
+    pub ret_ty: Type,
+    pub params: Vec<ValueIdx>,
+    pub ret: ValueIdx,
     pub body: Vec<Instr>,
     pub extn: Option<Extern>,
     pub loc: Loc,
@@ -150,6 +180,7 @@ pub struct Source {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Display)]
 #[display(":{start_line}:{start_col}-{end_line}:{end_col}")]
+#[debug(":{start_line}:{start_col}-{end_line}:{end_col}")]
 pub struct Loc {
     pub source_idx: usize,
     pub start_line: usize,

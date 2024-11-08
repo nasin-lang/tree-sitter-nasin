@@ -6,18 +6,18 @@ use itertools::Itertools;
 use tree_sitter as ts;
 
 use super::module_parser::ModuleParser;
-use super::parser_value::{Value, ValueBody};
+use super::parser_value::{ValueRef, ValueRefBody};
 use crate::bytecode::Loc;
 use crate::utils::{SortedMap, TreeSitterUtils, ValueStack};
 use crate::{bytecode as b, context, errors, utils};
 
-type Stack = ValueStack<(), ScopePayload>;
+type Stack = ValueStack<b::ValueIdx, ScopePayload>;
 
 pub struct ExprParser<'a, 't> {
     pub module_parser: ModuleParser<'a, 't>,
     pub instrs: Vec<b::Instr>,
     pub is_loop: bool,
-    pub idents: HashMap<String, Value>,
+    pub idents: HashMap<String, ValueRef>,
     ctx: &'a context::BuildContext,
     src_idx: usize,
     mod_idx: usize,
@@ -32,14 +32,14 @@ impl<'a, 't> ExprParser<'a, 't> {
         src_idx: usize,
         mod_idx: usize,
         func_idx: Option<usize>,
-        inputs: impl IntoIterator<Item = (String, b::Loc)>,
+        inputs: impl IntoIterator<Item = (String, b::ValueIdx, b::Loc)>,
     ) -> Self {
         let mut idents = module_parser.idents.clone();
 
         let mut stack = Stack::new(ScopePayload::new(idents.clone()));
-        for (i, (ident, loc)) in inputs.into_iter().enumerate() {
-            idents.insert(ident, Value::new(ValueBody::Local(i), loc));
-            stack.push(());
+        for (i, (ident, v, loc)) in inputs.into_iter().enumerate() {
+            idents.insert(ident, ValueRef::new(ValueRefBody::Value(i, v), loc));
+            stack.push(v);
         }
 
         ExprParser {
@@ -63,7 +63,7 @@ impl<'a, 't> ExprParser<'a, 't> {
             self.instrs.insert(
                 0,
                 b::Instr::new(
-                    b::InstrBody::Loop(b::Type::unknown(None), func.params.len()),
+                    b::InstrBody::Loop(b::Type::unknown(None), func.params_desc.len()),
                     self.instrs[0].loc,
                 ),
             );
@@ -73,32 +73,39 @@ impl<'a, 't> ExprParser<'a, 't> {
         (self.module_parser, self.instrs)
     }
 
-    pub fn add_expr_node(&mut self, node: ts::Node<'t>, returning: bool) -> Value {
+    pub fn add_expr_node(
+        &mut self,
+        node: ts::Node<'t>,
+        target: Option<b::ValueIdx>,
+        returning: bool,
+    ) -> ValueRef {
         let loc = Loc::from_node(self.src_idx, &node);
         match node.kind() {
-            "true" => Value::new(ValueBody::Bool(true), loc),
-            "false" => Value::new(ValueBody::Bool(false), loc),
+            "true" => ValueRef::new(ValueRefBody::Bool(true), loc),
+            "false" => ValueRef::new(ValueRefBody::Bool(false), loc),
             "number" => {
                 let number = node.get_text(&self.ctx.source(self.src_idx).content().text);
-                Value::new(ValueBody::Number(number.to_string()), loc)
+                ValueRef::new(ValueRefBody::Number(number.to_string()), loc)
             }
             "string_lit" => {
                 let string = utils::decode_string_lit(
                     node.required_field("content")
                         .get_text(&self.ctx.source(self.src_idx).content().text),
                 );
-                let local_idx = self.add_instr_with_result(
-                    0,
+                let (idx, v) = self.add_instr_with_result_and_push(
                     b::Instr::new(b::InstrBody::CreateString(string), loc),
+                    target,
                 );
-                Value::new(ValueBody::Local(local_idx), loc)
+                ValueRef::new(ValueRefBody::Value(idx, v), loc)
             }
             "array_lit" => {
                 let items: Vec<_> = node
                     .iter_field("items")
-                    .map(|item_node| self.add_expr_node(item_node, false))
+                    .map(|item_node| self.add_expr_node(item_node, None, false))
                     .collect();
-                self.push_values(&items, false);
+                for item in &items {
+                    self.push_value_ref(&item, None);
+                }
                 let ty = b::Type::new(
                     b::TypeBody::Array(b::ArrayType::new(
                         b::Type::unknown(None).into(),
@@ -106,11 +113,12 @@ impl<'a, 't> ExprParser<'a, 't> {
                     )),
                     None,
                 );
-                let local_idx = self.add_instr_with_result(
-                    items.len(),
+                self.stack.pop_many(items.len());
+                let (idx, v) = self.add_instr_with_result_and_push(
                     b::Instr::new(b::InstrBody::CreateArray(ty, items.len()), loc),
+                    target,
                 );
-                Value::new(ValueBody::Local(local_idx), loc)
+                ValueRef::new(ValueRefBody::Value(idx, v), loc)
             }
             "record_lit" => {
                 let fields: utils::SortedMap<_, _> = node
@@ -119,12 +127,17 @@ impl<'a, 't> ExprParser<'a, 't> {
                         let field_name = field_node
                             .required_field("name")
                             .get_text(&self.ctx.source(self.src_idx).content().text);
-                        let field_value =
-                            self.add_expr_node(field_node.required_field("value"), false);
+                        let field_value = self.add_expr_node(
+                            field_node.required_field("value"),
+                            None,
+                            false,
+                        );
                         (field_name.to_string(), field_value)
                     })
                     .collect();
-                self.push_values(fields.values(), false);
+                for value in fields.values() {
+                    self.push_value_ref(value, None);
+                }
                 let members: SortedMap<_, _> = fields
                     .keys()
                     .map(|k| (k.clone(), b::Type::unknown(None)))
@@ -136,14 +149,15 @@ impl<'a, 't> ExprParser<'a, 't> {
                     }),
                     None,
                 );
-                let local_idx = self.add_instr_with_result(
-                    fields.len(),
+                self.stack.pop_many(fields.len());
+                let (idx, v) = self.add_instr_with_result_and_push(
                     b::Instr::new(
                         b::InstrBody::CreateRecord(ty, fields.keys().cloned().collect()),
                         loc,
                     ),
+                    target,
                 );
-                Value::new(ValueBody::Local(local_idx), loc)
+                ValueRef::new(ValueRefBody::Value(idx, v), loc)
             }
             "ident" => {
                 let ident = node.get_text(&self.ctx.source(self.src_idx).content().text);
@@ -154,23 +168,24 @@ impl<'a, 't> ExprParser<'a, 't> {
                         errors::ValueNotFound::new(ident.to_string()).into(),
                         loc,
                     ));
-                    Value::new(ValueBody::CompileError, loc)
+                    ValueRef::new(ValueRefBody::CompileError, loc)
                 }
             }
             "un_op" => {
                 let op = node.required_field("op");
-                let operand = self.add_expr_node(node.required_field("operand"), false);
-                self.add_un_op(op, operand)
+                let operand =
+                    self.add_expr_node(node.required_field("operand"), None, false);
+                self.add_un_op(op, operand, target)
             }
             "bin_op" => {
                 let op = node.required_field("op");
-                let left = self.add_expr_node(node.required_field("left"), false);
-                let right = self.add_expr_node(node.required_field("right"), false);
-                self.add_bin_op(op, left, right)
+                let left = self.add_expr_node(node.required_field("left"), None, false);
+                let right = self.add_expr_node(node.required_field("right"), None, false);
+                self.add_bin_op(op, left, right, target)
             }
             "type_bind" => {
                 let mut value =
-                    self.add_expr_node(node.required_field("value"), returning);
+                    self.add_expr_node(node.required_field("value"), target, returning);
                 let ty = self
                     .module_parser
                     .types
@@ -179,7 +194,8 @@ impl<'a, 't> ExprParser<'a, 't> {
                 value
             }
             "get_prop" => {
-                let parent = self.add_expr_node(node.required_field("parent"), false);
+                let parent =
+                    self.add_expr_node(node.required_field("parent"), None, false);
                 let prop_name_node = node.required_field("prop_name");
                 let prop_name = prop_name_node
                     .get_text(&self.ctx.source(self.src_idx).content().text);
@@ -187,15 +203,17 @@ impl<'a, 't> ExprParser<'a, 't> {
                     parent,
                     prop_name,
                     Loc::from_node(self.src_idx, &prop_name_node),
+                    target,
                 )
             }
             "call" => {
-                let callee = self.add_expr_node(node.required_field("callee"), false);
+                let callee =
+                    self.add_expr_node(node.required_field("callee"), None, false);
                 let args: Vec<_> = node
                     .iter_field("args")
-                    .map(|arg_node| self.add_expr_node(arg_node, false))
+                    .map(|arg_node| self.add_expr_node(arg_node, None, false))
                     .collect();
-                self.add_call(callee, args, loc, returning)
+                self.add_call(callee, args, loc, target, returning)
             }
             "block" => {
                 let old_idents = self.idents.clone();
@@ -203,32 +221,35 @@ impl<'a, 't> ExprParser<'a, 't> {
                 for stmt_node in node.iter_field("body") {
                     self.add_stmt_node(stmt_node);
                 }
-                let value = self.add_expr_node(node.required_field("value"), returning);
+                let value =
+                    self.add_expr_node(node.required_field("value"), target, returning);
 
                 self.idents = old_idents;
 
                 value
             }
             "if" => {
-                let cond_value = self.add_expr_node(node.required_field("cond"), false);
-                self.push_values([&cond_value], false);
+                let cond_value =
+                    self.add_expr_node(node.required_field("cond"), None, false);
+                self.push_value_ref(&cond_value, None);
                 self.stack.pop(); // consume condition
 
                 let stack_len = self.stack.len();
                 let block_len = self.stack.scope_len();
 
+                let loc = b::Loc::from_node(self.src_idx, &node);
+                let v = target.unwrap_or_else(|| {
+                    self.module_parser.create_value(b::Type::unknown(None), loc)
+                });
                 self.stack
                     .create_scope(ScopePayload::new(self.idents.clone()));
 
-                self.instrs.push(b::Instr::new(
-                    b::InstrBody::If(b::Type::unknown(None)),
-                    b::Loc::from_node(self.src_idx, &node),
-                ));
+                self.instrs.push(b::Instr::new(b::InstrBody::If(v), loc));
                 let then_value =
-                    self.add_expr_node(node.required_field("then"), returning);
+                    self.add_expr_node(node.required_field("then"), Some(v), returning);
 
                 if !then_value.is_never() {
-                    self.push_values([&then_value], true);
+                    self.push_value_ref(&then_value, Some(v));
                     assert!(self.stack.len() >= stack_len + 1);
                 }
 
@@ -242,10 +263,10 @@ impl<'a, 't> ExprParser<'a, 't> {
                     let (scope, _) = self.stack.branch_scope();
                     self.idents = scope.payload.idents.clone();
 
-                    let else_value = self.add_expr_node(else_node, returning);
+                    let else_value = self.add_expr_node(else_node, Some(v), returning);
 
                     if !else_value.is_never() {
-                        self.push_values([&else_value], true);
+                        self.push_value_ref(&else_value, Some(v));
                         assert!(self.stack.len() >= stack_len + 1);
                     }
 
@@ -255,7 +276,7 @@ impl<'a, 't> ExprParser<'a, 't> {
                         errors::Todo::new("if without else".to_string()).into(),
                         loc,
                     ));
-                    Value::new(ValueBody::CompileError, loc)
+                    ValueRef::new(ValueRefBody::CompileError, loc)
                 };
 
                 assert!(self.stack.scope_len() >= block_len + 1);
@@ -263,16 +284,14 @@ impl<'a, 't> ExprParser<'a, 't> {
                 self.idents = scope.payload.idents;
 
                 if !then_value.is_never() || !else_value.is_never() {
-                    let idx = self.add_instr_with_result(
-                        0,
-                        b::Instr::new(
-                            b::InstrBody::End,
-                            Loc::from_node(self.src_idx, &node),
-                        ),
-                    );
-                    Value::new(ValueBody::Local(idx), loc)
+                    self.instrs.push(b::Instr::new(
+                        b::InstrBody::End,
+                        Loc::from_node(self.src_idx, &node),
+                    ));
+                    self.stack.push(v);
+                    ValueRef::new(ValueRefBody::Value(self.stack.len() - 1, v), loc)
                 } else {
-                    Value::new(ValueBody::Never, loc)
+                    ValueRef::new(ValueRefBody::Never, loc)
                 }
             }
             "macro" => {
@@ -281,117 +300,141 @@ impl<'a, 't> ExprParser<'a, 't> {
                     .of_kind("ident")
                     .get_text(&self.ctx.source(self.src_idx).content().text);
                 let args = node.iter_field("args").collect_vec();
-                self.add_macro(name, &args, b::Loc::from_node(self.src_idx, &node))
+                self.add_macro(
+                    name,
+                    &args,
+                    b::Loc::from_node(self.src_idx, &node),
+                    target,
+                )
             }
             k => panic!("Found unexpected expression `{}`", k),
         }
     }
 
-    /// Push values to the stack. This will add the necessary instruction to have the
-    /// values accessible in the stack in the specified order. `is_result` specifies that
-    /// the values will be used as the result of the current scope. In that case, it will
-    /// avoid adding unnecessary `dup` instructions
-    pub fn push_values<'v>(
+    /// Push a value reference to the stack. This will add the necessary instruction to
+    /// have the value accessible in the stack. `target` specifies the value index that
+    /// need to be used. If not specified, a new one may be created
+    pub fn push_value_ref<'v>(
         &mut self,
-        values: impl IntoIterator<Item = &'v Value>,
-        is_result: bool,
+        value: &'v ValueRef,
+        target: Option<b::ValueIdx>,
     ) {
-        for value in values {
-            match &value.body {
-                ValueBody::Global(mod_idx, global_idx) => {
-                    self.add_instr_with_result(
-                        0,
-                        b::Instr::new(
-                            b::InstrBody::GetGlobal(*mod_idx, *global_idx),
-                            value.loc,
-                        ),
-                    );
-                }
-                ValueBody::Func(_, _) => {
-                    self.ctx.push_error(errors::Error::new(
-                        errors::Todo::new("function as value".to_string()).into(),
+        match &value.body {
+            ValueRefBody::Global(mod_idx, global_idx) => {
+                self.add_instr_with_result_and_push(
+                    b::Instr::new(
+                        b::InstrBody::GetGlobal(*mod_idx, *global_idx),
                         value.loc,
-                    ));
-                    self.add_instr_with_result(
-                        0,
-                        b::Instr::new(b::InstrBody::CompileError, value.loc),
-                    );
-                }
-                ValueBody::Local(idx) => {
-                    assert!(*idx <= self.stack.len() - 1);
-                    let rel_value = self.stack.len() - idx - 1;
-                    if is_result && rel_value == 0 {
-                        continue;
-                    }
-                    self.add_instr_with_result(
-                        0,
-                        b::Instr::new(b::InstrBody::Dup(rel_value), value.loc),
-                    );
-                }
-                ValueBody::Bool(v) => {
-                    self.add_instr_with_result(
-                        0,
-                        b::Instr::new(b::InstrBody::CreateBool(*v), value.loc),
-                    );
-                }
-                ValueBody::Number(v) => {
-                    // TODO: use better type
-                    let ty_body = if v.contains('.') {
-                        b::TypeBody::AnyFloat
-                    } else if v.starts_with('-') {
-                        b::TypeBody::AnySignedNumber
-                    } else {
-                        b::TypeBody::AnyNumber
-                    };
-                    self.add_instr_with_result(
-                        0,
-                        b::Instr::new(
-                            b::InstrBody::CreateNumber(
-                                b::Type::new(ty_body, None),
-                                v.clone(),
-                            ),
-                            value.loc,
-                        ),
-                    );
-                }
-                ValueBody::Never | ValueBody::CompileError => {
-                    self.add_instr_with_result(
-                        0,
-                        b::Instr::new(b::InstrBody::CompileError, value.loc),
-                    );
-                }
+                    ),
+                    target,
+                );
             }
-            if let Some(ty) = &value.ty {
-                self.instrs.push(b::Instr::new(
-                    b::InstrBody::Type(ty.clone()),
-                    ty.loc.unwrap_or(value.loc),
+            ValueRefBody::Func(_, _) => {
+                self.ctx.push_error(errors::Error::new(
+                    errors::Todo::new("function as value".to_string()).into(),
+                    value.loc,
                 ));
+                self.add_instr_with_result_and_push(
+                    b::Instr::new(b::InstrBody::CompileError, value.loc),
+                    target,
+                );
+            }
+            ValueRefBody::Value(idx, v) => {
+                assert!(*idx <= self.stack.len() - 1);
+                let rel_value = self.stack.len() - idx - 1;
+                if target.is_some() && rel_value == 0 {
+                    return;
+                }
+                if target.is_some_and(|x| x != *v) {
+                    self.module_parser.values[*v].redirects_to = target.clone();
+                }
+                self.instrs
+                    .push(b::Instr::new(b::InstrBody::Dup(rel_value), value.loc));
+                self.stack.push(target.unwrap_or(*v));
+            }
+            ValueRefBody::Bool(v) => {
+                self.add_instr_with_result_and_push(
+                    b::Instr::new(b::InstrBody::CreateBool(*v), value.loc),
+                    target,
+                );
+            }
+            ValueRefBody::Number(v) => {
+                // TODO: use better type
+                let ty_body = if v.contains('.') {
+                    b::TypeBody::AnyFloat
+                } else if v.starts_with('-') {
+                    b::TypeBody::AnySignedNumber
+                } else {
+                    b::TypeBody::AnyNumber
+                };
+                self.add_instr_with_result_and_push(
+                    b::Instr::new(
+                        b::InstrBody::CreateNumber(
+                            b::Type::new(ty_body, None),
+                            v.clone(),
+                        ),
+                        value.loc,
+                    ),
+                    target,
+                );
+            }
+            ValueRefBody::Never | ValueRefBody::CompileError => {
+                self.add_instr_with_result_and_push(
+                    b::Instr::new(b::InstrBody::CompileError, value.loc),
+                    target,
+                );
             }
         }
-    }
-
-    fn add_instr_with_result(&mut self, input_count: usize, instr: b::Instr) -> usize {
-        self.instrs.push(instr);
-        for _ in 0..input_count {
-            self.stack.pop();
+        if let Some(ty) = &value.ty {
+            self.instrs.push(b::Instr::new(
+                b::InstrBody::Type(ty.clone()),
+                ty.loc.unwrap_or(value.loc),
+            ));
         }
-        self.stack.push(());
-        self.stack.len() - 1
     }
 
-    fn add_un_op(&mut self, op: ts::Node, operand: Value) -> Value {
-        self.push_values([&operand], false);
+    /// Add an instruction and create a value as its target. Return that value
+    fn add_instr_with_result_and_push(
+        &mut self,
+        instr: b::Instr,
+        target: Option<b::ValueIdx>,
+    ) -> (usize, b::ValueIdx) {
+        let v = target.unwrap_or_else(|| {
+            self.module_parser
+                .create_value(b::Type::unknown(None), instr.loc)
+        });
+        self.instrs.push(instr.with_results([v]));
+        self.stack.push(v);
+        (self.stack.len() - 1, v)
+    }
+
+    fn add_un_op(
+        &mut self,
+        op: ts::Node,
+        operand: ValueRef,
+        target: Option<b::ValueIdx>,
+    ) -> ValueRef {
+        self.push_value_ref(&operand, None);
         let body = match op.kind() {
             "not" => b::InstrBody::Not,
             kind => panic!("Unhandled unary operator: {kind}"),
         };
         let loc = b::Loc::from_node(self.src_idx, &op).merge(&operand.loc);
-        let idx = self.add_instr_with_result(1, b::Instr::new(body, loc));
-        Value::new(ValueBody::Local(idx), loc)
+        self.stack.pop();
+        let (idx, v) =
+            self.add_instr_with_result_and_push(b::Instr::new(body, loc), target);
+        ValueRef::new(ValueRefBody::Value(idx, v), loc)
     }
 
-    fn add_bin_op(&mut self, op: ts::Node, left: Value, right: Value) -> Value {
-        self.push_values([&left, &right], false);
+    fn add_bin_op(
+        &mut self,
+        op: ts::Node,
+        left: ValueRef,
+        right: ValueRef,
+        target: Option<b::ValueIdx>,
+    ) -> ValueRef {
+        self.push_value_ref(&left, None);
+        self.push_value_ref(&right, None);
         let body = match op.kind() {
             "plus" => b::InstrBody::Add,
             "minus" => b::InstrBody::Sub,
@@ -414,29 +457,39 @@ impl<'a, 't> ExprParser<'a, 't> {
             kind => panic!("Unhandled binary operator: {kind}"),
         };
         let loc = left.loc.merge(&right.loc);
-        let idx = self.add_instr_with_result(2, b::Instr::new(body, loc));
-        Value::new(ValueBody::Local(idx), loc)
+        self.stack.pop_many(2);
+        let (idx, v) =
+            self.add_instr_with_result_and_push(b::Instr::new(body, loc), target);
+        ValueRef::new(ValueRefBody::Value(idx, v), loc)
     }
 
-    fn add_get_prop(&mut self, parent: Value, prop_name: &str, loc: b::Loc) -> Value {
-        self.push_values([&parent], false);
-        let idx = self.add_instr_with_result(
-            1,
+    fn add_get_prop(
+        &mut self,
+        parent: ValueRef,
+        prop_name: &str,
+        loc: b::Loc,
+        target: Option<b::ValueIdx>,
+    ) -> ValueRef {
+        self.push_value_ref(&parent, None);
+        self.stack.pop();
+        let (idx, v) = self.add_instr_with_result_and_push(
             b::Instr::new(b::InstrBody::GetProperty(prop_name.to_string()), loc),
+            target,
         );
-        Value::new(ValueBody::Local(idx), loc)
+        ValueRef::new(ValueRefBody::Value(idx, v), loc)
     }
 
     fn add_call(
         &mut self,
-        callee: Value,
-        args: impl IntoIterator<Item = Value>,
+        callee: ValueRef,
+        args: impl IntoIterator<Item = ValueRef>,
         loc: b::Loc,
+        target: Option<b::ValueIdx>,
         returning: bool,
-    ) -> Value {
+    ) -> ValueRef {
         let args: Vec<_> = args.into_iter().collect();
         match callee.body {
-            ValueBody::Func(mod_idx, func_idx) => {
+            ValueRefBody::Func(mod_idx, func_idx) => {
                 if returning
                     && self.mod_idx == mod_idx
                     && self.func_idx.is_some_and(|i| i == func_idx)
@@ -444,45 +497,59 @@ impl<'a, 't> ExprParser<'a, 't> {
                     self.is_loop = true;
                     self.stack.get_scope_mut().mark_as_never();
 
-                    self.push_values(&args, true);
+                    for arg in &args {
+                        self.push_value_ref(arg, None);
+                    }
 
                     self.instrs.push(b::Instr::new(b::InstrBody::Continue, loc));
-                    Value::new(ValueBody::Never, loc)
+                    ValueRef::new(ValueRefBody::Never, loc)
                 } else {
-                    self.push_values(&args, false);
+                    for arg in &args {
+                        self.push_value_ref(arg, None);
+                    }
 
-                    let idx = self.add_instr_with_result(
-                        args.len(),
+                    self.stack.pop_many(args.len());
+                    let (idx, v) = self.add_instr_with_result_and_push(
                         b::Instr::new(b::InstrBody::Call(mod_idx, func_idx), loc),
+                        target,
                     );
-                    Value::new(ValueBody::Local(idx), loc)
+                    ValueRef::new(ValueRefBody::Value(idx, v), loc)
                 }
             }
-            ValueBody::Local(_) | ValueBody::Global(_, _) => {
-                self.push_values(&args, false);
-                self.push_values([&callee], false);
+            ValueRefBody::Value(..) | ValueRefBody::Global(_, _) => {
+                for arg in &args {
+                    self.push_value_ref(arg, None);
+                }
+                self.push_value_ref(&callee, None);
 
-                let idx = self.add_instr_with_result(
-                    args.len(),
+                self.stack.pop_many(args.len());
+                let (idx, v) = self.add_instr_with_result_and_push(
                     b::Instr::new(b::InstrBody::IndirectCall(args.len()), loc),
+                    target,
                 );
-                Value::new(ValueBody::Local(idx), loc)
+                ValueRef::new(ValueRefBody::Value(idx, v), loc)
             }
-            ValueBody::CompileError => Value::new(ValueBody::CompileError, loc),
+            ValueRefBody::CompileError => ValueRef::new(ValueRefBody::CompileError, loc),
             _ => {
                 panic!("Value is not a function")
             }
         }
     }
 
-    fn add_macro(&mut self, name: &str, args: &[ts::Node<'t>], loc: b::Loc) -> Value {
+    fn add_macro(
+        &mut self,
+        name: &str,
+        args: &[ts::Node<'t>],
+        loc: b::Loc,
+        target: Option<b::ValueIdx>,
+    ) -> ValueRef {
         match name {
             "str_len" | "array_len" => {
                 // TODO: better error handling
                 assert!(args.len() == 1, "@{name}() expects a single argument");
 
-                let source = self.add_expr_node(args[0], false);
-                self.push_values(&[source], false);
+                let source = self.add_expr_node(args[0], None, false);
+                self.push_value_ref(&source, None);
 
                 let instr_body = match name {
                     "str_len" => b::InstrBody::StrLen,
@@ -490,16 +557,21 @@ impl<'a, 't> ExprParser<'a, 't> {
                     _ => unreachable!(),
                 };
 
-                let idx = self.add_instr_with_result(1, b::Instr::new(instr_body, loc));
-                Value::new(ValueBody::Local(idx), loc)
+                self.stack.pop();
+                let (idx, v) = self.add_instr_with_result_and_push(
+                    b::Instr::new(instr_body, loc),
+                    target,
+                );
+                ValueRef::new(ValueRefBody::Value(idx, v), loc)
             }
             "str_ptr" | "array_ptr" => {
                 // TODO: better error handling
                 assert!(args.len() == 2, "@{name}() expects 2 arguments");
 
-                let source = self.add_expr_node(args[0], false);
+                let source = self.add_expr_node(args[0], None, false);
 
-                let ValueBody::Number(idx) = self.add_expr_node(args[1], false).body
+                let ValueRefBody::Number(idx) =
+                    self.add_expr_node(args[1], None, false).body
                 else {
                     // TODO: better error handling
                     panic!("index can only be a number");
@@ -507,7 +579,7 @@ impl<'a, 't> ExprParser<'a, 't> {
                 // TODO: better error handling
                 let idx: u64 = idx.parse().expect("index is not a valid number");
 
-                self.push_values(&[source], false);
+                self.push_value_ref(&source, None);
 
                 let instr_body = match name {
                     "str_ptr" => b::InstrBody::StrPtr(idx),
@@ -515,8 +587,12 @@ impl<'a, 't> ExprParser<'a, 't> {
                     _ => unreachable!(),
                 };
 
-                let idx = self.add_instr_with_result(1, b::Instr::new(instr_body, loc));
-                Value::new(ValueBody::Local(idx), loc)
+                self.stack.pop();
+                let (idx, v) = self.add_instr_with_result_and_push(
+                    b::Instr::new(instr_body, loc),
+                    target,
+                );
+                ValueRef::new(ValueRefBody::Value(idx, v), loc)
             }
             _ => {
                 panic!("unhandled macro: `{name}`")
@@ -527,7 +603,8 @@ impl<'a, 't> ExprParser<'a, 't> {
     fn add_stmt_node(&mut self, node: ts::Node<'t>) {
         match node.kind() {
             "let_stmt" => {
-                let mut value = self.add_expr_node(node.required_field("value"), false);
+                let mut value =
+                    self.add_expr_node(node.required_field("value"), None, false);
                 let pat_node = node.required_field("pat");
                 if let Some(ty_node) = node.field("type") {
                     value.ty = Some(self.module_parser.types.parse_type_expr(ty_node));
@@ -551,5 +628,5 @@ impl<'a, 't> ExprParser<'a, 't> {
 
 #[derive(Debug, Clone, new)]
 struct ScopePayload {
-    idents: HashMap<String, Value>,
+    idents: HashMap<String, ValueRef>,
 }

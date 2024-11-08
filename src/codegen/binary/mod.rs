@@ -127,27 +127,21 @@ impl BinaryCodegen<'_> {
             );
             codegen.create_initial_block(&[]);
 
-            let mut entry_point = None;
-
             for ((i, j), global) in codegen.globals.globals.clone() {
-                if global.is_entry_point {
-                    entry_point = Some((i, j));
-                    continue;
-                }
                 if global.is_const {
                     continue;
                 };
                 for instr in &self.modules[i].globals[j].body {
-                    codegen.add_instr(instr);
+                    codegen.add_instr(instr, i);
                 }
+                assert!(codegen.stack.scope_len() == 1);
                 let res = codegen.stack.pop();
-                codegen.store_global(res, &global);
+                if !global.is_entry_point {
+                    codegen.store_global(res, &global);
+                }
+                codegen.stack.pop_all();
             }
 
-            let entry_point = entry_point.expect("entrypoint should be defined");
-            for instr in &self.modules[entry_point.0].globals[entry_point.1].body {
-                codegen.add_instr(instr);
-            }
             let exit_code = codegen
                 .builder
                 .as_mut()
@@ -174,16 +168,16 @@ impl BinaryCodegen<'_> {
         let decl = &self.modules[mod_idx].funcs[idx];
         let mut sig = self.obj_module.make_signature();
 
-        for param in &decl.params {
+        for param in &decl.params_desc {
             sig.params.push(cl::AbiParam::new(types::get_type(
                 &param.ty,
                 self.modules,
                 &self.obj_module,
             )));
         }
-        if !matches!(&decl.ret.body, b::TypeBody::Void | b::TypeBody::Never) {
+        if !matches!(&decl.ret_ty.body, b::TypeBody::Void | b::TypeBody::Never) {
             sig.returns.push(cl::AbiParam::new(types::get_type(
-                &decl.ret,
+                &decl.ret_ty,
                 self.modules,
                 &self.obj_module,
             )));
@@ -244,10 +238,10 @@ impl BinaryCodegen<'_> {
                 this.globals,
                 this.funcs,
             );
-            codegen.create_initial_block(&decl.params);
+            codegen.create_initial_block(&decl.params_desc);
 
             for instr in &decl.body {
-                codegen.add_instr(instr);
+                codegen.add_instr(instr, mod_idx);
             }
 
             (this.obj_module, this.globals, this.funcs) = codegen.return_value();

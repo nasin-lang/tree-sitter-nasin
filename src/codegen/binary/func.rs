@@ -50,7 +50,7 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
         func.switch_to_block(block);
         self.stack.get_scope_mut().payload.block = Some(block);
     }
-    pub fn add_instr(&mut self, instr: &'a b::Instr) {
+    pub fn add_instr(&mut self, instr: &'a b::Instr, mod_idx: usize) {
         if self.stack.get_scope().is_never()
             && !matches!(&instr.body, b::InstrBody::End | b::InstrBody::Else)
         {
@@ -192,7 +192,7 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
                     block_params[0].into(),
                 ));
             }
-            b::InstrBody::If(ty) => {
+            b::InstrBody::If(v) => {
                 let builder = expect_builder!(self);
                 let cond = self.stack.pop().add_to_func(&mut self.obj_module, builder);
 
@@ -201,6 +201,9 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
 
                 builder.ins().brif(cond, then_block, &[], else_block, &[]);
                 builder.switch_to_block(then_block);
+
+                let module = &self.modules[mod_idx];
+                let ty = &module.values[*v].ty;
 
                 let next_block = builder.create_block();
                 builder.append_block_param(
@@ -332,14 +335,14 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
 
                 let args = self
                     .stack
-                    .pop_many(func.params.len())
+                    .pop_many(func.params_desc.len())
                     .into_iter()
                     .map(|arg| arg.add_to_func(&mut self.obj_module, builder))
                     .collect_vec();
 
                 if let Some(value) = self.call(func_id, &args) {
                     self.stack.push(types::RuntimeValue::new(
-                        Cow::Borrowed(&func.ret),
+                        Cow::Borrowed(&func.ret_ty),
                         value.into(),
                     ));
                 }
@@ -369,7 +372,7 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
 
                         if let Some(value) = self.call(func_id, &args) {
                             self.stack.push(types::RuntimeValue::new(
-                                Cow::Borrowed(&func.ret),
+                                Cow::Borrowed(&func.ret_ty),
                                 value.into(),
                             ));
                         }
@@ -524,7 +527,7 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
             }
             b::InstrBody::Type(_) => {}
             b::InstrBody::GetProperty(..) | b::InstrBody::CompileError => {
-                panic!("never should try to compile {}", &instr)
+                panic!("never should try to compile '{}'", &instr)
             }
             b::InstrBody::Dup(..)
             | b::InstrBody::CreateNumber(..)

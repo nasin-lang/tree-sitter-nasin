@@ -1,21 +1,5 @@
-use std::collections::HashSet;
-
-use derive_new::new;
-
 use crate::bytecode as b;
 use crate::utils::{number_enum, SortedMap};
-
-pub type TypeCheckEntryIdx = usize;
-
-#[derive(Debug, Clone, new)]
-pub struct TypeCheckEntry {
-    pub ty: b::Type,
-    pub loc: b::Loc,
-    #[new(default)]
-    pub constraints: HashSet<Constraint>,
-    #[new(default)]
-    pub same_of: HashSet<TypeCheckEntryIdx>,
-}
 
 number_enum!(pub ConstraintPriority: u8 {
     NoType = 0,
@@ -27,14 +11,15 @@ number_enum!(pub ConstraintPriority: u8 {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Constraint {
     Is(b::Type),
-    TypeOf(TypeCheckEntryIdx),
-    Array(TypeCheckEntryIdx),
-    Ptr(TypeCheckEntryIdx),
-    ReturnOf(TypeCheckEntryIdx),
-    ParameterOf(TypeCheckEntryIdx, usize),
-    IsProperty(TypeCheckEntryIdx, String),
-    Members(SortedMap<String, TypeCheckEntryIdx>),
-    HasProperty(String, TypeCheckEntryIdx),
+    TypeOf(b::ValueIdx),
+    Array(b::ValueIdx),
+    Ptr(b::ValueIdx),
+    ArrayElemPtr(b::ValueIdx),
+    ReturnOf(b::ValueIdx),
+    ParameterOf(b::ValueIdx, usize),
+    IsProperty(b::ValueIdx, String),
+    Members(SortedMap<String, b::ValueIdx>),
+    HasProperty(String, b::ValueIdx),
     Func(usize),
 }
 impl Constraint {
@@ -44,6 +29,7 @@ impl Constraint {
             Self::TypeOf(..)
             | Self::Array(..)
             | Self::Ptr(..)
+            | Self::ArrayElemPtr(..)
             | Self::ReturnOf(..)
             | Self::ParameterOf(..)
             | Self::IsProperty(..) => ConstraintPriority::DerivedDefinedType,

@@ -6,6 +6,10 @@ use clap::{Parser, Subcommand};
 use nasin::config::BuildConfig;
 use nasin::context;
 use nasin::errors::DisplayError;
+use tracing::level_filters::LevelFilter;
+use tracing_subscriber::filter::filter_fn;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
 
 #[derive(Parser, Debug)]
 #[command(name = "Nasin Language")]
@@ -41,7 +45,21 @@ enum CliCommand {
 }
 
 fn main() {
-    unsafe { compact_debug::enable(true) };
+    //unsafe { compact_debug::enable(true) };
+
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::fmt::layer().with_level(true).pretty())
+        .with(match env::var("LOG_LEVEL") {
+            Ok(s) => match s.as_str() {
+                "trace" => LevelFilter::TRACE,
+                "debug" => LevelFilter::DEBUG,
+                "info" => LevelFilter::INFO,
+                _ => LevelFilter::WARN,
+            },
+            _ => LevelFilter::WARN,
+        })
+        .with(filter_fn(|meta| meta.target().starts_with("nasin")))
+        .init();
 
     let cli = Cli::parse();
 

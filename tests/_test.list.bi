@@ -46,29 +46,23 @@ Hello from global
 
 :b shell 60
 ./bin/nasin b tests/if.nsn -o tests/out/if && ./tests/out/if
-:i returncode 1
-:b stdout 0
+:i returncode 0
+:b stdout 54
+Compiled program to tests/out/if
+it's true
+it's false
 
-:b stderr 117
-tests/if.nsn:2:13
-  |
-2 | false_msg = "it's false"
-  |             ^
-error: Expected type string 10, found string 9
-
+:b stderr 0
 
 :b shell 90
 ./bin/nasin b tests/if_returning.nsn -o tests/out/if_returning && ./tests/out/if_returning
-:i returncode 1
-:b stdout 0
+:i returncode 0
+:b stdout 64
+Compiled program to tests/out/if_returning
+it's true
+it's false
 
-:b stderr 127
-tests/if_returning.nsn:2:13
-  |
-2 | false_msg = "it's false"
-  |             ^
-error: Expected type string 10, found string 9
-
+:b stderr 0
 
 :b shell 87
 ./bin/nasin b tests/record_type.nsn -o tests/out/record_type && ./tests/out/record_type

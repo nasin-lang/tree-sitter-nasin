@@ -216,8 +216,8 @@ impl Type {
                 let func = &modules[method.func_ref.0].funcs[method.func_ref.1];
                 Some(Cow::Owned(Type::new(
                     TypeBody::Func(Box::new(FuncType::new(
-                        func.params.iter().map(|p| p.ty.clone()).collect(),
-                        func.ret.clone(),
+                        func.params_desc.iter().map(|p| p.ty.clone()).collect(),
+                        func.ret_ty.clone(),
                     ))),
                     Some(method.loc),
                 )))
