@@ -190,6 +190,10 @@ impl Type {
         )
     }
 
+    pub fn is_never(&self) -> bool {
+        matches!(&self.body, TypeBody::Never)
+    }
+
     pub fn field<'a>(&'a self, name: &str, modules: &'a [Module]) -> Option<&'a Type> {
         match &self.body {
             TypeBody::Inferred(v) => v.members.get(name),

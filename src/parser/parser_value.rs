@@ -6,7 +6,7 @@ use crate::bytecode as b;
 pub enum ValueRefBody {
     Func(usize, usize),
     Global(usize, usize),
-    Value(usize, b::ValueIdx),
+    Value(b::ValueIdx),
     Bool(bool),
     Number(String),
     Never,

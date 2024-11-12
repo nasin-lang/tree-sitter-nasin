@@ -10,8 +10,6 @@ use self::constraints::Constraint;
 use crate::utils::SortedMap;
 use crate::{bytecode as b, context, errors, utils};
 
-type Stack = utils::ValueStack<b::ValueIdx, ScopePayload>;
-
 #[derive(Debug, Clone, new)]
 pub struct TypeChecker<'a> {
     ctx: &'a context::BuildContext,
@@ -102,31 +100,25 @@ impl<'a> TypeChecker<'a> {
             return;
         }
 
-        let mut stack = Stack::new(ScopePayload::new(result));
-        for input in inputs {
-            stack.push(*input);
-        }
+        let mut scopes = utils::ScopeStack::new(ScopePayload::new(result));
 
         for i in 0..body_len {
             let instr = {
                 let module = &self.ctx.lock_modules()[self.mod_idx];
                 get_body(module)[i].clone()
             };
-            self.add_instr(instr, &mut stack, func_idx);
+            self.add_instr(instr, &mut scopes, func_idx);
         }
-
-        assert!(stack.len() >= 1);
-        assert!(stack.scope_len() == 1);
-        self.merge_types(&[result, stack.pop()]);
     }
 
-    #[tracing::instrument(skip(self, instr, stack), fields(%instr))]
-    fn add_instr(&mut self, instr: b::Instr, stack: &mut Stack, func_idx: Option<usize>) {
+    #[tracing::instrument(skip(self, instr, scopes), fields(%instr))]
+    fn add_instr(
+        &mut self,
+        instr: b::Instr,
+        scopes: &mut utils::ScopeStack<ScopePayload>,
+        func_idx: Option<usize>,
+    ) {
         match &instr.body {
-            b::InstrBody::Dup(rel_value) => {
-                let v = *stack.get(*rel_value).unwrap();
-                stack.push(v);
-            }
             b::InstrBody::GetGlobal(mod_idx, idx) => {
                 let v = instr.results[0];
                 if *mod_idx == self.mod_idx {
@@ -137,21 +129,17 @@ impl<'a> TypeChecker<'a> {
                         { self.ctx.lock_modules()[*mod_idx].globals[*idx].ty.clone() };
                     self.add_constraint(v, Constraint::Is(ty));
                 };
-                stack.push(v);
             }
-            b::InstrBody::GetProperty(name)
-            | b::InstrBody::GetField(name)
-            | b::InstrBody::GetMethod(name) => {
-                assert!(stack.len() >= 1);
+            b::InstrBody::GetProperty(source_v, name)
+            | b::InstrBody::GetField(source_v, name)
+            | b::InstrBody::GetMethod(source_v, name) => {
                 let v = instr.results[0];
-                self.define_property(stack.pop(), v, name, instr.loc);
-                stack.push(v);
+                self.define_property(*source_v, v, name, instr.loc);
             }
             b::InstrBody::CreateBool(_) => {
                 let v = instr.results[0];
                 let ty = b::Type::new(b::TypeBody::Bool, None);
                 self.add_constraint(v, Constraint::Is(ty));
-                stack.push(v);
             }
             b::InstrBody::CreateNumber(num) => {
                 let v = instr.results[0];
@@ -164,7 +152,6 @@ impl<'a> TypeChecker<'a> {
                     b::TypeBody::AnyNumber
                 };
                 self.add_constraint(v, Constraint::Is(b::Type::new(ty_body, None)));
-                stack.push(v);
             }
             b::InstrBody::CreateString(x) => {
                 let v = instr.results[0];
@@ -173,15 +160,12 @@ impl<'a> TypeChecker<'a> {
                     None,
                 );
                 self.add_constraint(v, Constraint::Is(ty.clone()));
-                stack.push(v);
             }
-            b::InstrBody::CreateArray(len) => {
-                assert!(stack.len() >= *len);
+            b::InstrBody::CreateArray(vs) => {
                 let v = instr.results[0];
-                if *len > 0 {
-                    let items = stack.pop_many(*len);
-                    self.merge_types(&items);
-                    self.add_constraint(v, Constraint::Array(items[0]));
+                if vs.len() > 0 {
+                    self.merge_types(vs);
+                    self.add_constraint(v, Constraint::Array(vs[0]));
                 } else {
                     let item_ty = b::Type::new(b::TypeBody::Never, None);
                     let arr_ty = b::Type::new(
@@ -193,84 +177,62 @@ impl<'a> TypeChecker<'a> {
                     );
                     self.add_constraint(v, Constraint::Is(arr_ty));
                 }
-                stack.push(v);
             }
             b::InstrBody::CreateRecord(fields) => {
-                assert!(stack.len() >= fields.len());
                 let v = instr.results[0];
-                let values = stack.pop_many(fields.len());
-                self.add_constraint(
-                    v,
-                    Constraint::Members(
-                        izip!(fields, &values)
-                            .map(|(k, v)| (k.clone(), *v))
-                            .collect(),
-                    ),
-                );
-                for (key, value) in izip!(fields, values) {
-                    self.define_property(v, value, key, instr.loc);
+                self.add_constraint(v, Constraint::Members(fields.clone()));
+                for (name, fields_v) in fields {
+                    self.define_property(v, *fields_v, name, instr.loc);
                 }
-                stack.push(v);
             }
-            b::InstrBody::Add
-            | b::InstrBody::Sub
-            | b::InstrBody::Mul
-            | b::InstrBody::Div
-            | b::InstrBody::Mod => {
-                assert!(stack.len() >= 2);
+            b::InstrBody::Add(a, b)
+            | b::InstrBody::Sub(a, b)
+            | b::InstrBody::Mul(a, b)
+            | b::InstrBody::Div(a, b)
+            | b::InstrBody::Mod(a, b) => {
                 let v = instr.results[0];
-                let mut vs = stack.pop_many(2);
-                vs.push(v);
-                self.merge_types(&vs);
+                self.merge_types(&[*a, *b, v]);
                 // FIXME: use interface/trait
                 let ty = b::Type::new(b::TypeBody::AnyNumber, None);
                 self.add_constraint(v, Constraint::Is(ty));
-                stack.push(v);
             }
-            b::InstrBody::Not => {
-                assert!(stack.len() >= 1);
+            b::InstrBody::Not(x) => {
                 let v = instr.results[0];
-                let input = stack.pop();
-                self.merge_types(&[input, v]);
+                self.merge_types(&[*x, v]);
                 // FIXME: use interface/trait
                 self.add_constraint(
                     v,
                     Constraint::Is(b::Type::new(b::TypeBody::Bool, None)),
                 );
-                stack.push(v);
             }
-            b::InstrBody::Eq
-            | b::InstrBody::Neq
-            | b::InstrBody::Gt
-            | b::InstrBody::Gte
-            | b::InstrBody::Lt
-            | b::InstrBody::Lte => {
-                assert!(stack.len() >= 2);
+            b::InstrBody::Eq(a, b)
+            | b::InstrBody::Neq(a, b)
+            | b::InstrBody::Gt(a, b)
+            | b::InstrBody::Gte(a, b)
+            | b::InstrBody::Lt(a, b)
+            | b::InstrBody::Lte(a, b) => {
                 let v = instr.results[0];
-                let operands = stack.pop_many(2);
-                self.merge_types(&operands);
+                self.merge_types(&[*a, *b]);
                 // FIXME: use interface/trait
                 let number_ty = b::Type::new(b::TypeBody::AnyNumber, None);
                 let bool_ty = b::Type::new(b::TypeBody::Bool, None);
-                self.add_constraint(operands[0], Constraint::Is(number_ty));
+                self.add_constraint(*a, Constraint::Is(number_ty));
                 self.add_constraint(v, Constraint::Is(bool_ty));
-                stack.push(v);
             }
-            b::InstrBody::Call(mod_idx, idx) => {
+            b::InstrBody::Call(mod_idx, idx, args) => {
                 let v = instr.results[0];
 
                 if *mod_idx == self.mod_idx {
                     let func = self.ctx.lock_modules()[self.mod_idx].funcs[*idx].clone();
-                    let args = stack.pop_many(func.params.len());
 
                     if func_idx.is_some_and(|i| i == *idx) {
                         self.merge_types(&[v, func.ret]);
                         for (arg, param) in izip!(args, func.params) {
-                            self.merge_types(&[arg, param]);
+                            self.merge_types(&[*arg, param]);
                         }
                     } else {
                         for (arg, param) in izip!(args, func.params) {
-                            self.add_constraint(arg, Constraint::TypeOf(param));
+                            self.add_constraint(*arg, Constraint::TypeOf(param));
                         }
                         self.add_constraint(v, Constraint::TypeOf(func.ret));
                     }
@@ -278,64 +240,37 @@ impl<'a> TypeChecker<'a> {
                     let modules = self.ctx.lock_modules();
                     let func = &modules[*mod_idx].funcs[*idx];
 
-                    let args = stack.pop_many(func.params_desc.len());
                     for (arg, param) in izip!(args, &func.params_desc) {
-                        self.add_constraint(arg, Constraint::Is(param.ty.clone()));
+                        self.add_constraint(*arg, Constraint::Is(param.ty.clone()));
                     }
                     self.add_constraint(v, Constraint::Is(func.ret_ty.clone()))
                 }
-
-                stack.push(v);
             }
-            b::InstrBody::IndirectCall(n) => {
+            b::InstrBody::IndirectCall(func, args) => {
                 let v = instr.results[0];
 
-                let func = stack.pop();
-                let args = stack.pop_many(*n);
-
-                self.add_constraint(func, Constraint::Func(args.len()));
+                self.add_constraint(*func, Constraint::Func(args.len()));
 
                 for (i, arg) in enumerate(args) {
-                    self.add_constraint(arg, Constraint::ParameterOf(func, i));
+                    self.add_constraint(*arg, Constraint::ParameterOf(*func, i));
                 }
-                self.add_constraint(v, Constraint::ReturnOf(func));
-
-                stack.push(v);
+                self.add_constraint(v, Constraint::ReturnOf(*func));
             }
-            b::InstrBody::If(v) => {
-                let cond = stack.pop();
+            b::InstrBody::If(cond_v, target_v) => {
                 self.add_constraint(
-                    cond,
+                    *cond_v,
                     Constraint::Is(b::Type::new(b::TypeBody::Bool, None)),
                 );
 
-                stack.create_scope(ScopePayload::new(*v));
+                scopes.begin(ScopePayload::new(*target_v));
             }
             b::InstrBody::Else => {
-                assert!(stack.scope_len() > 1);
-                let is_never = stack.get_scope().is_never();
-                let (scope, mut removed) = stack.branch_scope();
-
-                if !is_never {
-                    assert!(removed.len() >= 1);
-                    let res = removed.pop().unwrap();
-                    self.merge_types(&[res, scope.payload.result]);
-                }
+                scopes.branch();
             }
             b::InstrBody::End => {
-                assert!(stack.scope_len() >= 1);
-                let (scope, mut removed) = stack.end_scope();
-                let result = scope.payload.result;
-
-                if !scope.is_never() {
-                    assert!(removed.len() >= 1);
-                    let res = removed.pop().unwrap();
-                    self.merge_types(&[res, result]);
-                }
-
-                stack.push(result);
+                scopes.end();
             }
-            b::InstrBody::Loop(n) => {
+            b::InstrBody::Loop(acc_vs, target_v) => {
                 todo!()
                 //assert!(stack.len() >= *n);
                 //let loop_args = stack.pop_many(*n);
@@ -348,7 +283,7 @@ impl<'a> TypeChecker<'a> {
                 //
                 //stack.extend(loop_args);
             }
-            b::InstrBody::Continue => {
+            b::InstrBody::Continue(vs) => {
                 todo!()
                 //assert!(stack.scope_len() >= 1);
                 //let scope = stack
@@ -367,22 +302,19 @@ impl<'a> TypeChecker<'a> {
                 //
                 //stack.get_scope_mut().mark_as_never();
             }
-            b::InstrBody::ArrayLen => {
+            b::InstrBody::ArrayLen(input) => {
                 let v = instr.results[0];
-                let input = stack.pop();
                 let item_ty = b::Type::unknown(None);
                 let arr_ty = b::Type::new(
                     b::TypeBody::Array(b::ArrayType::new(item_ty.into(), None)),
                     None,
                 );
-                self.add_constraint(input, Constraint::Is(arr_ty));
+                self.add_constraint(*input, Constraint::Is(arr_ty));
                 let ty = b::Type::new(b::TypeBody::USize, None);
                 self.add_constraint(v, Constraint::Is(ty));
-                stack.push(v);
             }
-            b::InstrBody::ArrayPtr(_) => {
+            b::InstrBody::ArrayPtr(input, _) => {
                 let v = instr.results[0];
-                let source = stack.pop();
                 let arr_ty = b::Type::new(
                     b::TypeBody::Array(b::ArrayType::new(
                         b::Type::unknown(None).into(),
@@ -390,37 +322,30 @@ impl<'a> TypeChecker<'a> {
                     )),
                     None,
                 );
-                self.add_constraint(source, Constraint::Is(arr_ty));
-                self.add_constraint(v, Constraint::ArrayElemPtr(source));
-                stack.push(v);
+                self.add_constraint(*input, Constraint::Is(arr_ty));
+                self.add_constraint(v, Constraint::ArrayElemPtr(*input));
             }
-            b::InstrBody::StrLen => {
+            b::InstrBody::StrLen(input) => {
                 let v = instr.results[0];
-                let input = stack.pop();
                 let str_ty =
                     b::Type::new(b::TypeBody::String(b::StringType::new(None)), None);
-                self.add_constraint(input, Constraint::Is(str_ty));
+                self.add_constraint(*input, Constraint::Is(str_ty));
                 let ty = b::Type::new(b::TypeBody::USize, None);
                 self.add_constraint(v, Constraint::Is(ty));
-                stack.push(v);
             }
-            b::InstrBody::StrPtr(_) => {
+            b::InstrBody::StrPtr(input, _) => {
                 let v = instr.results[0];
-                let input = stack.pop();
                 let str_ty =
                     b::Type::new(b::TypeBody::String(b::StringType::new(None)), None);
-                self.add_constraint(input, Constraint::Is(str_ty));
+                self.add_constraint(*input, Constraint::Is(str_ty));
                 let ty = b::Type::new(
                     b::TypeBody::Ptr(b::Type::new(b::TypeBody::U8, None).into()),
                     None,
                 );
                 self.add_constraint(v, Constraint::Is(ty));
-                stack.push(v);
             }
-            b::InstrBody::Type(ty) => {
-                assert!(stack.scope_len() >= 1);
-                let v = *stack.get(0).unwrap();
-                self.add_constraint(v, Constraint::Is(ty.clone()));
+            b::InstrBody::Type(v, ty) => {
+                self.add_constraint(*v, Constraint::Is(ty.clone()));
             }
             b::InstrBody::CompileError => {}
         }
@@ -871,56 +796,32 @@ impl<'a> TypeChecker<'a> {
                 get_body(module)[i].results.clone()
             };
 
-            let get_property_key = {
+            let get_property = {
                 let modules = &self.ctx.lock_modules()[self.mod_idx];
                 let instr = &get_body(modules)[i];
                 match &instr.body {
-                    b::InstrBody::GetProperty(key) => Some(key.clone()),
+                    b::InstrBody::GetProperty(v, key) => Some((*v, key.clone())),
                     _ => None,
                 }
             };
 
-            if let Some(key) = get_property_key {
-                let mut prop_v = results[0];
-                {
-                    let module = &self.ctx.lock_modules_mut()[self.mod_idx];
-                    loop {
-                        let same_type_of = &module.values[prop_v].same_type_of;
-                        if same_type_of.len() == 0 {
-                            break;
-                        }
-                        prop_v = *same_type_of.iter().next().unwrap();
-                    }
-                }
-                let constraints = &self.value_constraints[prop_v];
-                let mut parent = None;
-                for c in constraints {
-                    match c {
-                        Constraint::IsProperty(target, _key) if &key == _key => {
-                            parent = Some(target);
-                            break;
-                        }
-                        _ => {}
-                    }
-                }
-                if let Some(parent) = parent {
-                    let (is_field, is_method) = {
-                        let modules = &self.ctx.lock_modules();
-                        let parent_ty = &modules[self.mod_idx].values[*parent].ty;
-                        (
-                            parent_ty.field(&key, &modules).is_some(),
-                            parent_ty.method(&key, &modules).is_some(),
-                        )
-                    };
+            if let Some((source_v, key)) = get_property {
+                let (is_field, is_method) = {
+                    let modules = &self.ctx.lock_modules();
+                    let parent_ty = &modules[self.mod_idx].values[source_v].ty;
+                    (
+                        parent_ty.field(&key, &modules).is_some(),
+                        parent_ty.method(&key, &modules).is_some(),
+                    )
+                };
 
-                    {
-                        let modules = &mut self.ctx.lock_modules_mut();
-                        let instr = &mut get_body_mut(&mut modules[self.mod_idx])[i];
-                        if is_field {
-                            instr.body = b::InstrBody::GetField(key.clone());
-                        } else if is_method {
-                            instr.body = b::InstrBody::GetMethod(key.clone());
-                        }
+                {
+                    let modules = &mut self.ctx.lock_modules_mut();
+                    let instr = &mut get_body_mut(&mut modules[self.mod_idx])[i];
+                    if is_field {
+                        instr.body = b::InstrBody::GetField(source_v, key.clone());
+                    } else if is_method {
+                        instr.body = b::InstrBody::GetMethod(source_v, key.clone());
                     }
                 }
             }

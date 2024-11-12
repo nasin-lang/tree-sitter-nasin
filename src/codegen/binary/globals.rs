@@ -52,7 +52,9 @@ impl<'a> Globals<'a> {
 
             for instr in &global.body {
                 if let Some(value) = codegen.value_from_instr(instr, mod_idx) {
-                    codegen.stack.push(value);
+                    let this = &mut codegen;
+                    let v = instr.results[0];
+                    this.values.insert(v, value);
                 } else {
                     let (data_id, module) = codegen
                         .globals
@@ -65,10 +67,13 @@ impl<'a> Globals<'a> {
                 }
             }
 
-            assert!(codegen.stack.len() >= 1);
             (
                 codegen.globals,
-                (codegen.stack.pop(), true, codegen.obj_module),
+                (
+                    codegen.values[&global.value].clone(),
+                    true,
+                    codegen.obj_module,
+                ),
             )
         });
 

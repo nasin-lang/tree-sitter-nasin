@@ -42,10 +42,10 @@ impl<'a, 't> ModuleParser<'a, 't> {
             let mut value_parser =
                 ExprParser::new(self.ctx, self, src_idx, mod_idx, None, []);
 
-            let value = value_parser.add_expr_node(value_node, Some(v), true);
-            value_parser.push_value_ref(&value, Some(v));
+            let value_ref = value_parser.add_expr_node(value_node, Some(v), true);
+            value_parser.use_value_ref(&value_ref, Some(v));
 
-            (self, self.globals[i].global.body) = value_parser.finish();
+            (self, self.globals[i].global.body) = value_parser.finish(v);
         }
 
         for i in 0..self.funcs.len() {
@@ -58,10 +58,10 @@ impl<'a, 't> ModuleParser<'a, 't> {
             let mut value_parser =
                 ExprParser::new(self.ctx, self, src_idx, mod_idx, Some(i), params);
 
-            let value = value_parser.add_expr_node(value_node, Some(v), true);
-            value_parser.push_value_ref(&value, Some(v));
+            let value_ref = value_parser.add_expr_node(value_node, Some(v), true);
+            value_parser.use_value_ref(&value_ref, Some(v));
 
-            (self, self.funcs[i].func.body) = value_parser.finish();
+            (self, self.funcs[i].func.body) = value_parser.finish(v);
         }
 
         let module = &mut self.ctx.lock_modules_mut()[self.mod_idx];

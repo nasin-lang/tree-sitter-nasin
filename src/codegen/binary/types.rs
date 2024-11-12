@@ -129,11 +129,11 @@ impl From<f64> for F64Bits {
 }
 
 pub fn tuple_from_record<'a>(
-    fields: impl Iterator<Item = (&'a String, RuntimeValue<'a>)> + 'a,
+    fields: impl IntoIterator<Item = (&'a String, RuntimeValue<'a>)> + 'a,
     ty: &b::Type,
     modules: &[b::Module],
 ) -> Vec<RuntimeValue<'a>> {
-    let fields: HashMap<_, _> = fields.collect();
+    let fields: HashMap<_, _> = fields.into_iter().collect();
 
     match &ty.body {
         b::TypeBody::TypeRef(i, j) => match &modules[*i].typedefs[*j].body {

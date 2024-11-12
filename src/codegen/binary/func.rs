@@ -8,7 +8,7 @@ use derive_new::new;
 use itertools::{izip, Itertools};
 
 use super::globals::{GlobalBinding, Globals};
-use super::types::{self, get_size, get_type, RuntimeValue};
+use super::types::{self, get_size, get_type};
 use super::FuncBinding;
 use crate::{bytecode as b, utils};
 
@@ -19,8 +19,10 @@ pub struct FuncCodegen<'a, 'b, M: cl::Module> {
     pub obj_module: M,
     pub globals: Globals<'a>,
     pub funcs: HashMap<(usize, usize), FuncBinding>,
-    #[new(value = "utils::ValueStack::new(ScopePayload::default())")]
-    pub stack: utils::ValueStack<types::RuntimeValue<'a>, ScopePayload<'a>>,
+    #[new(value = "utils::ScopeStack::new(ScopePayload::default())")]
+    pub scopes: utils::ScopeStack<ScopePayload<'a>>,
+    #[new(default)]
+    pub values: HashMap<b::ValueIdx, types::RuntimeValue<'a>>,
     #[new(default)]
     declared_funcs: HashMap<cl::FuncId, cl::FuncRef>,
 }
@@ -33,168 +35,176 @@ macro_rules! expect_builder {
     }};
 }
 impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
-    pub fn create_initial_block(&mut self, params: &'a [b::Param]) {
-        let Some(func) = &mut self.builder else {
-            panic!("cannot add stack slot without a function");
+    pub fn create_initial_block(&mut self, params: &'a [b::ValueIdx], mod_idx: usize) {
+        let (block, cl_values) = {
+            let func = expect_builder!(self);
+            let block = func.create_block();
+            func.append_block_params_for_function_params(block);
+            (block, func.block_params(block).to_vec())
         };
 
-        let block = func.create_block();
-        func.append_block_params_for_function_params(block);
-        for (param, value) in izip!(params, func.block_params(block)) {
-            self.stack.push(types::RuntimeValue::new(
-                Cow::Borrowed(&param.ty),
-                (*value).into(),
-            ));
+        for (v, cl_value) in izip!(params, cl_values) {
+            let value = &self.modules[mod_idx].values[*v];
+            let runtime_value =
+                types::RuntimeValue::new(Cow::Borrowed(&value.ty), cl_value.into());
+            {
+                let this = &mut *self;
+                let v = *v;
+                let runtime_value = runtime_value.clone();
+                this.values.insert(v, runtime_value);
+            };
         }
 
-        func.switch_to_block(block);
-        self.stack.get_scope_mut().payload.block = Some(block);
+        expect_builder!(self).switch_to_block(block);
+        self.scopes.last_mut().block = Some(block);
     }
+    #[tracing::instrument(skip(self))]
     pub fn add_instr(&mut self, instr: &'a b::Instr, mod_idx: usize) {
-        if self.stack.get_scope().is_never()
+        if self.scopes.last().is_never()
             && !matches!(&instr.body, b::InstrBody::End | b::InstrBody::Else)
         {
             return;
         }
 
+        let mut mark_as_unreachable = instr.results.len() > 0
+            && instr
+                .results
+                .iter()
+                .all(|v| self.modules[mod_idx].values[*v].ty.is_never());
+
         if let Some(value) = self.value_from_instr(instr, mod_idx) {
-            self.stack.push(value);
+            self.values.insert(instr.results[0], value);
             return;
         }
 
         match &instr.body {
-            b::InstrBody::Add => {
-                self.push_bin_op(|func, lhs, rhs, ty| {
-                    if ty.is_int() {
-                        func.ins().iadd(lhs, rhs)
-                    } else if ty.is_float() {
-                        func.ins().fadd(lhs, rhs)
-                    } else {
-                        unreachable!()
-                    }
-                });
-            }
-            b::InstrBody::Sub => {
-                self.push_bin_op(|func, lhs, rhs, ty| {
-                    if ty.is_int() {
-                        func.ins().isub(lhs, rhs)
-                    } else if ty.is_float() {
-                        func.ins().fsub(lhs, rhs)
-                    } else {
-                        unreachable!()
-                    }
-                });
-            }
-            b::InstrBody::Mul => {
-                self.push_bin_op(|func, lhs, rhs, ty| {
-                    if ty.is_int() {
-                        func.ins().imul(lhs, rhs)
-                    } else if ty.is_float() {
-                        func.ins().fmul(lhs, rhs)
-                    } else {
-                        unreachable!()
-                    }
-                });
-            }
-            b::InstrBody::Div => {
-                self.push_bin_op(|func, lhs, rhs, ty| {
-                    if ty.is_uint() {
-                        func.ins().udiv(lhs, rhs)
-                    } else if ty.is_sint() {
-                        func.ins().sdiv(lhs, rhs)
-                    } else if ty.is_float() {
-                        func.ins().fdiv(lhs, rhs)
-                    } else {
-                        unreachable!()
-                    }
-                });
-            }
-            b::InstrBody::Mod => {
-                self.push_bin_op(|func, lhs, rhs, ty| {
-                    if ty.is_uint() {
-                        func.ins().urem(lhs, rhs)
-                    } else if ty.is_sint() {
-                        func.ins().srem(lhs, rhs)
-                    } else if ty.is_float() {
-                        let x = func.ins().fdiv(lhs, rhs);
-                        let x = func.ins().trunc(x);
-                        let y = func.ins().fneg(rhs);
-                        func.ins().fma(x, y, lhs)
-                    } else {
-                        unreachable!()
-                    }
-                });
-            }
-            b::InstrBody::Eq
-            | b::InstrBody::Neq
-            | b::InstrBody::Gt
-            | b::InstrBody::Lt
-            | b::InstrBody::Gte
-            | b::InstrBody::Lte => {
-                self.push_bin_op(|func, lhs, rhs, ty| {
-                    if ty.is_int() {
-                        let cond = match (&instr.body, ty.is_sint()) {
-                            (b::InstrBody::Eq, _) => cl::IntCC::Equal,
-                            (b::InstrBody::Neq, _) => cl::IntCC::NotEqual,
-                            (b::InstrBody::Gt, true) => cl::IntCC::SignedGreaterThan,
-                            (b::InstrBody::Gt, false) => cl::IntCC::UnsignedGreaterThan,
-                            (b::InstrBody::Lt, true) => cl::IntCC::SignedLessThan,
-                            (b::InstrBody::Lt, false) => cl::IntCC::UnsignedLessThan,
-                            (b::InstrBody::Gte, true) => {
-                                cl::IntCC::SignedGreaterThanOrEqual
-                            }
-                            (b::InstrBody::Gte, false) => {
-                                cl::IntCC::UnsignedGreaterThanOrEqual
-                            }
-                            (b::InstrBody::Lte, true) => cl::IntCC::SignedLessThanOrEqual,
-                            (b::InstrBody::Lte, false) => {
-                                cl::IntCC::UnsignedLessThanOrEqual
-                            }
-                            _ => unreachable!(),
-                        };
-                        func.ins().icmp(cond, lhs, rhs)
-                    } else if ty.is_float() {
-                        let cond = match &instr.body {
-                            b::InstrBody::Eq => cl::FloatCC::Equal,
-                            b::InstrBody::Neq => cl::FloatCC::NotEqual,
-                            b::InstrBody::Gt => cl::FloatCC::GreaterThan,
-                            b::InstrBody::Lt => cl::FloatCC::LessThan,
-                            b::InstrBody::Gte => cl::FloatCC::GreaterThanOrEqual,
-                            b::InstrBody::Lte => cl::FloatCC::LessThanOrEqual,
-                            _ => unreachable!(),
-                        };
-                        func.ins().fcmp(cond, lhs, rhs)
-                    } else {
-                        unreachable!()
-                    }
-                });
-            }
-            b::InstrBody::Not => {
+            b::InstrBody::Add(a, b)
+            | b::InstrBody::Sub(a, b)
+            | b::InstrBody::Mul(a, b)
+            | b::InstrBody::Div(a, b)
+            | b::InstrBody::Mod(a, b)
+            | b::InstrBody::Eq(a, b)
+            | b::InstrBody::Neq(a, b)
+            | b::InstrBody::Gt(a, b)
+            | b::InstrBody::Lt(a, b)
+            | b::InstrBody::Gte(a, b)
+            | b::InstrBody::Lte(a, b) => {
+                let lhs = self.use_value(*a);
+                let rhs = self.use_value(*b);
+                let ty = &self.values[a].ty;
+
                 let builder = expect_builder!(self);
-                let cond = self.stack.pop().add_to_func(&mut self.obj_module, builder);
 
-                let next_block = builder.create_block();
-                builder.append_block_param(next_block, cl::types::I8);
+                let cl_value = match &instr.body {
+                    b::InstrBody::Add(..) if ty.is_int() => builder.ins().iadd(lhs, rhs),
+                    b::InstrBody::Add(..) if ty.is_float() => {
+                        builder.ins().fadd(lhs, rhs)
+                    }
+                    b::InstrBody::Sub(..) if ty.is_int() => builder.ins().isub(lhs, rhs),
+                    b::InstrBody::Sub(..) if ty.is_float() => {
+                        builder.ins().fsub(lhs, rhs)
+                    }
+                    b::InstrBody::Mul(..) if ty.is_int() => builder.ins().imul(lhs, rhs),
+                    b::InstrBody::Mul(..) if ty.is_float() => {
+                        builder.ins().fmul(lhs, rhs)
+                    }
+                    b::InstrBody::Div(..) if ty.is_uint() => builder.ins().udiv(lhs, rhs),
+                    b::InstrBody::Div(..) if ty.is_sint() => builder.ins().sdiv(lhs, rhs),
+                    b::InstrBody::Div(..) if ty.is_float() => {
+                        builder.ins().fdiv(lhs, rhs)
+                    }
+                    b::InstrBody::Mod(..) if ty.is_uint() => builder.ins().urem(lhs, rhs),
+                    b::InstrBody::Mod(..) if ty.is_sint() => builder.ins().srem(lhs, rhs),
+                    b::InstrBody::Mod(..) if ty.is_float() => {
+                        let x = builder.ins().fdiv(lhs, rhs);
+                        let x = builder.ins().trunc(x);
+                        let y = builder.ins().fneg(rhs);
+                        builder.ins().fma(x, y, lhs)
+                    }
+                    b::InstrBody::Eq(..) if ty.is_int() => {
+                        builder.ins().icmp(cl::IntCC::Equal, lhs, rhs)
+                    }
+                    b::InstrBody::Eq(..) if ty.is_float() => {
+                        builder.ins().fcmp(cl::FloatCC::Equal, lhs, rhs)
+                    }
+                    b::InstrBody::Neq(..) if ty.is_int() => {
+                        builder.ins().icmp(cl::IntCC::NotEqual, lhs, rhs)
+                    }
+                    b::InstrBody::Neq(..) if ty.is_float() => {
+                        builder.ins().fcmp(cl::FloatCC::NotEqual, lhs, rhs)
+                    }
+                    b::InstrBody::Lt(..) if ty.is_sint() => {
+                        builder.ins().icmp(cl::IntCC::SignedLessThan, lhs, rhs)
+                    }
+                    b::InstrBody::Lt(..) if ty.is_uint() => {
+                        builder.ins().icmp(cl::IntCC::UnsignedLessThan, lhs, rhs)
+                    }
+                    b::InstrBody::Lt(..) if ty.is_float() => {
+                        builder.ins().fcmp(cl::FloatCC::LessThan, lhs, rhs)
+                    }
+                    b::InstrBody::Gt(..) if ty.is_sint() => {
+                        builder.ins().icmp(cl::IntCC::SignedGreaterThan, lhs, rhs)
+                    }
+                    b::InstrBody::Gt(..) if ty.is_uint() => {
+                        builder.ins().icmp(cl::IntCC::UnsignedGreaterThan, lhs, rhs)
+                    }
+                    b::InstrBody::Gt(..) if ty.is_float() => {
+                        builder.ins().fcmp(cl::FloatCC::GreaterThan, lhs, rhs)
+                    }
+                    b::InstrBody::Lte(..) if ty.is_sint() => {
+                        builder
+                            .ins()
+                            .icmp(cl::IntCC::SignedLessThanOrEqual, lhs, rhs)
+                    }
+                    b::InstrBody::Lte(..) if ty.is_uint() => {
+                        builder
+                            .ins()
+                            .icmp(cl::IntCC::UnsignedLessThanOrEqual, lhs, rhs)
+                    }
+                    b::InstrBody::Lte(..) if ty.is_float() => {
+                        builder.ins().fcmp(cl::FloatCC::LessThanOrEqual, lhs, rhs)
+                    }
+                    b::InstrBody::Gte(..) if ty.is_sint() => {
+                        builder
+                            .ins()
+                            .icmp(cl::IntCC::SignedGreaterThanOrEqual, lhs, rhs)
+                    }
+                    b::InstrBody::Gte(..) if ty.is_uint() => builder.ins().icmp(
+                        cl::IntCC::UnsignedGreaterThanOrEqual,
+                        lhs,
+                        rhs,
+                    ),
+                    b::InstrBody::Gte(..) if ty.is_float() => {
+                        builder
+                            .ins()
+                            .fcmp(cl::FloatCC::GreaterThanOrEqual, lhs, rhs)
+                    }
+                    _ => unreachable!(),
+                };
 
-                let v_true = builder.ins().iconst(cl::types::I8, 1);
+                self.values.insert(
+                    instr.results[0],
+                    types::RuntimeValue::new(ty.clone(), cl_value.into()),
+                );
+            }
+            b::InstrBody::Not(cond) => {
+                let cond = self.use_value(*cond);
+                let builder = expect_builder!(self);
+
                 let v_false = builder.ins().iconst(cl::types::I8, 0);
+                let cl_value = builder.ins().icmp(cl::IntCC::Equal, cond, v_false);
 
-                builder
-                    .ins()
-                    .brif(cond, next_block, &[v_false], next_block, &[v_true]);
-                builder.switch_to_block(next_block);
-
-                let block_params = builder.block_params(next_block);
-                assert!(block_params.len() == 1);
-
-                self.stack.push(types::RuntimeValue::new(
-                    Cow::Owned(b::Type::new(b::TypeBody::Bool, None)),
-                    block_params[0].into(),
-                ));
+                self.values.insert(
+                    instr.results[0],
+                    types::RuntimeValue::new(
+                        Cow::Owned(b::Type::new(b::TypeBody::Bool, None)),
+                        cl_value.into(),
+                    ),
+                );
             }
-            b::InstrBody::If(v) => {
+            b::InstrBody::If(cond_v, target_v) => {
                 let builder = expect_builder!(self);
-                let cond = self.stack.pop().add_to_func(&mut self.obj_module, builder);
+                let cond = self.values[cond_v].add_to_func(&mut self.obj_module, builder);
 
                 let then_block = builder.create_block();
                 let else_block = builder.create_block();
@@ -203,36 +213,40 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
                 builder.switch_to_block(then_block);
 
                 let module = &self.modules[mod_idx];
-                let ty = &module.values[*v].ty;
+                let ty = &module.values[*target_v].ty;
 
                 let next_block = builder.create_block();
-                builder.append_block_param(
-                    next_block,
-                    get_type(ty, self.modules, &self.obj_module),
-                );
 
-                self.stack.get_scope_mut().payload.block = Some(next_block);
+                if !ty.is_never() {
+                    builder.append_block_param(
+                        next_block,
+                        get_type(ty, self.modules, &self.obj_module),
+                    );
+                }
 
-                self.stack.create_scope(ScopePayload {
+                self.scopes.last_mut().block = Some(next_block);
+
+                self.scopes.begin(ScopePayload {
                     start_block: Some(then_block),
                     block: Some(then_block),
                     branches: vec![else_block],
                     next_block: Some(next_block),
+                    result_value: if ty.is_never() { None } else { Some(*target_v) },
                     ty: Some(Cow::Borrowed(ty)),
                 });
             }
             b::InstrBody::Else => {
                 let builder = expect_builder!(self);
 
-                let (scope, values) = self.stack.branch_scope();
+                let is_never = self.scopes.last().is_never();
+
+                let scope = self.scopes.branch();
                 let else_block = scope.payload.branches.pop().unwrap();
                 scope.payload.start_block = Some(else_block);
                 scope.payload.block = Some(else_block);
 
-                if !scope.is_never() {
-                    let value = values
-                        .last()
-                        .unwrap()
+                if !is_never {
+                    let value = self.values[&scope.result_value.unwrap()]
                         .add_to_func(&self.obj_module, builder);
                     builder
                         .ins()
@@ -241,7 +255,7 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
 
                 builder.switch_to_block(else_block);
             }
-            b::InstrBody::Loop(n) => {
+            b::InstrBody::Loop(acc_vs, target_v) => {
                 todo!();
                 //let builder = expect_builder!(self);
                 //let args = self.stack.pop_many(*n);
@@ -285,13 +299,11 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
             b::InstrBody::End => {
                 let builder = expect_builder!(self);
 
-                let (scope, values) = self.stack.end_scope();
+                let scope = self.scopes.end();
                 let next_block = scope.payload.next_block.unwrap();
 
                 if !scope.is_never() {
-                    let value = values
-                        .last()
-                        .unwrap()
+                    let value = self.values[&scope.result_value.unwrap()]
                         .add_to_func(&self.obj_module, builder);
                     builder.ins().jump(next_block, &[value]);
                 }
@@ -303,88 +315,100 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
                 assert!(block_params.is_empty() == scope.payload.ty.is_none());
 
                 if let [value] = block_params {
-                    self.stack.push(types::RuntimeValue::new(
-                        scope.payload.ty.unwrap(),
-                        (*value).into(),
-                    ));
+                    let runtime_value = (*value).into();
+                    self.values.insert(
+                        scope.payload.result_value.unwrap(),
+                        types::RuntimeValue::new(
+                            scope.payload.ty.unwrap(),
+                            runtime_value,
+                        ),
+                    );
                 }
             }
-            b::InstrBody::Continue => {
+            b::InstrBody::Continue(vs) => {
                 let builder = expect_builder!(self);
                 let (block, arity) = {
                     let scope = self
-                        .stack
-                        .get_loop_scope()
+                        .scopes
+                        .last_loop()
                         .expect("continue instruction should be called in a loop");
                     (scope.payload.start_block.unwrap(), scope.loop_arity)
                 };
 
-                let values = self
-                    .stack
-                    .pop_many(arity)
-                    .iter()
-                    .map(|arg| arg.add_to_func(&mut self.obj_module, builder))
+                let values = vs
+                    .into_iter()
+                    .map(|v| self.values[v].add_to_func(&mut self.obj_module, builder))
                     .collect_vec();
 
                 builder.ins().jump(block, &values);
-                self.stack.get_scope_mut().mark_as_never();
+                self.scopes.last_mut().mark_as_never();
             }
-            b::InstrBody::Call(mod_idx, func_idx) => {
-                let func_id = self.funcs.get(&(*mod_idx, *func_idx)).unwrap().func_id;
-                let func = &self.modules[*mod_idx].funcs[*func_idx];
+            b::InstrBody::Call(func_mod_idx, func_idx, vs) => {
+                let func_id =
+                    self.funcs.get(&(*func_mod_idx, *func_idx)).unwrap().func_id;
+                let func = &self.modules[*func_mod_idx].funcs[*func_idx];
                 let builder = expect_builder!(self);
 
-                let args = self
-                    .stack
-                    .pop_many(func.params_desc.len())
+                let args = vs
                     .into_iter()
-                    .map(|arg| arg.add_to_func(&mut self.obj_module, builder))
+                    .map(|v| self.values[v].add_to_func(&mut self.obj_module, builder))
                     .collect_vec();
 
                 if let Some(value) = self.call(func_id, &args) {
-                    self.stack.push(types::RuntimeValue::new(
-                        Cow::Borrowed(&func.ret_ty),
-                        value.into(),
-                    ));
+                    self.values.insert(
+                        instr.results[0],
+                        types::RuntimeValue::new(
+                            Cow::Borrowed(&func.ret_ty),
+                            value.into(),
+                        ),
+                    );
+                } else if self.modules[*func_mod_idx].values[func.ret].ty.is_never() {
+                    mark_as_unreachable = true;
                 }
             }
-            b::InstrBody::IndirectCall(n) => {
+            b::InstrBody::IndirectCall(func_v, vs) => {
                 let builder = expect_builder!(self);
 
-                let func = self.stack.pop();
+                let func = self.values[func_v].clone();
 
-                let mut args = self
-                    .stack
-                    .pop_many(*n)
+                let mut args = vs
                     .into_iter()
-                    .map(|arg| arg.add_to_func(&mut self.obj_module, builder))
+                    .map(|v| self.values[v].add_to_func(&mut self.obj_module, builder))
                     .collect_vec();
 
                 match &func.src {
                     types::ValueSource::AppliedMethod(
                         self_value,
-                        (mod_idx, func_idx),
+                        (func_mod_idx, func_idx),
                     ) => {
                         let func_id =
-                            self.funcs.get(&(*mod_idx, *func_idx)).unwrap().func_id;
-                        let func = &self.modules[*mod_idx].funcs[*func_idx];
+                            self.funcs.get(&(*func_mod_idx, *func_idx)).unwrap().func_id;
+                        let func = &self.modules[*func_mod_idx].funcs[*func_idx];
 
                         args.push(*self_value);
 
                         if let Some(value) = self.call(func_id, &args) {
-                            self.stack.push(types::RuntimeValue::new(
-                                Cow::Borrowed(&func.ret_ty),
-                                value.into(),
-                            ));
+                            self.values.insert(
+                                instr.results[0],
+                                types::RuntimeValue::new(
+                                    Cow::Borrowed(&func.ret_ty),
+                                    value.into(),
+                                ),
+                            );
+                        } else if self.modules[*func_mod_idx].values[func.ret]
+                            .ty
+                            .is_never()
+                        {
+                            mark_as_unreachable = true;
                         }
                     }
                     _ => todo!("function as value"),
                 }
             }
-            b::InstrBody::GetField(name) => {
+            b::InstrBody::GetField(source_v, name) => {
                 let builder = expect_builder!(self);
 
-                let source = self.stack.pop();
+                let source = &self.values[source_v];
                 let b::Type {
                     body: b::TypeBody::TypeRef(mod_idx, ty_idx),
                     ..
@@ -416,15 +440,15 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
                     source_value,
                     offset as i32,
                 );
-                self.stack.push(types::RuntimeValue::new(
-                    Cow::Borrowed(&field.ty),
-                    value.into(),
-                ));
+                self.values.insert(
+                    instr.results[0],
+                    types::RuntimeValue::new(Cow::Borrowed(&field.ty), value.into()),
+                );
             }
-            b::InstrBody::GetMethod(name) => {
+            b::InstrBody::GetMethod(source_v, name) => {
                 let builder = expect_builder!(self);
 
-                let source = self.stack.pop();
+                let source = &self.values[source_v];
                 let b::Type {
                     body: b::TypeBody::TypeRef(mod_idx, ty_idx),
                     ..
@@ -447,29 +471,36 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
                     .expect("method should be present in type");
 
                 let value = source.add_to_func(&self.obj_module, builder);
-                self.stack.push(types::RuntimeValue::new(
-                    Cow::Owned(ty.as_ref().clone()),
-                    types::ValueSource::AppliedMethod(value, method.func_ref),
-                ))
+                self.values.insert(
+                    instr.results[0],
+                    types::RuntimeValue::new(
+                        Cow::Owned(ty.as_ref().clone()),
+                        types::ValueSource::AppliedMethod(value, method.func_ref),
+                    ),
+                );
             }
-            b::InstrBody::ArrayLen | b::InstrBody::StrLen => {
+            b::InstrBody::ArrayLen(source_v) | b::InstrBody::StrLen(source_v) => {
                 let builder = expect_builder!(self);
 
-                let source = self.stack.pop().add_to_func(&self.obj_module, builder);
+                let source = self.values[source_v].add_to_func(&self.obj_module, builder);
                 let value = builder.ins().load(
                     self.obj_module.isa().pointer_type(),
                     cl::MemFlags::new(),
                     source,
                     0,
                 );
-                self.stack.push(RuntimeValue::new(
-                    Cow::Owned(b::Type::new(b::TypeBody::USize, None)),
-                    types::ValueSource::Value(value),
-                ));
+                self.values.insert(
+                    instr.results[0],
+                    types::RuntimeValue::new(
+                        Cow::Owned(b::Type::new(b::TypeBody::USize, None)),
+                        types::ValueSource::Value(value),
+                    ),
+                );
             }
-            b::InstrBody::ArrayPtr(idx) | b::InstrBody::StrPtr(idx) => {
-                let source = self.stack.pop();
-                let source_value =
+            b::InstrBody::ArrayPtr(source_v, idx)
+            | b::InstrBody::StrPtr(source_v, idx) => {
+                let source = self.values[source_v].clone();
+                let cl_source =
                     source.add_to_func(&mut self.obj_module, expect_builder!(self));
 
                 let (item_size, len) = match &source.ty.body {
@@ -495,7 +526,7 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
                     let len = builder.ins().load(
                         self.obj_module.isa().pointer_type(),
                         cl::MemFlags::new(),
-                        source_value,
+                        cl_source,
                         0,
                     );
                     let cond =
@@ -514,37 +545,46 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
                     .iconst(self.obj_module.isa().pointer_type(), unsafe {
                         mem::transmute::<_, i64>(offset)
                     });
-                let value = builder.ins().iadd(source_value, offset_value);
+                let value = builder.ins().iadd(cl_source, offset_value);
 
                 let item_ty = match &source.ty.body {
                     b::TypeBody::Array(array_ty) => array_ty.item.clone(),
                     b::TypeBody::String(_) => b::Type::new(b::TypeBody::U8, None).into(),
                     _ => panic!("type should be string or array"),
                 };
-                self.stack.push(RuntimeValue::new(
-                    Cow::Owned(b::Type::new(b::TypeBody::Ptr(item_ty), None)),
-                    value.into(),
-                ));
+                self.values.insert(
+                    instr.results[0],
+                    types::RuntimeValue::new(
+                        Cow::Owned(b::Type::new(b::TypeBody::Ptr(item_ty), None)),
+                        value.into(),
+                    ),
+                );
             }
-            b::InstrBody::Type(_) => {}
+            b::InstrBody::Type(..) => {}
             b::InstrBody::GetProperty(..) | b::InstrBody::CompileError => {
                 panic!("never should try to compile '{}'", &instr)
             }
-            b::InstrBody::Dup(..)
-            | b::InstrBody::CreateNumber(..)
+            b::InstrBody::CreateNumber(..)
             | b::InstrBody::CreateBool(..)
             | b::InstrBody::CreateString(..)
             | b::InstrBody::CreateArray(..)
             | b::InstrBody::CreateRecord(..)
             | b::InstrBody::GetGlobal(..) => unreachable!(),
         }
+
+        if mark_as_unreachable {
+            self.scopes.last_mut().mark_as_never();
+            let builder = expect_builder!(self);
+            builder.ins().trap(cl::TrapCode::UnreachableCodeReached);
+        }
     }
     pub fn return_value(
         mut self,
+        v: b::ValueIdx,
     ) -> (M, Globals<'a>, HashMap<(usize, usize), FuncBinding>) {
         let builder = expect_builder!(self);
 
-        let value = self.stack.pop().add_to_func(&mut self.obj_module, builder);
+        let value = self.values[&v].add_to_func(&mut self.obj_module, builder);
         builder.ins().return_(&[value]);
 
         (self.obj_module, self.globals, self.funcs)
@@ -566,7 +606,6 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
         utils::replace_with(self, |mut this| {
             let v = 'match_b: {
                 match &instr.body {
-                    b::InstrBody::Dup(n) => Some(this.stack.get(*n).unwrap().clone()),
                     b::InstrBody::CreateNumber(n) => {
                         let module = &self.modules[mod_idx];
                         let ty = &module.values[instr.results[0]].ty;
@@ -632,11 +671,12 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
                             data.into(),
                         ))
                     }
-                    b::InstrBody::CreateArray(n) => {
+                    b::InstrBody::CreateArray(vs) => {
                         let module = &self.modules[mod_idx];
                         let ty = &module.values[instr.results[0]].ty;
 
-                        let values = this.stack.pop_many(*n);
+                        let values =
+                            vs.iter().map(|v| this.values[v].clone()).collect_vec();
                         let (data, module) =
                             this.globals.data_for_array(values.clone(), this.obj_module);
                         this.obj_module = module;
@@ -654,7 +694,10 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
                         let ty = &module.values[instr.results[0]].ty;
 
                         let values = types::tuple_from_record(
-                            izip!(fields, this.stack.pop_many(fields.len())),
+                            fields
+                                .iter()
+                                .map(|(name, v)| (name, this.values[v].clone()))
+                                .collect_vec(),
                             ty,
                             this.modules,
                         );
@@ -684,7 +727,7 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
             (this, v)
         })
     }
-    pub fn store_global(&mut self, value: RuntimeValue, global: &GlobalBinding) {
+    pub fn store_global(&mut self, value: types::RuntimeValue, global: &GlobalBinding) {
         let types::ValueSource::Data(data_id) = &global.value.src else {
             panic!("should never try to store a global that is a const");
         };
@@ -723,6 +766,14 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
         }
     }
 
+    fn use_value(&mut self, v: b::ValueIdx) -> cl::Value {
+        let Some(runtime_value) = self.values.get(&v) else {
+            panic!("value should be present in scope: {v}");
+        };
+        let cl_value =
+            runtime_value.add_to_func(&mut self.obj_module, expect_builder!(self));
+        cl_value
+    }
     fn create_stack_slot(&mut self, values: &[types::RuntimeValue]) -> cl::StackSlot {
         let Some(func) = &mut self.builder else {
             panic!("cannot add stack slot without a function");
@@ -746,22 +797,6 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
 
         ss
     }
-    fn push_bin_op(
-        &mut self,
-        f: impl FnOnce(&mut cl::FunctionBuilder, cl::Value, cl::Value, &b::Type) -> cl::Value,
-    ) {
-        let operands = self.stack.pop_many(2);
-        assert!(operands[0].ty == operands[1].ty);
-
-        let lhs = operands[0].add_to_func(&mut self.obj_module, expect_builder!(self));
-        let rhs = operands[1].add_to_func(&mut self.obj_module, expect_builder!(self));
-
-        let value = f(expect_builder!(self), lhs, rhs, operands[0].ty.as_ref());
-        self.stack.push(types::RuntimeValue::new(
-            operands[0].ty.clone(),
-            value.into(),
-        ));
-    }
     fn add_assert(&mut self, cond: cl::Value, code: cl::TrapCode) {
         let builder = expect_builder!(self);
         builder.ins().trapz(cond, code);
@@ -774,5 +809,6 @@ pub struct ScopePayload<'a> {
     pub block: Option<cl::Block>,
     pub next_block: Option<cl::Block>,
     pub branches: Vec<cl::Block>,
+    pub result_value: Option<b::ValueIdx>,
     pub ty: Option<Cow<'a, b::Type>>,
 }

@@ -9,96 +9,119 @@ use crate::utils;
 
 #[derive(Debug, Clone)]
 pub enum InstrBody {
-    Dup(usize),
-
     GetGlobal(usize, usize),
-    GetProperty(String),
-    GetField(String),
-    GetMethod(String),
+    GetProperty(ValueIdx, String),
+    GetField(ValueIdx, String),
+    GetMethod(ValueIdx, String),
     CreateBool(bool),
     CreateNumber(String),
     CreateString(String),
-    CreateArray(usize),
-    CreateRecord(Vec<String>),
+    CreateArray(Vec<ValueIdx>),
+    CreateRecord(utils::SortedMap<String, ValueIdx>),
 
-    Add,
-    Sub,
-    Mul,
-    Div,
-    Mod,
+    Add(ValueIdx, ValueIdx),
+    Sub(ValueIdx, ValueIdx),
+    Mul(ValueIdx, ValueIdx),
+    Div(ValueIdx, ValueIdx),
+    Mod(ValueIdx, ValueIdx),
 
-    Eq,
-    Neq,
-    Gt,
-    Gte,
-    Lt,
-    Lte,
-    Not,
+    Eq(ValueIdx, ValueIdx),
+    Neq(ValueIdx, ValueIdx),
+    Gt(ValueIdx, ValueIdx),
+    Gte(ValueIdx, ValueIdx),
+    Lt(ValueIdx, ValueIdx),
+    Lte(ValueIdx, ValueIdx),
+    Not(ValueIdx),
 
-    Call(usize, usize),
-    IndirectCall(usize),
+    Call(usize, usize, Vec<ValueIdx>),
+    IndirectCall(ValueIdx, Vec<ValueIdx>),
 
-    If(ValueIdx),
+    If(ValueIdx, ValueIdx),
     Else,
-    Loop(usize),
+    Loop(Vec<ValueIdx>, ValueIdx),
     End,
-    Continue,
+    Continue(Vec<ValueIdx>),
 
-    ArrayLen,
-    ArrayPtr(u64),
-    StrLen,
-    StrPtr(u64),
+    ArrayLen(ValueIdx),
+    ArrayPtr(ValueIdx, u64),
+    StrLen(ValueIdx),
+    StrPtr(ValueIdx, u64),
 
-    Type(Type),
+    Type(ValueIdx, Type),
 
     CompileError,
 }
 impl Display for InstrBody {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            InstrBody::Dup(v) => write!(f, "dup ^{v}")?,
             InstrBody::GetGlobal(mod_idx, global_idx) => {
                 write!(f, "get_global {mod_idx}-{global_idx}")?
             }
-            InstrBody::GetProperty(prop) => write!(f, "get_property .{prop}")?,
-            InstrBody::GetField(field) => write!(f, "get_field .{field}")?,
-            InstrBody::GetMethod(field) => write!(f, "get_method .{field}")?,
+            InstrBody::GetProperty(v, prop) => write!(f, "get_property v{v} .{prop}")?,
+            InstrBody::GetField(v, field) => write!(f, "get_field v{v} .{field}")?,
+            InstrBody::GetMethod(v, field) => write!(f, "get_method v{v} .{field}")?,
             InstrBody::CreateBool(v) => write!(f, "create_bool {v}")?,
             InstrBody::CreateNumber(v) => write!(f, "create_number {v}")?,
             InstrBody::CreateString(v) => {
                 write!(f, "create_string {}", utils::encode_string_lit(v))?
             }
-            InstrBody::CreateArray(len) => write!(f, "create_array {len}")?,
-            InstrBody::CreateRecord(fields) => {
-                write!(f, "create_record")?;
-                for field in fields {
-                    write!(f, " .{field}")?;
+            InstrBody::CreateArray(vs) => {
+                write!(f, "create_array")?;
+                for v in vs {
+                    write!(f, " v{v}")?;
                 }
             }
-            InstrBody::Add => write!(f, "add")?,
-            InstrBody::Sub => write!(f, "sub")?,
-            InstrBody::Mul => write!(f, "mul")?,
-            InstrBody::Div => write!(f, "div")?,
-            InstrBody::Mod => write!(f, "mod")?,
-            InstrBody::Eq => write!(f, "eq")?,
-            InstrBody::Neq => write!(f, "neq")?,
-            InstrBody::Gt => write!(f, "gt")?,
-            InstrBody::Gte => write!(f, "gte")?,
-            InstrBody::Lt => write!(f, "lt")?,
-            InstrBody::Lte => write!(f, "lte")?,
-            InstrBody::Not => write!(f, "not")?,
-            InstrBody::Call(mod_idx, func_idx) => write!(f, "call {mod_idx}-{func_idx}")?,
-            InstrBody::IndirectCall(n) => write!(f, "indirect_call {n}")?,
-            InstrBody::If(v) => write!(f, "if -> v{v}")?,
+            InstrBody::CreateRecord(fields) => {
+                write!(f, "create_record")?;
+                for (name, v) in fields {
+                    write!(f, " .{name}=v{v}")?;
+                }
+            }
+            InstrBody::Add(a, b) => write!(f, "add {a} {b}")?,
+            InstrBody::Sub(a, b) => write!(f, "sub {a} {b}")?,
+            InstrBody::Mul(a, b) => write!(f, "mul {a} {b}")?,
+            InstrBody::Div(a, b) => write!(f, "div {a} {b}")?,
+            InstrBody::Mod(a, b) => write!(f, "mod {a} {b}")?,
+            InstrBody::Eq(a, b) => write!(f, "eq {a} {b}")?,
+            InstrBody::Neq(a, b) => write!(f, "neq {a} {b}")?,
+            InstrBody::Gt(a, b) => write!(f, "gt {a} {b}")?,
+            InstrBody::Gte(a, b) => write!(f, "gte {a} {b}")?,
+            InstrBody::Lt(a, b) => write!(f, "lt {a} {b}")?,
+            InstrBody::Lte(a, b) => write!(f, "lte {a} {b}")?,
+            InstrBody::Not(v) => write!(f, "not {v}")?,
+            InstrBody::Call(mod_idx, func_idx, args) => {
+                write!(f, "call {mod_idx}-{func_idx}")?;
+                for arg in args {
+                    write!(f, " v{arg}")?;
+                }
+            }
+            InstrBody::IndirectCall(v, args) => {
+                write!(f, "indirect_call v{v}")?;
+                for arg in args {
+                    write!(f, " v{arg}")?;
+                }
+            }
+            InstrBody::If(v, target) => write!(f, "if v{v} -> v{target}")?,
             InstrBody::Else => write!(f, "else")?,
-            InstrBody::Loop(n) => write!(f, "loop {n}")?,
+            InstrBody::Loop(vs, target) => {
+                write!(f, "loop")?;
+                for v in vs {
+                    write!(f, " v{v}")?;
+                }
+                write!(f, " -> v{target}")?;
+            }
             InstrBody::End => write!(f, "end")?,
-            InstrBody::Continue => write!(f, "continue")?,
-            InstrBody::ArrayLen => write!(f, "array_len")?,
-            InstrBody::ArrayPtr(idx) => write!(f, "array_ptr {idx}")?,
-            InstrBody::StrLen => write!(f, "str_len")?,
-            InstrBody::StrPtr(idx) => write!(f, "str_ptr {idx}")?,
-            InstrBody::Type(ty) => write!(f, "type {ty}")?,
+            InstrBody::Continue(vs) => {
+                write!(f, "continue")?;
+                for v in vs {
+                    write!(f, " v{v}")?;
+                }
+            }
+            InstrBody::ArrayLen(v) => write!(f, "array_len v{v}")?,
+            InstrBody::ArrayPtr(v, idx) => write!(f, "array_ptr v{v} {idx}")?,
+            InstrBody::StrLen(v) => write!(f, "str_len v{v}")?,
+            InstrBody::StrPtr(v, idx) => write!(f, "str_ptr v{v} {idx}")?,
+            InstrBody::Type(v, ty) => write!(f, "type v{v} {ty}")?,
             InstrBody::CompileError => write!(f, "compile_error")?,
         }
         Ok(())

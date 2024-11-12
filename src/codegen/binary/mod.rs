@@ -125,7 +125,7 @@ impl BinaryCodegen<'_> {
                 this.globals,
                 this.funcs,
             );
-            codegen.create_initial_block(&[]);
+            codegen.create_initial_block(&[], 0);
 
             for ((i, j), global) in codegen.globals.globals.clone() {
                 if global.is_const {
@@ -134,12 +134,12 @@ impl BinaryCodegen<'_> {
                 for instr in &self.modules[i].globals[j].body {
                     codegen.add_instr(instr, i);
                 }
-                assert!(codegen.stack.scope_len() == 1);
-                let res = codegen.stack.pop();
                 if !global.is_entry_point {
+                    let v = &self.modules[i].globals[j].value;
+                    let res = codegen.values[v].clone();
                     codegen.store_global(res, &global);
                 }
-                codegen.stack.pop_all();
+                codegen.values.clear();
             }
 
             let exit_code = codegen
@@ -238,13 +238,13 @@ impl BinaryCodegen<'_> {
                 this.globals,
                 this.funcs,
             );
-            codegen.create_initial_block(&decl.params_desc);
+            codegen.create_initial_block(&decl.params, mod_idx);
 
             for instr in &decl.body {
                 codegen.add_instr(instr, mod_idx);
             }
 
-            (this.obj_module, this.globals, this.funcs) = codegen.return_value();
+            (this.obj_module, this.globals, this.funcs) = codegen.return_value(decl.ret);
             this
         })
     }
