@@ -22,7 +22,7 @@ pub struct FuncCodegen<'a, 'b, M: cl::Module> {
     #[new(value = "utils::ScopeStack::new(ScopePayload::default())")]
     pub scopes: utils::ScopeStack<ScopePayload<'a>>,
     #[new(default)]
-    pub values: HashMap<b::ValueIdx, types::RuntimeValue<'a>>,
+    pub values: HashMap<b::ValueIdx, types::RuntimeValue>,
     #[new(default)]
     declared_funcs: HashMap<cl::FuncId, cl::FuncRef>,
 }
@@ -44,9 +44,7 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
         };
 
         for (v, cl_value) in izip!(params, cl_values) {
-            let value = &self.modules[mod_idx].values[*v];
-            let runtime_value =
-                types::RuntimeValue::new(Cow::Borrowed(&value.ty), cl_value.into());
+            let runtime_value = types::RuntimeValue::new(cl_value.into(), mod_idx, *v);
             {
                 let this = &mut *self;
                 let v = *v;
@@ -91,7 +89,7 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
             | b::InstrBody::Lte(a, b) => {
                 let lhs = self.use_value(*a);
                 let rhs = self.use_value(*b);
-                let ty = &self.values[a].ty;
+                let ty = &self.modules[mod_idx].values[*a].ty;
 
                 let builder = expect_builder!(self);
 
@@ -184,7 +182,7 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
 
                 self.values.insert(
                     instr.results[0],
-                    types::RuntimeValue::new(ty.clone(), cl_value.into()),
+                    types::RuntimeValue::new(cl_value.into(), mod_idx, instr.results[0]),
                 );
             }
             b::InstrBody::Not(cond) => {
@@ -196,10 +194,7 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
 
                 self.values.insert(
                     instr.results[0],
-                    types::RuntimeValue::new(
-                        Cow::Owned(b::Type::new(b::TypeBody::Bool, None)),
-                        cl_value.into(),
-                    ),
+                    types::RuntimeValue::new(cl_value.into(), mod_idx, instr.results[0]),
                 );
             }
             b::InstrBody::If(cond_v, target_v) => {
@@ -316,12 +311,10 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
 
                 if let [value] = block_params {
                     let runtime_value = (*value).into();
+                    let result_v = scope.payload.result_value.unwrap();
                     self.values.insert(
                         scope.payload.result_value.unwrap(),
-                        types::RuntimeValue::new(
-                            scope.payload.ty.unwrap(),
-                            runtime_value,
-                        ),
+                        types::RuntimeValue::new(runtime_value, mod_idx, result_v),
                     );
                 }
             }
@@ -357,10 +350,7 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
                 if let Some(value) = self.call(func_id, &args) {
                     self.values.insert(
                         instr.results[0],
-                        types::RuntimeValue::new(
-                            Cow::Borrowed(&func.ret_ty),
-                            value.into(),
-                        ),
+                        types::RuntimeValue::new(value.into(), mod_idx, instr.results[0]),
                     );
                 } else if self.modules[*func_mod_idx].values[func.ret].ty.is_never() {
                     mark_as_unreachable = true;
@@ -391,8 +381,9 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
                             self.values.insert(
                                 instr.results[0],
                                 types::RuntimeValue::new(
-                                    Cow::Borrowed(&func.ret_ty),
                                     value.into(),
+                                    mod_idx,
+                                    instr.results[0],
                                 ),
                             );
                         } else if self.modules[*func_mod_idx].values[func.ret]
@@ -408,30 +399,28 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
             b::InstrBody::GetField(source_v, name) => {
                 let builder = expect_builder!(self);
 
+                let source_ty = &self.modules[mod_idx].values[*source_v].ty;
                 let source = &self.values[source_v];
                 let b::Type {
-                    body: b::TypeBody::TypeRef(mod_idx, ty_idx),
+                    body: b::TypeBody::TypeRef(ty_mod_idx, ty_idx),
                     ..
-                } = source.ty.as_ref()
+                } = source_ty
                 else {
                     panic!("type should be a typeref");
                 };
                 let b::TypeDefBody::Record(rec) =
-                    &self.modules[*mod_idx].typedefs[*ty_idx].body
+                    &self.modules[*ty_mod_idx].typedefs[*ty_idx].body
                 else {
                     panic!("type should be a record type");
                 };
 
                 let mut offset = 0;
-                let mut field = None;
                 for (k, v) in &rec.fields {
                     if k == name {
-                        field = Some(v);
                         break;
                     }
                     offset += get_type(&v.ty, self.modules, &self.obj_module).bytes();
                 }
-                let field = field.expect("field should be present in record");
 
                 let source_value = source.add_to_func(&mut self.obj_module, builder);
                 let value = builder.ins().load(
@@ -442,22 +431,23 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
                 );
                 self.values.insert(
                     instr.results[0],
-                    types::RuntimeValue::new(Cow::Borrowed(&field.ty), value.into()),
+                    types::RuntimeValue::new(value.into(), mod_idx, instr.results[0]),
                 );
             }
             b::InstrBody::GetMethod(source_v, name) => {
                 let builder = expect_builder!(self);
 
+                let source_ty = &self.modules[mod_idx].values[*source_v].ty;
                 let source = &self.values[source_v];
                 let b::Type {
-                    body: b::TypeBody::TypeRef(mod_idx, ty_idx),
+                    body: b::TypeBody::TypeRef(ty_mod_idx, ty_idx),
                     ..
-                } = source.ty.as_ref()
+                } = source_ty
                 else {
                     panic!("type should be a typeref");
                 };
 
-                let method = match &self.modules[*mod_idx].typedefs[*ty_idx].body {
+                let method = match &self.modules[*ty_mod_idx].typedefs[*ty_idx].body {
                     b::TypeDefBody::Record(rec) => rec
                         .methods
                         .iter()
@@ -465,17 +455,14 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
                         .map(|(_, v)| v)
                         .expect("method should be present in record"),
                 };
-                let ty = source
-                    .ty
-                    .property(name, &self.modules)
-                    .expect("method should be present in type");
 
                 let value = source.add_to_func(&self.obj_module, builder);
                 self.values.insert(
                     instr.results[0],
                     types::RuntimeValue::new(
-                        Cow::Owned(ty.as_ref().clone()),
                         types::ValueSource::AppliedMethod(value, method.func_ref),
+                        mod_idx,
+                        instr.results[0],
                     ),
                 );
             }
@@ -492,18 +479,20 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
                 self.values.insert(
                     instr.results[0],
                     types::RuntimeValue::new(
-                        Cow::Owned(b::Type::new(b::TypeBody::USize, None)),
                         types::ValueSource::Value(value),
+                        mod_idx,
+                        instr.results[0],
                     ),
                 );
             }
             b::InstrBody::ArrayPtr(source_v, idx)
             | b::InstrBody::StrPtr(source_v, idx) => {
+                let source_ty = &self.modules[mod_idx].values[*source_v].ty;
                 let source = self.values[source_v].clone();
                 let cl_source =
                     source.add_to_func(&mut self.obj_module, expect_builder!(self));
 
-                let (item_size, len) = match &source.ty.body {
+                let (item_size, len) = match &source_ty.body {
                     b::TypeBody::Array(array_ty) => (
                         get_size(&array_ty.item, &self.modules, &self.obj_module),
                         array_ty.len,
@@ -547,17 +536,9 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
                     });
                 let value = builder.ins().iadd(cl_source, offset_value);
 
-                let item_ty = match &source.ty.body {
-                    b::TypeBody::Array(array_ty) => array_ty.item.clone(),
-                    b::TypeBody::String(_) => b::Type::new(b::TypeBody::U8, None).into(),
-                    _ => panic!("type should be string or array"),
-                };
                 self.values.insert(
                     instr.results[0],
-                    types::RuntimeValue::new(
-                        Cow::Owned(b::Type::new(b::TypeBody::Ptr(item_ty), None)),
-                        value.into(),
-                    ),
+                    types::RuntimeValue::new(value.into(), mod_idx, instr.results[0]),
                 );
             }
             b::InstrBody::Type(..) => {}
@@ -602,7 +583,7 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
         &mut self,
         instr: &'a b::Instr,
         mod_idx: usize,
-    ) -> Option<types::RuntimeValue<'a>> {
+    ) -> Option<types::RuntimeValue> {
         utils::replace_with(self, |mut this| {
             let v = 'match_b: {
                 match &instr.body {
@@ -616,7 +597,11 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
                                 let src = types::ValueSource::$variant(unsafe {
                                     mem::transmute(value)
                                 });
-                                Some(types::RuntimeValue::new(Cow::Borrowed(ty), src))
+                                Some(types::RuntimeValue::new(
+                                    src,
+                                    mod_idx,
+                                    instr.results[0],
+                                ))
                             }};
                         }
 
@@ -656,38 +641,37 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
                         }
                     }
                     b::InstrBody::CreateBool(b) => Some(types::RuntimeValue::new(
-                        Cow::Owned(b::Type::new(b::TypeBody::Bool, None)),
                         (*b as u8).into(),
+                        mod_idx,
+                        instr.results[0],
                     )),
                     b::InstrBody::CreateString(s) => {
                         let (data, module) =
                             this.globals.data_for_string(s, this.obj_module);
                         this.obj_module = module;
                         Some(types::RuntimeValue::new(
-                            Cow::Owned(b::Type::new(
-                                b::TypeBody::String(b::StringType::new(Some(s.len()))),
-                                None,
-                            )),
                             data.into(),
+                            mod_idx,
+                            instr.results[0],
                         ))
                     }
                     b::InstrBody::CreateArray(vs) => {
-                        let module = &self.modules[mod_idx];
-                        let ty = &module.values[instr.results[0]].ty;
-
-                        let values =
-                            vs.iter().map(|v| this.values[v].clone()).collect_vec();
-                        let (data, module) =
-                            this.globals.data_for_array(values.clone(), this.obj_module);
+                        let (data, module) = this.globals.data_for_array(
+                            vs.iter().map(|v| this.values[v].src).collect_vec(),
+                            this.obj_module,
+                        );
                         this.obj_module = module;
                         let src = if let Some(data) = data {
                             data.into()
                         } else if this.builder.is_some() {
-                            this.create_stack_slot(&values).into()
+                            this.create_stack_slot(
+                                vs.iter().map(|v| this.values[v]).collect_vec(),
+                            )
+                            .into()
                         } else {
                             break 'match_b None;
                         };
-                        Some(types::RuntimeValue::new(Cow::Borrowed(ty), src))
+                        Some(types::RuntimeValue::new(src, mod_idx, instr.results[0]))
                     }
                     b::InstrBody::CreateRecord(fields) => {
                         let module = &self.modules[mod_idx];
@@ -701,17 +685,19 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
                             ty,
                             this.modules,
                         );
-                        let (data, module) =
-                            this.globals.data_for_tuple(values.clone(), this.obj_module);
+                        let (data, module) = this.globals.data_for_tuple(
+                            values.iter().map(|value| value.src).collect_vec(),
+                            this.obj_module,
+                        );
                         this.obj_module = module;
                         let src = if let Some(data) = data {
                             data.into()
                         } else if this.builder.is_some() {
-                            this.create_stack_slot(&values).into()
+                            this.create_stack_slot(values).into()
                         } else {
                             break 'match_b None;
                         };
-                        Some(types::RuntimeValue::new(Cow::Borrowed(ty), src))
+                        Some(types::RuntimeValue::new(src, mod_idx, instr.results[0]))
                     }
                     b::InstrBody::GetGlobal(mod_idx, global_idx) => Some(
                         this.globals
@@ -734,7 +720,7 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
 
         let builder = expect_builder!(self);
 
-        let ty = types::get_type(&value.ty, self.modules, &self.obj_module);
+        let ty = value.native_type(self.modules, &self.obj_module);
         let value = value.add_to_func(&mut self.obj_module, builder);
         let gv = self
             .obj_module
@@ -774,14 +760,17 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
             runtime_value.add_to_func(&mut self.obj_module, expect_builder!(self));
         cl_value
     }
-    fn create_stack_slot(&mut self, values: &[types::RuntimeValue]) -> cl::StackSlot {
+    fn create_stack_slot(
+        &mut self,
+        values: impl IntoIterator<Item = types::RuntimeValue>,
+    ) -> cl::StackSlot {
         let Some(func) = &mut self.builder else {
             panic!("cannot add stack slot without a function");
         };
 
         let mut size = 0;
         let values = values
-            .iter()
+            .into_iter()
             .map(|v| {
                 let offset = size;
                 size += v.native_type(self.modules, &self.obj_module).bytes();

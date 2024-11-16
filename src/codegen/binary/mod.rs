@@ -165,19 +165,21 @@ impl BinaryCodegen<'_> {
         self.obj_module.clear_context(&mut self.module_ctx)
     }
     fn declare_function(&mut self, mod_idx: usize, idx: usize) {
-        let decl = &self.modules[mod_idx].funcs[idx];
+        let module = &self.modules[mod_idx];
+        let decl = &module.funcs[idx];
         let mut sig = self.obj_module.make_signature();
 
-        for param in &decl.params_desc {
+        for param in &decl.params {
             sig.params.push(cl::AbiParam::new(types::get_type(
-                &param.ty,
+                &module.values[*param].ty,
                 self.modules,
                 &self.obj_module,
             )));
         }
-        if !matches!(&decl.ret_ty.body, b::TypeBody::Void | b::TypeBody::Never) {
+        let ret_ty = &module.values[decl.ret].ty;
+        if !matches!(&ret_ty.body, b::TypeBody::Void | b::TypeBody::Never) {
             sig.returns.push(cl::AbiParam::new(types::get_type(
-                &decl.ret_ty,
+                ret_ty,
                 self.modules,
                 &self.obj_module,
             )));

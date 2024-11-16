@@ -170,12 +170,7 @@ impl<'a, 't> ModuleParser<'a, 't> {
     fn add_func(&mut self, name: String, node: ts::Node<'t>) -> usize {
         assert!(matches!(node.kind(), "func_decl" | "method"));
 
-        let (params_desc, params, params_names, params_locs): (
-            Vec<_>,
-            Vec<_>,
-            Vec<_>,
-            Vec<_>,
-        ) = node
+        let (params, params_names, params_locs): (Vec<_>, Vec<_>, Vec<_>) = node
             .iter_field("params")
             .map(|param_node| {
                 let param_name_node = param_node.required_field("pat").of_kind("ident");
@@ -189,10 +184,6 @@ impl<'a, 't> ModuleParser<'a, 't> {
 
                 let loc = b::Loc::from_node(self.src_idx, &param_node);
                 (
-                    b::Param {
-                        ty: param_ty.clone(),
-                        loc,
-                    },
                     self.create_value(param_ty, loc),
                     param_name.to_string(),
                     b::Loc::from_node(self.src_idx, &param_name_node),
@@ -232,8 +223,6 @@ impl<'a, 't> ModuleParser<'a, 't> {
         let ret = self.create_value(ret_ty.clone(), loc);
         let func = b::Func {
             name,
-            params_desc,
-            ret_ty,
             params: params.clone(),
             ret,
             extn,
@@ -266,7 +255,6 @@ impl<'a, 't> ModuleParser<'a, 't> {
         let value = self.create_value(ty.clone(), b::Loc::from_node(self.src_idx, &node));
         let global = b::Global {
             name,
-            ty,
             value,
             body: vec![],
             is_entry_point,

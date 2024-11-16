@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::collections::HashMap;
 
 use cranelift_shim::{self as cl};
@@ -10,9 +9,9 @@ use super::types;
 use crate::{bytecode as b, utils};
 
 #[derive(Debug, Clone)]
-pub struct GlobalBinding<'a> {
+pub struct GlobalBinding {
     pub symbol_name: String,
-    pub value: types::RuntimeValue<'a>,
+    pub value: types::RuntimeValue,
     pub is_const: bool,
     pub is_entry_point: bool,
 }
@@ -26,12 +25,12 @@ pub struct Globals<'a> {
     #[new(default)]
     strings: HashMap<String, cl::DataId>,
     #[new(default)]
-    tuples: HashMap<Vec<types::RuntimeValue<'a>>, cl::DataId>,
+    tuples: HashMap<Vec<types::ValueSource>, cl::DataId>,
     #[new(default)]
-    pub globals: HashMap<(usize, usize), GlobalBinding<'a>>,
+    pub globals: HashMap<(usize, usize), GlobalBinding>,
 }
 impl<'a> Globals<'a> {
-    pub fn get_global(&self, mod_idx: usize, idx: usize) -> Option<&GlobalBinding<'a>> {
+    pub fn get_global(&self, mod_idx: usize, idx: usize) -> Option<&GlobalBinding> {
         self.globals.get(&(mod_idx, idx))
     }
 
@@ -41,7 +40,9 @@ impl<'a> Globals<'a> {
         idx: usize,
         obj_module: M,
     ) -> M {
-        let global = &self.modules[mod_idx].globals[idx];
+        let module = &self.modules[mod_idx];
+        let global = &module.globals[idx];
+        let global_value = &module.values[global.value];
 
         // TODO: improve name mangling
         let symbol_name = format!("$global_{mod_idx}_{idx}");
@@ -58,11 +59,9 @@ impl<'a> Globals<'a> {
                 } else {
                     let (data_id, module) = codegen
                         .globals
-                        .create_writable_for_type(&global.ty, codegen.obj_module);
-                    let value = types::RuntimeValue::new(
-                        Cow::Borrowed(&global.ty),
-                        data_id.into(),
-                    );
+                        .create_writable_for_type(&global_value.ty, codegen.obj_module);
+                    let value =
+                        types::RuntimeValue::new(data_id.into(), mod_idx, global.value);
                     return (codegen.globals, (value, false, module));
                 }
             }
@@ -128,7 +127,7 @@ impl<'a> Globals<'a> {
 
     pub fn data_for_array<M: cl::Module>(
         &mut self,
-        mut values: Vec<types::RuntimeValue<'a>>,
+        mut values: Vec<types::ValueSource>,
         obj_module: M,
     ) -> (Option<cl::DataId>, M) {
         let len = match obj_module.isa().pointer_bytes() {
@@ -138,19 +137,13 @@ impl<'a> Globals<'a> {
             8 => types::ValueSource::I64(values.len() as u64),
             _ => panic!("how many bytes?"),
         };
-        values.insert(
-            0,
-            types::RuntimeValue::new(
-                Cow::Owned(b::Type::new(b::TypeBody::USize, None)),
-                len,
-            ),
-        );
+        values.insert(0, len);
         self.data_for_tuple(values, obj_module)
     }
 
     pub fn data_for_tuple<M: cl::Module>(
         &mut self,
-        values: Vec<types::RuntimeValue<'a>>,
+        values: Vec<types::ValueSource>,
         mut obj_module: M,
     ) -> (Option<cl::DataId>, M) {
         if let Some(id) = self.tuples.get(&values) {
@@ -164,12 +157,12 @@ impl<'a> Globals<'a> {
         let mut included_datas = HashMap::new();
 
         for item in &values {
-            if let types::ValueSource::Data(field_data_id) = item.src {
+            if let types::ValueSource::Data(field_data_id) = item {
                 let offset = bytes.len();
                 bytes.extend(repeat_n(0u8, obj_module.isa().pointer_bytes() as usize));
 
                 let field_gv = included_datas.entry(field_data_id).or_insert_with(|| {
-                    obj_module.declare_data_in_data(field_data_id, &mut desc)
+                    obj_module.declare_data_in_data(*field_data_id, &mut desc)
                 });
                 desc.write_data_addr(offset as u32, field_gv.clone(), 0);
             } else {

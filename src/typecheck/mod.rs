@@ -36,11 +36,11 @@ impl<'a> TypeChecker<'a> {
 
         for i in 0..funcs_len {
             tracing::trace!(i, "adding func");
-            let (params, ret) = {
+            let ret = {
                 let module = &self.ctx.lock_modules()[self.mod_idx];
-                (module.funcs[i].params.clone(), module.funcs[i].ret)
+                module.funcs[i].ret
             };
-            self.add_body(|module| &module.funcs[i].body, &params, ret, Some(i));
+            self.add_body(|module| &module.funcs[i].body, ret, Some(i));
         }
 
         for i in 0..globals_len {
@@ -49,31 +49,18 @@ impl<'a> TypeChecker<'a> {
                 let module = &self.ctx.lock_modules()[self.mod_idx];
                 module.globals[i].value
             };
-            self.add_body(|module| &module.globals[i].body, &[], value, None);
+            self.add_body(|module| &module.globals[i].body, value, None);
         }
 
         self.validate();
 
         for i in 0..globals_len {
-            {
-                let module = &mut self.ctx.lock_modules_mut()[self.mod_idx];
-                let global = &mut module.globals[i];
-                global.ty = module.values[global.value].ty.clone();
-            }
             self.finish_body(
                 |module| &module.globals[i].body,
                 |module| &mut module.globals[i].body,
             );
         }
         for i in 0..funcs_len {
-            {
-                let module = &mut self.ctx.lock_modules_mut()[self.mod_idx];
-                let func = &mut module.funcs[i];
-                for (param_desc, param) in izip!(&mut func.params_desc, &func.params) {
-                    param_desc.ty = module.values[*param].ty.clone();
-                }
-                func.ret_ty = module.values[func.ret].ty.clone();
-            }
             self.finish_body(
                 |module| &module.funcs[i].body,
                 |module| &mut module.funcs[i].body,
@@ -85,7 +72,6 @@ impl<'a> TypeChecker<'a> {
     fn add_body(
         &mut self,
         get_body: impl for<'m> Fn(&'m b::Module) -> &'m [b::Instr],
-        inputs: &[b::ValueIdx],
         result: b::ValueIdx,
         func_idx: Option<usize>,
     ) {
@@ -125,8 +111,11 @@ impl<'a> TypeChecker<'a> {
                     let gv = { self.ctx.lock_modules()[*mod_idx].globals[*idx].value };
                     self.merge_types(&[gv, v]);
                 } else {
-                    let ty =
-                        { self.ctx.lock_modules()[*mod_idx].globals[*idx].ty.clone() };
+                    let ty = {
+                        let module = &self.ctx.lock_modules()[*mod_idx];
+                        let gv = module.globals[*idx].value;
+                        module.values[gv].ty.clone()
+                    };
                     self.add_constraint(v, Constraint::Is(ty));
                 };
             }
@@ -237,13 +226,22 @@ impl<'a> TypeChecker<'a> {
                         self.add_constraint(v, Constraint::TypeOf(func.ret));
                     }
                 } else {
-                    let modules = self.ctx.lock_modules();
-                    let func = &modules[*mod_idx].funcs[*idx];
+                    let (params_tys, ret_ty) = {
+                        let module = &self.ctx.lock_modules()[*mod_idx];
+                        let func = &module.funcs[*idx];
+                        (
+                            func.params
+                                .iter()
+                                .map(|param| module.values[*param].ty.clone())
+                                .collect_vec(),
+                            module.values[func.ret].ty.clone(),
+                        )
+                    };
 
-                    for (arg, param) in izip!(args, &func.params_desc) {
-                        self.add_constraint(*arg, Constraint::Is(param.ty.clone()));
+                    for (arg, param_ty) in izip!(args, params_tys) {
+                        self.add_constraint(*arg, Constraint::Is(param_ty));
                     }
-                    self.add_constraint(v, Constraint::Is(func.ret_ty.clone()))
+                    self.add_constraint(v, Constraint::Is(ret_ty))
                 }
             }
             b::InstrBody::IndirectCall(func, args) => {
@@ -791,11 +789,6 @@ impl<'a> TypeChecker<'a> {
             get_body(module).len()
         };
         for i in 0..len {
-            let results = {
-                let module = &self.ctx.lock_modules_mut()[self.mod_idx];
-                get_body(module)[i].results.clone()
-            };
-
             let get_property = {
                 let modules = &self.ctx.lock_modules()[self.mod_idx];
                 let instr = &get_body(modules)[i];

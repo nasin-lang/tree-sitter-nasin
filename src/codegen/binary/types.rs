@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::collections::HashMap;
 use std::mem;
 
@@ -8,18 +7,22 @@ use derive_new::new;
 
 use crate::bytecode as b;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, new)]
-pub struct RuntimeValue<'a> {
-    pub ty: Cow<'a, b::Type>,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, new)]
+pub struct RuntimeValue {
     pub src: ValueSource,
+    pub mod_idx: usize,
+    pub value_idx: b::ValueIdx,
 }
-impl RuntimeValue<'_> {
+impl RuntimeValue {
+    pub fn ty<'m>(&self, modules: &'m [b::Module]) -> &'m b::Type {
+        &modules[self.mod_idx].values[self.value_idx].ty
+    }
     pub fn native_type(
         &self,
         modules: &[b::Module],
         obj_module: &impl cl::Module,
     ) -> cl::Type {
-        get_type(&self.ty, modules, obj_module)
+        get_type(self.ty(modules), modules, obj_module)
     }
     pub fn serialize(
         &self,
@@ -129,10 +132,10 @@ impl From<f64> for F64Bits {
 }
 
 pub fn tuple_from_record<'a>(
-    fields: impl IntoIterator<Item = (&'a String, RuntimeValue<'a>)> + 'a,
+    fields: impl IntoIterator<Item = (&'a String, RuntimeValue)> + 'a,
     ty: &b::Type,
     modules: &[b::Module],
-) -> Vec<RuntimeValue<'a>> {
+) -> Vec<RuntimeValue> {
     let fields: HashMap<_, _> = fields.into_iter().collect();
 
     match &ty.body {

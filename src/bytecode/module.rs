@@ -1,5 +1,4 @@
 use std::collections::HashSet;
-use std::iter::zip;
 use std::path::PathBuf;
 use std::{cmp, fmt};
 
@@ -66,11 +65,7 @@ impl Display for Module {
         }
 
         for (i, global) in self.globals.iter().enumerate() {
-            writeln!(
-                f,
-                "global {i} {}: -> v{} {}",
-                global.loc, global.value, global.ty
-            )?;
+            writeln!(f, "global {i} {} -> v{}", global.loc, global.value)?;
             write_body(f, &global.body, 4)?;
         }
 
@@ -81,15 +76,15 @@ impl Display for Module {
                 write!(f, " (extern {})", utils::encode_string_lit(name))?;
             }
 
-            if func.params_desc.len() > 0 {
+            if func.params.len() > 0 {
                 write!(f, " (params")?;
-                for (v, param_desc) in zip(&func.params, &func.params_desc) {
-                    write!(f, " (v{v} {} {})", param_desc.ty, param_desc.loc)?;
+                for v in &func.params {
+                    write!(f, " v{v}")?;
                 }
                 write!(f, ")")?;
             }
 
-            writeln!(f, " -> v{} {}", &func.ret, &func.ret_ty)?;
+            writeln!(f, " -> v{}", &func.ret)?;
 
             write_body(f, &func.body, 4)?;
         }
@@ -110,7 +105,6 @@ pub struct TypeDef {
 #[derive(Debug, Clone)]
 pub struct Global {
     pub name: String,
-    pub ty: Type,
     pub value: ValueIdx,
     pub body: Vec<Instr>,
     pub is_entry_point: bool,
@@ -120,8 +114,6 @@ pub struct Global {
 #[derive(Debug, Clone)]
 pub struct Func {
     pub name: String,
-    pub params_desc: Vec<Param>,
-    pub ret_ty: Type,
     pub params: Vec<ValueIdx>,
     pub ret: ValueIdx,
     pub body: Vec<Instr>,
@@ -159,12 +151,6 @@ pub struct Method {
 #[derive(Debug, Clone, new)]
 pub struct NameWithLoc {
     pub value: String,
-    pub loc: Loc,
-}
-
-#[derive(Debug, Clone)]
-pub struct Param {
-    pub ty: Type,
     pub loc: Loc,
 }
 
