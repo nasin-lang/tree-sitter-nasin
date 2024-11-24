@@ -52,11 +52,12 @@ impl<'a> Globals<'a> {
                 FuncCodegen::new(self.modules, None, obj_module, s, HashMap::new());
 
             for instr in &global.body {
-                if let Some(value) = codegen.value_from_instr(instr, mod_idx) {
-                    let this = &mut codegen;
-                    let v = instr.results[0];
-                    this.values.insert(v, value);
-                } else {
+                if let b::InstrBody::Break(v) = &instr.body {
+                    codegen.values.insert(global.value, codegen.values[v]);
+                    break;
+                }
+
+                if codegen.value_from_instr(instr, mod_idx).is_none() {
                     let (data_id, module) = codegen
                         .globals
                         .create_writable_for_type(&global_value.ty, codegen.obj_module);
@@ -68,11 +69,7 @@ impl<'a> Globals<'a> {
 
             (
                 codegen.globals,
-                (
-                    codegen.values[&global.value].clone(),
-                    true,
-                    codegen.obj_module,
-                ),
+                (codegen.values[&global.value], true, codegen.obj_module),
             )
         });
 

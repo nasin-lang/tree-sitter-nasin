@@ -1,12 +1,12 @@
 use std::fs;
+use std::ops::{Deref, DerefMut};
 use std::path::PathBuf;
 use std::sync::{Mutex, RwLock};
 
-use derive_more::{Deref, DerefMut};
+use derive_more::derive::{Deref, DerefMut};
 use derive_new::new;
 use tree_sitter as ts;
 
-use crate::utils::indented;
 use crate::{bytecode as b, codegen, config, errors, parser, sources, typecheck};
 
 #[derive(Debug, Deref, DerefMut, new)]
@@ -55,8 +55,9 @@ impl BuildContext {
                 .iter()
                 .map(|s| s.into())
                 .collect();
-            modules.push(b::Module::new(sources));
-            modules.len() - 1
+            let mod_idx = modules.len();
+            modules.push(b::Module::new(mod_idx, sources));
+            mod_idx
         };
 
         let mut module_parser = parser::ModuleParser::new(self, src_idx, mod_idx);
@@ -65,13 +66,11 @@ impl BuildContext {
         }
         module_parser.add_root(root_node);
         module_parser.finish();
+
         typecheck::TypeChecker::new(self, mod_idx).check();
 
         if self.cfg.dump_bytecode {
-            println!(
-                "module {mod_idx}:\n{}",
-                indented(4, [&self.lock_modules()[mod_idx]])
-            );
+            println!("{}", &self.lock_modules()[mod_idx]);
         }
 
         mod_idx

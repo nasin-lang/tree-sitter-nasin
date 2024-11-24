@@ -1,6 +1,7 @@
 mod constraints;
 
 use std::collections::HashSet;
+use std::fmt::Debug;
 use std::mem;
 
 use derive_new::new;
@@ -23,33 +24,46 @@ impl<'a> TypeChecker<'a> {
     pub fn check(&mut self) {
         tracing::trace!("check started");
 
-        let (globals_len, funcs_len, values_len) = {
+        let (globals_len, funcs_len, value_constraints) = {
             let module = &self.ctx.lock_modules()[self.mod_idx];
-            (
-                module.globals.len(),
-                module.funcs.len(),
-                module.values.len(),
-            )
+            let value_contraints = module
+                .values
+                .iter()
+                .map(|value| {
+                    if !value.ty.is_unknown() {
+                        HashSet::from([Constraint::Is(value.ty.clone())])
+                    } else {
+                        HashSet::new()
+                    }
+                })
+                .collect();
+            (module.globals.len(), module.funcs.len(), value_contraints)
         };
 
-        self.value_constraints = repeat_n(HashSet::new(), values_len).collect();
+        self.value_constraints = value_constraints;
 
         for i in 0..funcs_len {
             tracing::trace!(i, "adding func");
-            let ret = {
+            let (body, ret) = {
                 let module = &self.ctx.lock_modules()[self.mod_idx];
-                module.funcs[i].ret
+                (module.funcs[i].body.clone(), module.funcs[i].ret)
             };
-            self.add_body(|module| &module.funcs[i].body, ret, Some(i));
+            let mut scopes = utils::ScopeStack::new(ScopePayload::new());
+            if let Some(result) = self.add_body(body, &mut scopes, Some(i)) {
+                self.merge_types([&ret, &result]);
+            }
         }
 
         for i in 0..globals_len {
             tracing::trace!(i, "adding global");
-            let value = {
+            let (body, value) = {
                 let module = &self.ctx.lock_modules()[self.mod_idx];
-                module.globals[i].value
+                (module.globals[i].body.clone(), module.globals[i].value)
             };
-            self.add_body(|module| &module.globals[i].body, value, None);
+            let mut scopes = utils::ScopeStack::new(ScopePayload::new());
+            if let Some(result) = self.add_body(body, &mut scopes, None) {
+                self.merge_types([&value, &result]);
+            }
         }
 
         self.validate();
@@ -71,45 +85,41 @@ impl<'a> TypeChecker<'a> {
     #[tracing::instrument(level = "trace", skip_all)]
     fn add_body(
         &mut self,
-        get_body: impl for<'m> Fn(&'m b::Module) -> &'m [b::Instr],
-        result: b::ValueIdx,
+        body: Vec<b::Instr>,
+        scopes: &mut utils::ScopeStack<ScopePayload>,
         func_idx: Option<usize>,
-    ) {
-        tracing::trace!("add body");
-
-        let body_len = {
-            let module = &self.ctx.lock_modules()[self.mod_idx];
-            get_body(module).len()
-        };
-
-        if body_len == 0 {
-            return;
+    ) -> Option<b::ValueIdx> {
+        if body.len() == 0 {
+            return None;
         }
 
-        let mut scopes = utils::ScopeStack::new(ScopePayload::new(result));
-
-        for i in 0..body_len {
-            let instr = {
-                let module = &self.ctx.lock_modules()[self.mod_idx];
-                get_body(module)[i].clone()
-            };
-            self.add_instr(instr, &mut scopes, func_idx);
+        let mut result = None;
+        for instr in body {
+            if let b::InstrBody::Break(v) = &instr.body {
+                result = result.or(Some(*v));
+                continue;
+            }
+            self.add_instr(instr, scopes, func_idx);
         }
+
+        return result;
     }
 
-    #[tracing::instrument(skip(self, instr, scopes), fields(%instr))]
+    #[tracing::instrument(skip(self, scopes))]
     fn add_instr(
         &mut self,
-        instr: b::Instr,
+        mut instr: b::Instr,
         scopes: &mut utils::ScopeStack<ScopePayload>,
         func_idx: Option<usize>,
     ) {
-        match &instr.body {
+        tracing::trace!("add instr");
+
+        match &mut instr.body {
             b::InstrBody::GetGlobal(mod_idx, idx) => {
                 let v = instr.results[0];
                 if *mod_idx == self.mod_idx {
                     let gv = { self.ctx.lock_modules()[*mod_idx].globals[*idx].value };
-                    self.merge_types(&[gv, v]);
+                    self.merge_types([&gv, &v]);
                 } else {
                     let ty = {
                         let module = &self.ctx.lock_modules()[*mod_idx];
@@ -153,7 +163,7 @@ impl<'a> TypeChecker<'a> {
             b::InstrBody::CreateArray(vs) => {
                 let v = instr.results[0];
                 if vs.len() > 0 {
-                    self.merge_types(vs);
+                    self.merge_types(&*vs);
                     self.add_constraint(v, Constraint::Array(vs[0]));
                 } else {
                     let item_ty = b::Type::new(b::TypeBody::Never, None);
@@ -180,17 +190,17 @@ impl<'a> TypeChecker<'a> {
             | b::InstrBody::Div(a, b)
             | b::InstrBody::Mod(a, b) => {
                 let v = instr.results[0];
-                self.merge_types(&[*a, *b, v]);
+                self.merge_types([a, b, &v]);
                 // FIXME: use interface/trait
                 let ty = b::Type::new(b::TypeBody::AnyNumber, None);
-                self.add_constraint(v, Constraint::Is(ty));
+                self.add_constraint(*a, Constraint::Is(ty));
             }
             b::InstrBody::Not(x) => {
                 let v = instr.results[0];
-                self.merge_types(&[*x, v]);
+                self.merge_types([x, &v]);
                 // FIXME: use interface/trait
                 self.add_constraint(
-                    v,
+                    *x,
                     Constraint::Is(b::Type::new(b::TypeBody::Bool, None)),
                 );
             }
@@ -201,7 +211,7 @@ impl<'a> TypeChecker<'a> {
             | b::InstrBody::Lt(a, b)
             | b::InstrBody::Lte(a, b) => {
                 let v = instr.results[0];
-                self.merge_types(&[*a, *b]);
+                self.merge_types([a, &*b]);
                 // FIXME: use interface/trait
                 let number_ty = b::Type::new(b::TypeBody::AnyNumber, None);
                 let bool_ty = b::Type::new(b::TypeBody::Bool, None);
@@ -215,9 +225,9 @@ impl<'a> TypeChecker<'a> {
                     let func = self.ctx.lock_modules()[self.mod_idx].funcs[*idx].clone();
 
                     if func_idx.is_some_and(|i| i == *idx) {
-                        self.merge_types(&[v, func.ret]);
+                        self.merge_types([&func.ret, &v]);
                         for (arg, param) in izip!(args, func.params) {
-                            self.merge_types(&[*arg, param]);
+                            self.merge_types([&param, arg]);
                         }
                     } else {
                         for (arg, param) in izip!(args, func.params) {
@@ -254,51 +264,52 @@ impl<'a> TypeChecker<'a> {
                 }
                 self.add_constraint(v, Constraint::ReturnOf(*func));
             }
-            b::InstrBody::If(cond_v, target_v) => {
+            b::InstrBody::If(cond_v, then_, else_) => {
                 self.add_constraint(
                     *cond_v,
                     Constraint::Is(b::Type::new(b::TypeBody::Bool, None)),
                 );
 
-                scopes.begin(ScopePayload::new(*target_v));
-            }
-            b::InstrBody::Else => {
+                scopes.begin(ScopePayload::new());
+                if let Some(then_v) =
+                    self.add_body(std::mem::replace(then_, vec![]), scopes, func_idx)
+                {
+                    self.merge_types([&then_v, &instr.results[0]]);
+                }
+
                 scopes.branch();
-            }
-            b::InstrBody::End => {
+                if let Some(else_v) =
+                    self.add_body(std::mem::replace(else_, vec![]), scopes, func_idx)
+                {
+                    self.merge_types([&else_v, &instr.results[0]]);
+                }
+
                 scopes.end();
             }
-            b::InstrBody::Loop(acc_vs, target_v) => {
-                todo!()
-                //assert!(stack.len() >= *n);
-                //let loop_args = stack.pop_many(*n);
-                //
-                //let entry = self.add_entry(instr.loc);
-                //let scope = stack.create_scope(ScopePayload::new(entry));
-                //scope.is_loop = true;
-                //scope.loop_arity = *n;
-                //scope.payload.loop_args = loop_args.clone();
-                //
-                //stack.extend(loop_args);
+            b::InstrBody::Loop(inputs, body) => {
+                let scope = scopes.begin(ScopePayload::new());
+                scope.is_loop = true;
+                for (loop_v, initial_v) in &*inputs {
+                    self.merge_types([initial_v, loop_v]);
+                    scope.loop_args.push(*loop_v);
+                }
+
+                if let Some(result) =
+                    self.add_body(std::mem::replace(body, vec![]), scopes, func_idx)
+                {
+                    self.merge_types([&result, &instr.results[0]]);
+                }
+
+                scopes.end();
             }
             b::InstrBody::Continue(vs) => {
-                todo!()
-                //assert!(stack.scope_len() >= 1);
-                //let scope = stack
-                //    .get_loop_scope()
-                //    .expect("continue should be inside a loop scope")
-                //    .clone();
-                //assert!(stack.len() >= scope.start() + scope.loop_arity);
-                //
-                //for (old, curr) in
-                //    izip!(scope.payload.loop_args, stack.pop_many(scope.loop_arity))
-                //{
-                //    if old != curr {
-                //        self.merge_types(&[old, curr]);
-                //    }
-                //}
-                //
-                //stack.get_scope_mut().mark_as_never();
+                let loop_args = &scopes
+                    .last_loop()
+                    .expect("continue should be called inside a loop")
+                    .loop_args;
+                for (v, loop_v) in izip!(vs, loop_args) {
+                    self.merge_types([v, loop_v]);
+                }
             }
             b::InstrBody::ArrayLen(input) => {
                 let v = instr.results[0];
@@ -345,7 +356,7 @@ impl<'a> TypeChecker<'a> {
             b::InstrBody::Type(v, ty) => {
                 self.add_constraint(*v, Constraint::Is(ty.clone()));
             }
-            b::InstrBody::CompileError => {}
+            b::InstrBody::Break(_) | b::InstrBody::CompileError => {}
         }
     }
 
@@ -376,7 +387,7 @@ impl<'a> TypeChecker<'a> {
                 (Constraint::Array(a), Constraint::Array(b))
                 | (Constraint::Ptr(a), Constraint::Ptr(b))
                 | (Constraint::ArrayElemPtr(a), Constraint::ArrayElemPtr(b)) => {
-                    self.merge_types(&[*a, *b]);
+                    self.merge_types([a, b]);
                 }
                 (
                     Constraint::HasProperty(name_a, a),
@@ -386,7 +397,7 @@ impl<'a> TypeChecker<'a> {
                     Constraint::IsProperty(a, name_a),
                     Constraint::IsProperty(b, name_b),
                 ) if name_a == name_b => {
-                    self.merge_types(&[*a, *b]);
+                    self.merge_types([a, b]);
                 }
                 _ => {}
             }
@@ -396,21 +407,22 @@ impl<'a> TypeChecker<'a> {
     }
 
     #[tracing::instrument(level = "trace", skip(self))]
-    fn merge_types(&mut self, values: &[b::ValueIdx]) {
+    fn merge_types<'i, I>(&mut self, items: I)
+    where
+        I: IntoIterator<Item = &'i b::ValueIdx>,
+        I: Debug,
+    {
         tracing::trace!("merge types");
 
-        let mut visited = HashSet::new();
+        let mut merge_with = items
+            .into_iter()
+            .sorted_by(|a, b| a.cmp(b).reverse())
+            .copied()
+            .collect_vec();
 
-        let head = values[0];
-        visited.insert(head);
-
-        let mut merge_with = values[1..].to_vec();
+        let head = merge_with.pop().unwrap();
 
         while let Some(idx) = merge_with.pop() {
-            if visited.contains(&idx) {
-                continue;
-            }
-
             let constraints = {
                 let values = &mut self.ctx.lock_modules_mut()[self.mod_idx].values;
 
@@ -421,8 +433,6 @@ impl<'a> TypeChecker<'a> {
             for constraint in constraints {
                 self.add_constraint(head, constraint);
             }
-
-            visited.insert(idx);
         }
     }
 
@@ -435,6 +445,7 @@ impl<'a> TypeChecker<'a> {
 
         for idx in 0..len {
             success = self.validate_value(idx, &mut visited) && success;
+            tracing::trace!(idx, ?success, "validated value");
         }
 
         tracing::info!(success, "validation completed");
@@ -448,7 +459,11 @@ impl<'a> TypeChecker<'a> {
         idx: b::ValueIdx,
         visited: &mut HashSet<b::ValueIdx>,
     ) -> bool {
-        if visited.contains(&idx) {
+        let already_visited = visited.contains(&idx);
+
+        tracing::trace!(?already_visited, "validate_value");
+
+        if already_visited {
             return true;
         }
         visited.insert(idx);
@@ -464,6 +479,7 @@ impl<'a> TypeChecker<'a> {
         if same_of.len() > 0 {
             let mut tys = vec![];
             for i in same_of {
+                tracing::trace!(i, "will validate same_type_of");
                 success = self.validate_value(i, visited) && success;
                 if !success {
                     return false;
@@ -489,19 +505,25 @@ impl<'a> TypeChecker<'a> {
             return success;
         }
 
-        let mut constraints = self.value_constraints[idx].iter().cloned().collect_vec();
-        constraints.sort_by(|a, b| b.priority().cmp(&a.priority()));
+        let constraints = self.value_constraints[idx]
+            .iter()
+            .cloned()
+            .sorted_by(|a, b| b.priority().cmp(&a.priority()))
+            .collect_vec();
 
         for c in constraints {
+            tracing::trace!(?c, "checking constraint");
             let merge_with = match c {
                 Constraint::Is(ty) => ty.clone(),
                 Constraint::TypeOf(target) => {
+                    tracing::trace!(target, "will validate TypeOf");
                     success = self.validate_value(target, visited) && success;
                     self.ctx.lock_modules()[self.mod_idx].values[target]
                         .ty
                         .clone()
                 }
                 Constraint::Array(target) => {
+                    tracing::trace!(target, "will validate Array");
                     success = self.validate_value(target, visited) && success;
                     let ty = self.ctx.lock_modules()[self.mod_idx].values[target]
                         .ty
@@ -512,6 +534,7 @@ impl<'a> TypeChecker<'a> {
                     )
                 }
                 Constraint::Ptr(target) => {
+                    tracing::trace!(target, "will validate Ptr");
                     success = self.validate_value(target, visited) && success;
                     let ty = self.ctx.lock_modules()[self.mod_idx].values[target]
                         .ty
@@ -519,6 +542,7 @@ impl<'a> TypeChecker<'a> {
                     b::Type::new(b::TypeBody::Ptr(ty.into()), None)
                 }
                 Constraint::ArrayElemPtr(target) => {
+                    tracing::trace!(target, "will validate ArrayElemPtr");
                     success = self.validate_value(target, visited) && success;
                     let item_ty = if let b::TypeBody::Array(arr_ty) =
                         &self.ctx.lock_modules()[self.mod_idx].values[target].ty.body
@@ -530,6 +554,7 @@ impl<'a> TypeChecker<'a> {
                     b::Type::new(b::TypeBody::Ptr(item_ty), None)
                 }
                 Constraint::ReturnOf(target) => {
+                    tracing::trace!(target, "will validate ReturnOf");
                     success = self.validate_value(target, visited) && success;
                     if let b::TypeBody::Func(func_ty) =
                         &self.ctx.lock_modules()[self.mod_idx].values[target].ty.body
@@ -540,6 +565,7 @@ impl<'a> TypeChecker<'a> {
                     }
                 }
                 Constraint::ParameterOf(target, idx) => {
+                    tracing::trace!(target, idx, "will validate ParameterOf");
                     success = self.validate_value(target, visited) && success;
                     if let b::TypeBody::Func(func_ty) =
                         &self.ctx.lock_modules()[self.mod_idx].values[target].ty.body
@@ -554,11 +580,14 @@ impl<'a> TypeChecker<'a> {
                     }
                 }
                 Constraint::IsProperty(target, key) => {
+                    tracing::trace!(target, key, "will validate IsProperty");
                     success = self.validate_value(target, visited) && success;
-                    for entry in
-                        self.get_property_deps(target, &key, &self.ctx.lock_modules())
-                    {
-                        success = self.validate_value(entry, visited) && success;
+                    for prop_dep in {
+                        let modules = self.ctx.lock_modules();
+                        self.get_property_deps(target, &key, &modules)
+                    } {
+                        tracing::trace!(prop_dep, "will validate property_deps");
+                        success = self.validate_value(prop_dep, visited) && success;
                     }
                     if let Some(ty) =
                         self.get_property_type(target, &key, &self.ctx.lock_modules())
@@ -571,6 +600,7 @@ impl<'a> TypeChecker<'a> {
                 }
                 Constraint::Members(members) => {
                     for member in members.values() {
+                        tracing::trace!(member, "will validate member");
                         success = self.validate_value(*member, visited) && success;
                     }
                     b::Type::new(
@@ -589,6 +619,7 @@ impl<'a> TypeChecker<'a> {
                     )
                 }
                 Constraint::HasProperty(key, target) => {
+                    tracing::trace!(key, target, "will validate HasProperty");
                     success = self.validate_value(target, visited) && success;
                     let ty = {
                         self.ctx.lock_modules()[self.mod_idx].values[target]
@@ -611,6 +642,8 @@ impl<'a> TypeChecker<'a> {
                     None,
                 ),
             };
+
+            tracing::trace!(?merge_with, "got type");
 
             {
                 let modules = &mut self.ctx.lock_modules_mut();
@@ -824,7 +857,7 @@ impl<'a> TypeChecker<'a> {
 
 #[derive(Debug, Clone, new)]
 struct ScopePayload {
-    result: b::ValueIdx,
     #[new(default)]
     loop_args: Vec<b::ValueIdx>,
 }
+impl utils::SimpleScopePayload for ScopePayload {}

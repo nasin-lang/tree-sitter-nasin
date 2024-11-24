@@ -15,6 +15,7 @@ use crate::utils::SortedMap;
 
 #[derive(Debug, Clone, new)]
 pub struct Module {
+    pub idx: usize,
     #[new(default)]
     pub values: Vec<Value>,
     #[new(default)]
@@ -27,8 +28,10 @@ pub struct Module {
 }
 impl Display for Module {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "module {}:", self.idx)?;
+
         for (i, value) in self.values.iter().enumerate() {
-            write!(f, "v{i}: {}", &value.ty)?;
+            write!(f, "\n    v{i}: {}", &value.ty)?;
             if let Some(redirects_to) = &value.redirects_to {
                 write!(f, " = v{redirects_to}")?;
             } else if value.same_type_of.len() > 0 {
@@ -42,35 +45,35 @@ impl Display for Module {
                         .join(" | ")
                 )?;
             }
-            writeln!(f, " {}", value.loc)?;
+            write!(f, " {}", value.loc)?;
         }
 
         for (i, typedef) in self.typedefs.iter().enumerate() {
-            write!(f, "type {i} {}:", typedef.loc)?;
+            write!(f, "\n    type {i} {}:", typedef.loc)?;
 
             match &typedef.body {
                 TypeDefBody::Record(v) => {
                     write!(f, " (record")?;
                     for (name, field) in &v.fields {
-                        write!(f, "\n    {name}: {field}")?;
+                        write!(f, "\n        {name}: {field}")?;
                     }
                     for (name, method) in &v.methods {
-                        write!(f, "\n    {name}(): {method}")?;
+                        write!(f, "\n        {name}(): {method}")?;
                     }
                     write!(f, ")")?;
                 }
             }
-
-            writeln!(f)?;
         }
 
         for (i, global) in self.globals.iter().enumerate() {
-            writeln!(f, "global {i} {} -> v{}", global.loc, global.value)?;
-            write_body(f, &global.body, 4)?;
+            write!(f, "\n    global {i} {} -> v{}", global.loc, global.value)?;
+            if global.body.len() > 0 {
+                write!(f, ":\n{}", utils::indented(8, &global.body))?;
+            }
         }
 
         for (i, func) in self.funcs.iter().enumerate() {
-            write!(f, "func {i} {}:", func.loc)?;
+            write!(f, "\n    func {i} {}", func.loc)?;
 
             if let Some(Extern { name }) = &func.extn {
                 write!(f, " (extern {})", utils::encode_string_lit(name))?;
@@ -84,12 +87,12 @@ impl Display for Module {
                 write!(f, ")")?;
             }
 
-            writeln!(f, " -> v{}", &func.ret)?;
+            write!(f, " -> v{}", &func.ret)?;
 
-            write_body(f, &func.body, 4)?;
+            if func.body.len() > 0 {
+                write!(f, ":\n{}", utils::indented(8, &func.body))?;
+            }
         }
-
-        write!(f, "\n")?;
 
         Ok(())
     }
@@ -202,26 +205,4 @@ impl Loc {
             end_col: cmp::max(self.end_col, other.end_col),
         }
     }
-}
-
-fn write_body(
-    f: &mut fmt::Formatter<'_>,
-    body: &[Instr],
-    mut indent: usize,
-) -> fmt::Result {
-    for instr in body {
-        if matches!(&instr.body, InstrBody::Else | InstrBody::End) {
-            indent -= 4;
-        }
-
-        writeln!(f, "{}{instr}", " ".repeat(indent))?;
-
-        if matches!(
-            &instr.body,
-            InstrBody::If(..) | InstrBody::Else | InstrBody::Loop(..)
-        ) {
-            indent += 4;
-        }
-    }
-    Ok(())
 }

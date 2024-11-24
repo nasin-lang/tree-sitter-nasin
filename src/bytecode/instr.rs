@@ -1,8 +1,8 @@
-use std::fmt;
-use std::fmt::Display;
+use std::fmt::{self, Display};
 
+use derive_more::derive::Debug;
 use derive_new::new;
-use itertools::Itertools;
+use itertools::{enumerate, Itertools};
 
 use super::{Loc, Type, ValueIdx};
 use crate::utils;
@@ -36,10 +36,13 @@ pub enum InstrBody {
     Call(usize, usize, Vec<ValueIdx>),
     IndirectCall(ValueIdx, Vec<ValueIdx>),
 
-    If(ValueIdx, ValueIdx),
-    Else,
-    Loop(Vec<ValueIdx>, ValueIdx),
-    End,
+    If(
+        ValueIdx,
+        #[debug("...")] Vec<Instr>,
+        #[debug("...")] Vec<Instr>,
+    ),
+    Loop(Vec<(ValueIdx, ValueIdx)>, #[debug("...")] Vec<Instr>),
+    Break(ValueIdx),
     Continue(Vec<ValueIdx>),
 
     ArrayLen(ValueIdx),
@@ -77,18 +80,18 @@ impl Display for InstrBody {
                     write!(f, " .{name}=v{v}")?;
                 }
             }
-            InstrBody::Add(a, b) => write!(f, "add {a} {b}")?,
-            InstrBody::Sub(a, b) => write!(f, "sub {a} {b}")?,
-            InstrBody::Mul(a, b) => write!(f, "mul {a} {b}")?,
-            InstrBody::Div(a, b) => write!(f, "div {a} {b}")?,
-            InstrBody::Mod(a, b) => write!(f, "mod {a} {b}")?,
-            InstrBody::Eq(a, b) => write!(f, "eq {a} {b}")?,
-            InstrBody::Neq(a, b) => write!(f, "neq {a} {b}")?,
-            InstrBody::Gt(a, b) => write!(f, "gt {a} {b}")?,
-            InstrBody::Gte(a, b) => write!(f, "gte {a} {b}")?,
-            InstrBody::Lt(a, b) => write!(f, "lt {a} {b}")?,
-            InstrBody::Lte(a, b) => write!(f, "lte {a} {b}")?,
-            InstrBody::Not(v) => write!(f, "not {v}")?,
+            InstrBody::Add(a, b) => write!(f, "add v{a} v{b}")?,
+            InstrBody::Sub(a, b) => write!(f, "sub v{a} v{b}")?,
+            InstrBody::Mul(a, b) => write!(f, "mul v{a} v{b}")?,
+            InstrBody::Div(a, b) => write!(f, "div v{a} v{b}")?,
+            InstrBody::Mod(a, b) => write!(f, "mod v{a} v{b}")?,
+            InstrBody::Eq(a, b) => write!(f, "eq v{a} v{b}")?,
+            InstrBody::Neq(a, b) => write!(f, "neq v{a} v{b}")?,
+            InstrBody::Gt(a, b) => write!(f, "gt v{a} v{b}")?,
+            InstrBody::Gte(a, b) => write!(f, "gte v{a} v{b}")?,
+            InstrBody::Lt(a, b) => write!(f, "lt v{a} v{b}")?,
+            InstrBody::Lte(a, b) => write!(f, "lte v{a} v{b}")?,
+            InstrBody::Not(v) => write!(f, "not v{v}")?,
             InstrBody::Call(mod_idx, func_idx, args) => {
                 write!(f, "call {mod_idx}-{func_idx}")?;
                 for arg in args {
@@ -101,16 +104,20 @@ impl Display for InstrBody {
                     write!(f, " v{arg}")?;
                 }
             }
-            InstrBody::If(v, target) => write!(f, "if v{v} -> v{target}")?,
-            InstrBody::Else => write!(f, "else")?,
-            InstrBody::Loop(vs, target) => {
+            InstrBody::If(v, then, else_) => write!(
+                f,
+                "if v{v}\n  then:\n{}\n  else:\n{}",
+                utils::indented(4, then),
+                utils::indented(4, else_)
+            )?,
+            InstrBody::Loop(inputs, body) => {
                 write!(f, "loop")?;
-                for v in vs {
-                    write!(f, " v{v}")?;
+                for (v, initial_v) in inputs {
+                    write!(f, " v{v}=v{initial_v}")?;
                 }
-                write!(f, " -> v{target}")?;
+                write!(f, ":\n{}", utils::indented(4, body))?;
             }
-            InstrBody::End => write!(f, "end")?,
+            InstrBody::Break(v) => write!(f, "break v{v}")?,
             InstrBody::Continue(vs) => {
                 write!(f, "continue")?;
                 for v in vs {
@@ -150,7 +157,15 @@ impl Display for Instr {
                 self.results.iter().map(|n| format!("v{n}")).join(", ")
             )?;
         }
-        write!(f, "{} {}", &self.body, &self.loc)?;
+        for (i, line) in enumerate(self.body.to_string().split('\n')) {
+            if i != 0 {
+                write!(f, "\n")?;
+            }
+            write!(f, "{line}")?;
+            if i == 0 {
+                write!(f, " {}", &self.loc)?;
+            }
+        }
         Ok(())
     }
 }

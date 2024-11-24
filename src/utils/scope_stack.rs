@@ -5,16 +5,20 @@ use derive_more::{Deref, DerefMut, IntoIterator};
 use derive_new::new;
 
 #[derive(Debug, Clone, PartialEq, Eq, IntoIterator)]
-pub struct ScopeStack<T> {
+pub struct ScopeStack<T: ScopePayload> {
     #[into_iterator(owned, ref, ref_mut)]
     scopes: Vec<Scope<T>>,
 }
 
-impl<T> ScopeStack<T> {
+impl<T: ScopePayload> ScopeStack<T> {
     pub fn new(initial_payload: T) -> Self {
         Self {
             scopes: vec![Scope::new(initial_payload)],
         }
+    }
+
+    pub fn empty() -> Self {
+        Self { scopes: vec![] }
     }
 
     pub fn len(&self) -> usize {
@@ -57,29 +61,48 @@ impl<T> ScopeStack<T> {
         self.begin(self.last().payload.clone())
     }
 
-    pub fn branch(&mut self) -> &mut Scope<T> {
+    pub fn branch(&mut self) -> (&mut Scope<T>, T::Result) {
         assert!(
             self.scopes.len() > 1,
             "should not brach the first scope of function"
         );
-        let scope = self.scopes.last_mut().unwrap();
+
+        let mut scope = self.scopes.pop().unwrap();
         scope.branches += 1;
         scope.is_never = false;
-        scope
+
+        let prev = self.scopes.pop();
+        let prev_payload = prev.as_ref().map(|x| &x.payload);
+        scope.payload.branch(prev_payload);
+        let payload_result = scope.payload.reset(prev_payload);
+
+        self.scopes.extend(prev);
+        self.scopes.push(scope);
+
+        let scope = self.scopes.last_mut().unwrap();
+
+        (scope, payload_result)
     }
 
-    pub fn end(&mut self) -> Scope<T> {
+    pub fn end(&mut self) -> (Scope<T>, T::Result) {
         assert!(
-            self.scopes.len() > 1,
-            "should not end the first scope of function"
+            self.scopes.len() > 0,
+            "should not try to end with no scopes"
         );
-        let scope = self.scopes.pop().unwrap();
+        let mut scope = self.scopes.pop().unwrap();
 
-        if scope.never_branches == scope.branches {
+        scope.is_never = scope.never_branches == scope.branches;
+        if scope.is_never {
             self.last_mut().mark_as_never();
         }
 
-        scope
+        let prev = self.scopes.pop();
+        let prev_payload = prev.as_ref().map(|x| &x.payload);
+        let payload_result = scope.payload.reset(prev_payload);
+
+        self.scopes.extend(prev);
+
+        (scope, payload_result)
     }
 }
 
@@ -108,5 +131,29 @@ impl<T> Scope<T> {
     pub fn mark_as_never(&mut self) {
         self.is_never = true;
         self.never_branches += 1;
+    }
+}
+
+pub trait ScopePayload: Debug {
+    type Result;
+    fn reset(&mut self, prev: Option<&Self>) -> Self::Result;
+    fn branch(&mut self, prev: Option<&Self>) {
+        let _ = prev;
+    }
+}
+
+pub trait SimpleScopePayload: Debug {
+    fn branch(&mut self, _prev: Option<&Self>) {}
+}
+impl<T> ScopePayload for T
+where
+    T: SimpleScopePayload,
+{
+    type Result = ();
+    fn reset(&mut self, _: Option<&Self>) -> Self::Result {
+        ()
+    }
+    fn branch(&mut self, prev: Option<&Self>) {
+        SimpleScopePayload::branch(self, prev);
     }
 }

@@ -2,12 +2,13 @@ use std::collections::HashMap;
 use std::mem;
 
 use cranelift_shim::{self as cl, InstBuilder};
-use derive_more::From;
+use derive_more::{Display, From};
 use derive_new::new;
 
 use crate::bytecode as b;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, new)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Display, new)]
+#[display("{value_idx}")]
 pub struct RuntimeValue {
     pub src: ValueSource,
     pub mod_idx: usize,
@@ -60,17 +61,24 @@ impl RuntimeValue {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, From)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, From, Display)]
 pub enum ValueSource {
+    #[display("i8 {_0}")]
     I8(u8),
+    #[display("i16 {_0}")]
     I16(u16),
+    #[display("i32 {_0}")]
     I32(u32),
+    #[display("i64 {_0}")]
     I64(u64),
+    #[display("f32 {}", _0.to_float())]
     F32(F32Bits),
+    #[display("f64 {}", _0.to_float())]
     F64(F64Bits),
     Value(cl::Value),
     Data(cl::DataId),
     StackSlot(cl::StackSlot),
+    #[display("{}:{} <- {_0}", _1.0, _1.1)]
     AppliedMethod(cl::Value, (usize, usize)),
 }
 impl ValueSource {

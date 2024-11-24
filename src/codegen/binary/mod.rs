@@ -2,6 +2,7 @@ mod func;
 mod globals;
 mod types;
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::env;
 use std::fs::File;
@@ -125,15 +126,36 @@ impl BinaryCodegen<'_> {
                 this.globals,
                 this.funcs,
             );
-            codegen.create_initial_block(&[], 0);
+            codegen.create_initial_block(&[], None, 0);
 
-            for ((i, j), global) in codegen.globals.globals.clone() {
+            for ((i, j), global) in codegen
+                .globals
+                .globals
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .sorted_by(|a, b| a.0.cmp(&b.0))
+            {
                 if global.is_const {
                     continue;
                 };
-                for instr in &self.modules[i].globals[j].body {
-                    codegen.add_instr(instr, i);
-                }
+
+                let gv = self.modules[i].globals[j].value;
+                let ty = &self.modules[i].values[gv].ty;
+
+                let start_block = codegen.scopes.last().block;
+
+                codegen.scopes.begin(func::ScopePayload {
+                    start_block,
+                    block: start_block,
+                    next_branches: vec![],
+                    result: Some(gv),
+                    ty: Some(Cow::Borrowed(ty)),
+                });
+
+                codegen.add_body(&self.modules[i].globals[j].body, i, true);
+
+                codegen.scopes.end();
+
                 if !global.is_entry_point {
                     let v = &self.modules[i].globals[j].value;
                     let res = codegen.values[v].clone();
@@ -148,14 +170,14 @@ impl BinaryCodegen<'_> {
                 .unwrap()
                 .ins()
                 .iconst(cl::types::I32, 0);
-            codegen.call(exit_func_id, &[exit_code]);
+            codegen.call(exit_func_id, &[exit_code], true);
 
-            (this.obj_module, this.globals, this.funcs) = codegen.return_never();
+            (this.obj_module, this.globals, this.funcs) = codegen.finish();
             this
         });
 
         if self.cfg.dump_clif {
-            println!("<_start> {func}");
+            println!("\n<_start> {func}");
         }
 
         self.module_ctx.func = func;
@@ -240,43 +262,41 @@ impl BinaryCodegen<'_> {
                 this.globals,
                 this.funcs,
             );
-            codegen.create_initial_block(&decl.params, mod_idx);
+            codegen.create_initial_block(&decl.params, Some(decl.ret), mod_idx);
 
-            for instr in &decl.body {
-                codegen.add_instr(instr, mod_idx);
-            }
+            codegen.add_body(&decl.body, mod_idx, false);
 
-            (this.obj_module, this.globals, this.funcs) = codegen.return_value(decl.ret);
+            (this.obj_module, this.globals, this.funcs) = codegen.finish();
             this
         })
     }
     fn write_to_file(mut self) {
-        self.build_entry();
-
         if self.globals.data.len() > 0 && self.cfg.dump_clif {
-            for (data_id, desc) in &self.globals.data {
+            println!();
+
+            for (data_id, desc) in self.globals.data.iter().sorted_by(|a, b| a.0.cmp(b.0))
+            {
                 let data_init = &desc.init;
-                print!("{} = data {}", data_id, data_init.size());
+                print!("data {} [{}]", &data_id.to_string()[6..], data_init.size());
                 if let cl::Init::Bytes { contents } = data_init {
-                    print!(" {{");
-                    for (i, byte) in contents.iter().enumerate() {
-                        if i != 0 {
-                            print!(" ");
-                        }
-                        print!("{}", byte);
+                    print!(" =");
+                    for byte in contents {
+                        print!(" {byte:02X}");
                     }
-                    print!("}}");
                 }
-                println!("\n");
+
+                println!();
             }
         }
 
-        for key in self.funcs.keys().cloned().collect_vec() {
+        self.build_entry();
+
+        for key in self.funcs.keys().cloned().sorted().collect_vec() {
             let func_binding = self.funcs.remove(&key).unwrap();
             let func = self.declared_funcs.remove(&key).unwrap();
 
             if self.cfg.dump_clif {
-                println!("<{}> {}", func_binding.symbol_name, func);
+                println!("<{}> {func}", func_binding.symbol_name);
             }
 
             if func_binding.is_extern {

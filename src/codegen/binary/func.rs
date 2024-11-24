@@ -19,7 +19,7 @@ pub struct FuncCodegen<'a, 'b, M: cl::Module> {
     pub obj_module: M,
     pub globals: Globals<'a>,
     pub funcs: HashMap<(usize, usize), FuncBinding>,
-    #[new(value = "utils::ScopeStack::new(ScopePayload::default())")]
+    #[new(value = "utils::ScopeStack::empty()")]
     pub scopes: utils::ScopeStack<ScopePayload<'a>>,
     #[new(default)]
     pub values: HashMap<b::ValueIdx, types::RuntimeValue>,
@@ -35,7 +35,12 @@ macro_rules! expect_builder {
     }};
 }
 impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
-    pub fn create_initial_block(&mut self, params: &'a [b::ValueIdx], mod_idx: usize) {
+    pub fn create_initial_block(
+        &mut self,
+        params: &'a [b::ValueIdx],
+        result: Option<b::ValueIdx>,
+        mod_idx: usize,
+    ) {
         let (block, cl_values) = {
             let func = expect_builder!(self);
             let block = func.create_block();
@@ -45,33 +50,47 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
 
         for (v, cl_value) in izip!(params, cl_values) {
             let runtime_value = types::RuntimeValue::new(cl_value.into(), mod_idx, *v);
-            {
-                let this = &mut *self;
-                let v = *v;
-                let runtime_value = runtime_value.clone();
-                this.values.insert(v, runtime_value);
-            };
+            self.values.insert(*v, runtime_value);
         }
 
         expect_builder!(self).switch_to_block(block);
-        self.scopes.last_mut().block = Some(block);
+        self.scopes.begin(ScopePayload {
+            start_block: block,
+            block,
+            next_branches: vec![],
+            ty: result
+                .clone()
+                .map(|v| Cow::Borrowed(&self.modules[mod_idx].values[v].ty)),
+            result,
+        });
+    }
+    pub fn finish(self) -> (M, Globals<'a>, HashMap<(usize, usize), FuncBinding>) {
+        assert!(self.scopes.len() == 1);
+        (self.obj_module, self.globals, self.funcs)
+    }
+    #[tracing::instrument(skip_all)]
+    pub fn add_body(
+        &mut self,
+        body: impl IntoIterator<Item = &'a b::Instr>,
+        mod_idx: usize,
+        is_global: bool,
+    ) {
+        for instr in body {
+            self.add_instr(instr, mod_idx, is_global);
+            if self.scopes.last().is_never()
+                || matches!(&instr.body, b::InstrBody::Break(..))
+            {
+                break;
+            }
+        }
     }
     #[tracing::instrument(skip(self))]
-    pub fn add_instr(&mut self, instr: &'a b::Instr, mod_idx: usize) {
-        if self.scopes.last().is_never()
-            && !matches!(&instr.body, b::InstrBody::End | b::InstrBody::Else)
-        {
+    pub fn add_instr(&mut self, instr: &'a b::Instr, mod_idx: usize, is_global: bool) {
+        if self.scopes.last().is_never() {
             return;
         }
 
-        let mut mark_as_unreachable = instr.results.len() > 0
-            && instr
-                .results
-                .iter()
-                .all(|v| self.modules[mod_idx].values[*v].ty.is_never());
-
-        if let Some(value) = self.value_from_instr(instr, mod_idx) {
-            self.values.insert(instr.results[0], value);
+        if self.value_from_instr(instr, mod_idx).is_some() {
             return;
         }
 
@@ -197,7 +216,7 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
                     types::RuntimeValue::new(cl_value.into(), mod_idx, instr.results[0]),
                 );
             }
-            b::InstrBody::If(cond_v, target_v) => {
+            b::InstrBody::If(cond_v, then_, else_) => {
                 let builder = expect_builder!(self);
                 let cond = self.values[cond_v].add_to_func(&mut self.obj_module, builder);
 
@@ -205,128 +224,135 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
                 let else_block = builder.create_block();
 
                 builder.ins().brif(cond, then_block, &[], else_block, &[]);
-                builder.switch_to_block(then_block);
 
-                let module = &self.modules[mod_idx];
-                let ty = &module.values[*target_v].ty;
+                let mut scope = ScopePayload {
+                    start_block: then_block,
+                    block: then_block,
+                    next_branches: vec![else_block],
+                    result: None,
+                    ty: None,
+                };
 
-                let next_block = builder.create_block();
+                if instr.results.len() > 0 {
+                    let module = &self.modules[mod_idx];
+                    let ty = &module.values[instr.results[0]].ty;
 
-                if !ty.is_never() {
+                    let next_block = builder.create_block();
                     builder.append_block_param(
                         next_block,
                         get_type(ty, self.modules, &self.obj_module),
                     );
+
+                    scope.result = Some(instr.results[0]);
+                    scope.ty = Some(Cow::Borrowed(ty));
+                    self.scopes.last_mut().block = next_block;
                 }
 
-                self.scopes.last_mut().block = Some(next_block);
+                self.scopes.begin(scope);
 
-                self.scopes.begin(ScopePayload {
-                    start_block: Some(then_block),
-                    block: Some(then_block),
-                    branches: vec![else_block],
-                    next_block: Some(next_block),
-                    result_value: if ty.is_never() { None } else { Some(*target_v) },
-                    ty: Some(Cow::Borrowed(ty)),
-                });
-            }
-            b::InstrBody::Else => {
+                builder.switch_to_block(then_block);
+                self.add_body(then_, mod_idx, false);
+
                 let builder = expect_builder!(self);
 
-                let is_never = self.scopes.last().is_never();
-
-                let scope = self.scopes.branch();
-                let else_block = scope.payload.branches.pop().unwrap();
-                scope.payload.start_block = Some(else_block);
-                scope.payload.block = Some(else_block);
-
-                if !is_never {
-                    let value = self.values[&scope.result_value.unwrap()]
-                        .add_to_func(&self.obj_module, builder);
-                    builder
-                        .ins()
-                        .jump(scope.payload.next_block.unwrap(), &[value]);
-                }
+                self.scopes.branch();
 
                 builder.switch_to_block(else_block);
+                self.add_body(else_, mod_idx, false);
+
+                let (scope, _) = self.scopes.end();
+
+                let builder = expect_builder!(self);
+                if !scope.is_never() {
+                    let next_block = self.scopes.last().block;
+                    builder.switch_to_block(next_block);
+                }
             }
-            b::InstrBody::Loop(acc_vs, target_v) => {
-                todo!();
-                //let builder = expect_builder!(self);
-                //let args = self.stack.pop_many(*n);
-                //let mut args_values = vec![];
-                //let mut loop_params = vec![];
-                //
-                //let loop_block = builder.create_block();
-                //for arg in &args {
-                //    let value = builder.append_block_param(
-                //        loop_block,
-                //        get_type(&arg.ty, self.modules, &self.obj_module),
-                //    );
-                //    args_values.push(arg.add_to_func(&mut self.obj_module, builder));
-                //    loop_params
-                //        .push(types::RuntimeValue::new(arg.ty.clone(), value.into()))
-                //}
-                //
-                //builder.ins().jump(loop_block, &args_values);
-                //builder.switch_to_block(loop_block);
-                //
-                //let next_block = builder.create_block();
-                //builder.append_block_param(
-                //    next_block,
-                //    get_type(ty, self.modules, &self.obj_module),
-                //);
-                //
-                //self.stack.get_scope_mut().payload.block = Some(next_block);
-                //
-                //let scope = self.stack.create_scope(ScopePayload {
-                //    start_block: Some(loop_block),
-                //    block: Some(loop_block),
-                //    next_block: Some(next_block),
-                //    ty: Some(Cow::Borrowed(ty)),
-                //    branches: vec![],
-                //});
-                //scope.is_loop = true;
-                //scope.loop_arity = *n;
-                //
-                //self.stack.extend(loop_params);
-            }
-            b::InstrBody::End => {
+            b::InstrBody::Loop(inputs, body) => {
                 let builder = expect_builder!(self);
 
-                let scope = self.scopes.end();
-                let next_block = scope.payload.next_block.unwrap();
+                let loop_block = builder.create_block();
 
-                if !scope.is_never() {
-                    let value = self.values[&scope.result_value.unwrap()]
-                        .add_to_func(&self.obj_module, builder);
-                    builder.ins().jump(next_block, &[value]);
-                }
+                let mut loop_args = vec![];
+                for (loop_v, initial_v) in inputs {
+                    let initial_runtime_value = self.values[initial_v];
+                    let initial_value =
+                        initial_runtime_value.add_to_func(&self.obj_module, builder);
+                    loop_args.push(initial_value);
 
-                builder.switch_to_block(next_block);
-
-                let block_params = builder.block_params(next_block);
-                assert!(block_params.len() <= 1);
-                assert!(block_params.is_empty() == scope.payload.ty.is_none());
-
-                if let [value] = block_params {
-                    let runtime_value = (*value).into();
-                    let result_v = scope.payload.result_value.unwrap();
+                    let native_ty =
+                        initial_runtime_value.native_type(self.modules, &self.obj_module);
+                    let loop_value = builder.append_block_param(loop_block, native_ty);
                     self.values.insert(
-                        scope.payload.result_value.unwrap(),
-                        types::RuntimeValue::new(runtime_value, mod_idx, result_v),
+                        *loop_v,
+                        types::RuntimeValue::new(loop_value.into(), mod_idx, *loop_v),
                     );
                 }
+                builder.ins().jump(loop_block, &loop_args);
+
+                let continue_block = builder.create_block();
+                let (result, ty) = if instr.results.len() > 0 {
+                    let result = instr.results[0];
+                    let ty = &self.modules[mod_idx].values[result].ty;
+                    let native_ty = types::get_type(ty, self.modules, &self.obj_module);
+                    builder.append_block_param(continue_block, native_ty);
+                    (Some(result), Some(Cow::Borrowed(ty)))
+                } else {
+                    (None, None)
+                };
+                self.scopes.last_mut().block = continue_block;
+
+                let scope = self.scopes.begin(ScopePayload {
+                    start_block: loop_block,
+                    block: loop_block,
+                    next_branches: vec![],
+                    result,
+                    ty,
+                });
+                scope.is_loop = true;
+
+                builder.switch_to_block(loop_block);
+                self.add_body(body, mod_idx, false);
+
+                let (scope, _) = self.scopes.end();
+
+                let builder = expect_builder!(self);
+                if !scope.is_never() {
+                    let next_block = self.scopes.last().block;
+                    builder.switch_to_block(next_block);
+                }
+            }
+            b::InstrBody::Break(v) => {
+                let builder = expect_builder!(self);
+
+                let mut cl_value =
+                    self.values[v].add_to_func(&mut self.obj_module, builder);
+
+                if !is_global {
+                    if self.scopes.len() <= 1 {
+                        builder.ins().return_(&[cl_value]);
+                    } else if let Some(prev_scope) =
+                        self.scopes.get(self.scopes.len() - 2)
+                    {
+                        builder.ins().jump(prev_scope.block, &[cl_value]);
+                        cl_value = builder.block_params(prev_scope.block)[0];
+                    }
+                }
+
+                let scope = self.scopes.last();
+                let result = scope.result.unwrap();
+                self.values.insert(
+                    result,
+                    types::RuntimeValue::new(cl_value.into(), mod_idx, result),
+                );
             }
             b::InstrBody::Continue(vs) => {
                 let builder = expect_builder!(self);
-                let (block, arity) = {
-                    let scope = self
-                        .scopes
-                        .last_loop()
-                        .expect("continue instruction should be called in a loop");
-                    (scope.payload.start_block.unwrap(), scope.loop_arity)
-                };
+                let block = self
+                    .scopes
+                    .last_loop()
+                    .expect("continue instruction should be called in a loop")
+                    .start_block;
 
                 let values = vs
                     .into_iter()
@@ -347,13 +373,13 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
                     .map(|v| self.values[v].add_to_func(&mut self.obj_module, builder))
                     .collect_vec();
 
-                if let Some(value) = self.call(func_id, &args) {
+                let no_return =
+                    self.modules[*func_mod_idx].values[func.ret].ty.is_never();
+                if let Some(value) = self.call(func_id, &args, no_return) {
                     self.values.insert(
                         instr.results[0],
                         types::RuntimeValue::new(value.into(), mod_idx, instr.results[0]),
                     );
-                } else if self.modules[*func_mod_idx].values[func.ret].ty.is_never() {
-                    mark_as_unreachable = true;
                 }
             }
             b::InstrBody::IndirectCall(func_v, vs) => {
@@ -377,7 +403,9 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
 
                         args.push(*self_value);
 
-                        if let Some(value) = self.call(func_id, &args) {
+                        let no_return =
+                            self.modules[*func_mod_idx].values[func.ret].ty.is_never();
+                        if let Some(value) = self.call(func_id, &args, no_return) {
                             self.values.insert(
                                 instr.results[0],
                                 types::RuntimeValue::new(
@@ -386,11 +414,6 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
                                     instr.results[0],
                                 ),
                             );
-                        } else if self.modules[*func_mod_idx].values[func.ret]
-                            .ty
-                            .is_never()
-                        {
-                            mark_as_unreachable = true;
                         }
                     }
                     _ => todo!("function as value"),
@@ -552,32 +575,6 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
             | b::InstrBody::CreateRecord(..)
             | b::InstrBody::GetGlobal(..) => unreachable!(),
         }
-
-        if mark_as_unreachable {
-            self.scopes.last_mut().mark_as_never();
-            let builder = expect_builder!(self);
-            builder.ins().trap(cl::TrapCode::UnreachableCodeReached);
-        }
-    }
-    pub fn return_value(
-        mut self,
-        v: b::ValueIdx,
-    ) -> (M, Globals<'a>, HashMap<(usize, usize), FuncBinding>) {
-        let builder = expect_builder!(self);
-
-        let value = self.values[&v].add_to_func(&mut self.obj_module, builder);
-        builder.ins().return_(&[value]);
-
-        (self.obj_module, self.globals, self.funcs)
-    }
-    pub fn return_never(
-        mut self,
-    ) -> (M, Globals<'a>, HashMap<(usize, usize), FuncBinding>) {
-        let func = expect_builder!(self);
-
-        func.ins().trap(cl::TrapCode::UnreachableCodeReached);
-
-        (self.obj_module, self.globals, self.funcs)
     }
     pub fn value_from_instr(
         &mut self,
@@ -585,7 +582,7 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
         mod_idx: usize,
     ) -> Option<types::RuntimeValue> {
         utils::replace_with(self, |mut this| {
-            let v = 'match_b: {
+            let value = 'match_b: {
                 match &instr.body {
                     b::InstrBody::CreateNumber(n) => {
                         let module = &self.modules[mod_idx];
@@ -710,7 +707,11 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
                 }
             };
 
-            (this, v)
+            if let Some(value) = value {
+                this.values.insert(instr.results[0], value);
+            }
+
+            (this, value)
         })
     }
     pub fn store_global(&mut self, value: types::RuntimeValue, global: &GlobalBinding) {
@@ -722,13 +723,18 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
 
         let ty = value.native_type(self.modules, &self.obj_module);
         let value = value.add_to_func(&mut self.obj_module, builder);
-        let gv = self
+        let global_value = self
             .obj_module
             .declare_data_in_func(*data_id, &mut builder.func);
-        let ptr = builder.ins().global_value(ty, gv);
+        let ptr = builder.ins().global_value(ty, global_value);
         builder.ins().store(cl::MemFlags::new(), value, ptr, 0);
     }
-    pub fn call(&mut self, func_id: cl::FuncId, args: &[cl::Value]) -> Option<cl::Value> {
+    pub fn call(
+        &mut self,
+        func_id: cl::FuncId,
+        args: &[cl::Value],
+        no_return: bool,
+    ) -> Option<cl::Value> {
         let builder = expect_builder!(self);
 
         let func_ref = match self.declared_funcs.get(&func_id) {
@@ -745,7 +751,11 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
         let results = builder.inst_results(instr);
         assert!(results.len() <= 1);
 
-        if results.is_empty() {
+        if no_return {
+            builder.ins().trap(cl::TrapCode::UnreachableCodeReached);
+            self.scopes.last_mut().mark_as_never();
+            None
+        } else if results.is_empty() {
             None
         } else {
             Some(results[0])
@@ -792,12 +802,18 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct ScopePayload<'a> {
-    pub start_block: Option<cl::Block>,
-    pub block: Option<cl::Block>,
-    pub next_block: Option<cl::Block>,
-    pub branches: Vec<cl::Block>,
-    pub result_value: Option<b::ValueIdx>,
+    pub start_block: cl::Block,
+    pub block: cl::Block,
+    pub next_branches: Vec<cl::Block>,
+    pub result: Option<b::ValueIdx>,
     pub ty: Option<Cow<'a, b::Type>>,
+}
+impl utils::SimpleScopePayload for ScopePayload<'_> {
+    fn branch(&mut self, _: Option<&Self>) {
+        let block = self.next_branches.pop().unwrap();
+        self.start_block = block;
+        self.block = block;
+    }
 }
