@@ -25,13 +25,6 @@ impl RuntimeValue {
     ) -> cl::Type {
         get_type(self.ty(modules), modules, obj_module)
     }
-    pub fn serialize(
-        &self,
-        bytes: &mut Vec<u8>,
-        endianess: cl::Endianness,
-    ) -> Result<(), ()> {
-        self.src.serialize(bytes, endianess)
-    }
     pub fn add_to_func(
         &self,
         obj_module: &impl cl::Module,

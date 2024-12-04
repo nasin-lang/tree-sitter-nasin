@@ -512,7 +512,7 @@ impl<'a, 't> ExprParser<'a, 't> {
 }
 
 #[derive(Debug, Clone, new)]
-struct ScopePayload {
+pub struct ScopePayload {
     #[new(default)]
     pub instrs: Vec<b::Instr>,
     idents: HashMap<String, ValueRef>,

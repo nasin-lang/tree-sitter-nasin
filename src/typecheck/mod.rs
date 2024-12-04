@@ -5,7 +5,7 @@ use std::fmt::Debug;
 use std::mem;
 
 use derive_new::new;
-use itertools::{enumerate, izip, repeat_n, Itertools};
+use itertools::{enumerate, izip, Itertools};
 
 use self::constraints::Constraint;
 use crate::utils::SortedMap;
