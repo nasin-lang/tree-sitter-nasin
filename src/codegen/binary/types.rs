@@ -200,9 +200,9 @@ pub fn get_size(
 
     match &ty.body {
         b::TypeBody::Void | b::TypeBody::Never => 0,
-        b::TypeBody::String(s) => s.len.map_or(ptr, |len| len + 1),
+        b::TypeBody::String(s) => s.len.map_or(ptr, |len| ptr + len + 1),
         b::TypeBody::Array(a) => a.len.map_or(ptr, |len| {
-            len * get_type(&a.item, modules, obj_module).bytes() as usize
+            ptr + len * get_type(&a.item, modules, obj_module).bytes() as usize
         }),
         b::TypeBody::TypeRef(i, j) => match &modules[*i].typedefs[*j].body {
             b::TypeDefBody::Record(rec) => rec

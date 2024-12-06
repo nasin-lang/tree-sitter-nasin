@@ -5,6 +5,7 @@
 ./bin/nasin b tests/global_string_from_func.nsn -o tests/out/global_string_from_func && ./tests/out/global_string_from_func
 ./bin/nasin b tests/if.nsn -o tests/out/if && ./tests/out/if
 ./bin/nasin b tests/if_returning.nsn -o tests/out/if_returning && ./tests/out/if_returning
-./bin/nasin b tests/record_type.nsn -o tests/out/record_type && ./tests/out/record_type
 ./bin/nasin b tests/recursion.nsn -o tests/out/recursion && ./tests/out/recursion
+./bin/nasin b tests/record_type.nsn -o tests/out/record_type && ./tests/out/record_type
+./bin/nasin b tests/return_record.nsn -o tests/out/return_record && ./tests/out/return_record
 ./bin/nasin b tests/method.nsn -o tests/out/method && ./tests/out/method

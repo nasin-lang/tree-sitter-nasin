@@ -12,6 +12,21 @@ use super::types::{self, get_size, get_type};
 use super::FuncBinding;
 use crate::{bytecode as b, utils};
 
+#[derive(Debug, Clone, Copy)]
+pub enum ResultPolicy {
+    Normal,
+    Global,
+    Return,
+    StructReturn,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum CallReturnPolicy {
+    Normal,
+    StructReturn,
+    NoReturn,
+}
+
 #[derive(new)]
 pub struct FuncCodegen<'a, 'b, M: cl::Module> {
     pub modules: &'a [b::Module],
@@ -39,14 +54,22 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
         &mut self,
         params: &'a [b::ValueIdx],
         result: Option<b::ValueIdx>,
+        result_policy: ResultPolicy,
         mod_idx: usize,
     ) {
-        let (block, cl_values) = {
+        let (block, mut cl_values) = {
             let func = expect_builder!(self);
             let block = func.create_block();
             func.append_block_params_for_function_params(block);
             (block, func.block_params(block).to_vec())
         };
+
+        if let (ResultPolicy::StructReturn, Some(result)) = (result_policy, result) {
+            let cl_value = cl_values.remove(0);
+            let runtime_value =
+                types::RuntimeValue::new(cl_value.into(), mod_idx, result);
+            self.values.insert(result, runtime_value);
+        }
 
         for (v, cl_value) in izip!(params, cl_values) {
             let runtime_value = types::RuntimeValue::new(cl_value.into(), mod_idx, *v);
@@ -73,10 +96,10 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
         &mut self,
         body: impl IntoIterator<Item = &'a b::Instr>,
         mod_idx: usize,
-        is_global: bool,
+        result_policy: ResultPolicy,
     ) {
         for instr in body {
-            self.add_instr(instr, mod_idx, is_global);
+            self.add_instr(instr, mod_idx, result_policy);
             if self.scopes.last().is_never()
                 || matches!(&instr.body, b::InstrBody::Break(..))
             {
@@ -85,7 +108,12 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
         }
     }
     #[tracing::instrument(skip(self))]
-    pub fn add_instr(&mut self, instr: &'a b::Instr, mod_idx: usize, is_global: bool) {
+    pub fn add_instr(
+        &mut self,
+        instr: &'a b::Instr,
+        mod_idx: usize,
+        result_policy: ResultPolicy,
+    ) {
         if self.scopes.last().is_never() {
             return;
         }
@@ -251,14 +279,14 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
                 self.scopes.begin(scope);
 
                 builder.switch_to_block(then_block);
-                self.add_body(then_, mod_idx, false);
+                self.add_body(then_, mod_idx, ResultPolicy::Normal);
 
                 let builder = expect_builder!(self);
 
                 self.scopes.branch();
 
                 builder.switch_to_block(else_block);
-                self.add_body(else_, mod_idx, false);
+                self.add_body(else_, mod_idx, ResultPolicy::Normal);
 
                 let (scope, _) = self.scopes.end();
 
@@ -312,7 +340,7 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
                 scope.is_loop = true;
 
                 builder.switch_to_block(loop_block);
-                self.add_body(body, mod_idx, false);
+                self.add_body(body, mod_idx, ResultPolicy::Normal);
 
                 let (scope, _) = self.scopes.end();
 
@@ -325,18 +353,33 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
             b::InstrBody::Break(v) => {
                 let builder = expect_builder!(self);
 
+                let ty = &self.modules[mod_idx].values[*v].ty;
                 let mut cl_value =
                     self.values[v].add_to_func(&mut self.obj_module, builder);
 
-                if !is_global {
-                    if self.scopes.len() <= 1 {
-                        builder.ins().return_(&[cl_value]);
-                    } else if let Some(prev_scope) =
-                        self.scopes.get(self.scopes.len() - 2)
-                    {
-                        builder.ins().jump(prev_scope.block, &[cl_value]);
-                        cl_value = builder.block_params(prev_scope.block)[0];
+                match result_policy {
+                    ResultPolicy::Normal => {
+                        if let Some(prev_scope) = self.scopes.get(self.scopes.len() - 2) {
+                            builder.ins().jump(prev_scope.block, &[cl_value]);
+                            cl_value = builder.block_params(prev_scope.block)[0];
+                        }
                     }
+                    ResultPolicy::Return => {
+                        builder.ins().return_(&[cl_value]);
+                    }
+                    ResultPolicy::StructReturn => {
+                        if let Some(res) = self.scopes.last().result {
+                            let size =
+                                types::get_size(ty, self.modules, &self.obj_module);
+
+                            let res_cl = self.values[&res]
+                                .add_to_func(&mut self.obj_module, builder);
+
+                            self.copy_bytes(res_cl, cl_value, size);
+                        }
+                        expect_builder!(self).ins().return_(&[]);
+                    }
+                    ResultPolicy::Global => {}
                 }
 
                 let scope = self.scopes.last();
@@ -363,9 +406,6 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
                 self.scopes.last_mut().mark_as_never();
             }
             b::InstrBody::Call(func_mod_idx, func_idx, vs) => {
-                let func_id =
-                    self.funcs.get(&(*func_mod_idx, *func_idx)).unwrap().func_id;
-                let func = &self.modules[*func_mod_idx].funcs[*func_idx];
                 let builder = expect_builder!(self);
 
                 let args = vs
@@ -373,9 +413,7 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
                     .map(|v| self.values[v].add_to_func(&mut self.obj_module, builder))
                     .collect_vec();
 
-                let no_return =
-                    self.modules[*func_mod_idx].values[func.ret].ty.is_never();
-                if let Some(value) = self.call(func_id, &args, no_return) {
+                if let Some(value) = self.call(*func_mod_idx, *func_idx, args) {
                     self.values.insert(
                         instr.results[0],
                         types::RuntimeValue::new(value.into(), mod_idx, instr.results[0]),
@@ -397,15 +435,9 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
                         self_value,
                         (func_mod_idx, func_idx),
                     ) => {
-                        let func_id =
-                            self.funcs.get(&(*func_mod_idx, *func_idx)).unwrap().func_id;
-                        let func = &self.modules[*func_mod_idx].funcs[*func_idx];
-
                         args.push(*self_value);
 
-                        let no_return =
-                            self.modules[*func_mod_idx].values[func.ret].ty.is_never();
-                        if let Some(value) = self.call(func_id, &args, no_return) {
+                        if let Some(value) = self.call(*func_mod_idx, *func_idx, args) {
                             self.values.insert(
                                 instr.results[0],
                                 types::RuntimeValue::new(
@@ -576,6 +608,7 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
             | b::InstrBody::GetGlobal(..) => unreachable!(),
         }
     }
+
     pub fn value_from_instr(
         &mut self,
         instr: &'a b::Instr,
@@ -714,6 +747,7 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
             (this, value)
         })
     }
+
     pub fn store_global(&mut self, value: types::RuntimeValue, global: &GlobalBinding) {
         let types::ValueSource::Data(data_id) = &global.value.src else {
             panic!("should never try to store a global that is a const");
@@ -729,11 +763,47 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
         let ptr = builder.ins().global_value(ty, global_value);
         builder.ins().store(cl::MemFlags::new(), value, ptr, 0);
     }
+
     pub fn call(
+        &mut self,
+        func_mod_idx: usize,
+        func_idx: usize,
+        args: impl Into<Vec<cl::Value>>,
+    ) -> Option<cl::Value> {
+        let builder = expect_builder!(self);
+
+        let mut args: Vec<_> = args.into();
+
+        let func_id = self.funcs.get(&(func_mod_idx, func_idx)).unwrap().func_id;
+        let func = &self.modules[func_mod_idx].funcs[func_idx];
+
+        let ret_ty = &self.modules[func_mod_idx].values[func.ret].ty;
+        let ret_policy = if ret_ty.is_never() {
+            CallReturnPolicy::NoReturn
+        } else if ret_ty.is_aggregate(&self.modules) {
+            let size = types::get_size(ret_ty, &self.modules, &self.obj_module);
+            let ss_data =
+                cl::StackSlotData::new(cl::StackSlotKind::ExplicitSlot, size as u32);
+            let ss = builder.create_sized_stack_slot(ss_data);
+            let stack_addr =
+                builder
+                    .ins()
+                    .stack_addr(self.obj_module.isa().pointer_type(), ss, 0);
+            args.insert(0, stack_addr);
+
+            CallReturnPolicy::StructReturn
+        } else {
+            CallReturnPolicy::Normal
+        };
+
+        self.native_call(func_id, &args, ret_policy)
+    }
+
+    pub fn native_call(
         &mut self,
         func_id: cl::FuncId,
         args: &[cl::Value],
-        no_return: bool,
+        ret_policy: CallReturnPolicy,
     ) -> Option<cl::Value> {
         let builder = expect_builder!(self);
 
@@ -747,18 +817,18 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
             }
         };
 
-        let instr = builder.ins().call(func_ref, &args);
+        let instr = builder.ins().call(func_ref, args);
         let results = builder.inst_results(instr);
         assert!(results.len() <= 1);
 
-        if no_return {
-            builder.ins().trap(cl::TrapCode::UnreachableCodeReached);
-            self.scopes.last_mut().mark_as_never();
-            None
-        } else if results.is_empty() {
-            None
-        } else {
-            Some(results[0])
+        match ret_policy {
+            CallReturnPolicy::Normal => Some(results[0]),
+            CallReturnPolicy::StructReturn => Some(args[0]),
+            CallReturnPolicy::NoReturn => {
+                builder.ins().trap(cl::TrapCode::UnreachableCodeReached);
+                self.scopes.last_mut().mark_as_never();
+                None
+            }
         }
     }
 
@@ -770,6 +840,7 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
             runtime_value.add_to_func(&mut self.obj_module, expect_builder!(self));
         cl_value
     }
+
     fn create_stack_slot(
         &mut self,
         values: impl IntoIterator<Item = types::RuntimeValue>,
@@ -796,9 +867,39 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
 
         ss
     }
+
     fn add_assert(&mut self, cond: cl::Value, code: cl::TrapCode) {
         let builder = expect_builder!(self);
         builder.ins().trapz(cond, code);
+    }
+
+    fn copy_bytes(&mut self, dst: cl::Value, src: cl::Value, size: usize) {
+        let builder = expect_builder!(self);
+
+        let mut offset: i32 = 0;
+        loop {
+            let remaining = size - (offset as usize);
+
+            let mut copy = |ty: cl::types::Type| {
+                let tmp = builder.ins().load(ty, cl::MemFlags::new(), src, offset);
+                builder.ins().store(cl::MemFlags::new(), tmp, dst, offset);
+                offset += ty.bytes() as i32;
+            };
+
+            if remaining >= 16 {
+                copy(cl::types::I128);
+            } else if remaining >= 8 {
+                copy(cl::types::I64);
+            } else if remaining >= 4 {
+                copy(cl::types::I32);
+            } else if remaining >= 2 {
+                copy(cl::types::I16);
+            } else if remaining >= 1 {
+                copy(cl::types::I8);
+            } else {
+                break;
+            }
+        }
     }
 }
 

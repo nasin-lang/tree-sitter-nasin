@@ -9,6 +9,7 @@ tree-sitter-nasin/src
 bin/*
 target/
 tests/out
+*.o
 
 # dotenv environment variable files
 .env

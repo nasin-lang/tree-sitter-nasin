@@ -142,8 +142,16 @@ impl Type {
         matches!(&self.body, TypeBody::Inferred(_))
     }
 
-    pub fn is_composite(&self) -> bool {
-        matches!(&self.body, TypeBody::String(_) | TypeBody::Array(_))
+    pub fn is_aggregate(&self, modules: &[Module]) -> bool {
+        match &self.body {
+            //TypeBody::String(_) | TypeBody::Array(_) => true,
+            TypeBody::TypeRef(mod_idx, ty_idx) => {
+                match &modules[*mod_idx].typedefs[*ty_idx].body {
+                    TypeDefBody::Record(_) => true,
+                }
+            }
+            _ => false,
+        }
     }
 
     pub fn is_primitive(&self) -> bool {

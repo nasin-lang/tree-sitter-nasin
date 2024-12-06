@@ -4,16 +4,14 @@ mod types;
 
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::env;
 use std::fs::File;
 use std::io::BufWriter;
-use std::path::Path;
 
 use cranelift_shim::{self as cl, InstBuilder, Module};
 use itertools::Itertools;
 use target_lexicon::Triple;
 
-use self::func::FuncCodegen;
+use self::func::{CallReturnPolicy, FuncCodegen, ResultPolicy};
 use self::globals::Globals;
 use crate::{bytecode as b, config, utils};
 
@@ -31,7 +29,8 @@ utils::number_enum!(pub SystemFunc: u32 {
 pub struct FuncBinding {
     pub is_extern: bool,
     pub symbol_name: String,
-    pub func_id: cl::FuncId,
+    func_id: cl::FuncId,
+    result_policy: ResultPolicy,
 }
 
 pub struct BinaryCodegen<'a> {
@@ -126,7 +125,7 @@ impl BinaryCodegen<'_> {
                 this.globals,
                 this.funcs,
             );
-            codegen.create_initial_block(&[], None, 0);
+            codegen.create_initial_block(&[], None, ResultPolicy::Normal, 0);
 
             for ((i, j), global) in codegen
                 .globals
@@ -152,7 +151,11 @@ impl BinaryCodegen<'_> {
                     ty: Some(Cow::Borrowed(ty)),
                 });
 
-                codegen.add_body(&self.modules[i].globals[j].body, i, true);
+                codegen.add_body(
+                    &self.modules[i].globals[j].body,
+                    i,
+                    ResultPolicy::Global,
+                );
 
                 codegen.scopes.end();
 
@@ -170,7 +173,7 @@ impl BinaryCodegen<'_> {
                 .unwrap()
                 .ins()
                 .iconst(cl::types::I32, 0);
-            codegen.call(exit_func_id, &[exit_code], true);
+            codegen.native_call(exit_func_id, &[exit_code], CallReturnPolicy::NoReturn);
 
             (this.obj_module, this.globals, this.funcs) = codegen.finish();
             this
@@ -191,17 +194,28 @@ impl BinaryCodegen<'_> {
         let decl = &module.funcs[idx];
         let mut sig = self.obj_module.make_signature();
 
-        for param in &decl.params {
-            sig.params.push(cl::AbiParam::new(types::get_type(
-                &module.values[*param].ty,
+        let ret_ty = &module.values[decl.ret].ty;
+        let result_policy = if ret_ty.is_aggregate(&self.modules) {
+            let ret_param = cl::AbiParam::special(
+                self.obj_module.isa().pointer_type(),
+                cl::ArgumentPurpose::StructReturn,
+            );
+            sig.params.push(ret_param);
+            ResultPolicy::StructReturn
+        } else if !matches!(&ret_ty.body, b::TypeBody::Void | b::TypeBody::Never) {
+            sig.returns.push(cl::AbiParam::new(types::get_type(
+                ret_ty,
                 self.modules,
                 &self.obj_module,
             )));
-        }
-        let ret_ty = &module.values[decl.ret].ty;
-        if !matches!(&ret_ty.body, b::TypeBody::Void | b::TypeBody::Never) {
-            sig.returns.push(cl::AbiParam::new(types::get_type(
-                ret_ty,
+            ResultPolicy::Return
+        } else {
+            ResultPolicy::Normal
+        };
+
+        for param in &decl.params {
+            sig.params.push(cl::AbiParam::new(types::get_type(
+                &module.values[*param].ty,
                 self.modules,
                 &self.obj_module,
             )));
@@ -241,6 +255,7 @@ impl BinaryCodegen<'_> {
                 symbol_name,
                 is_extern: decl.extn.is_some(),
                 func_id,
+                result_policy,
             },
         );
         self.declared_funcs.insert((mod_idx, idx), func);
@@ -251,20 +266,26 @@ impl BinaryCodegen<'_> {
     }
     fn build_function(&mut self, mod_idx: usize, idx: usize) {
         let decl = &self.modules[mod_idx].funcs[idx];
+        let result_policy = self.funcs.get(&(mod_idx, idx)).unwrap().result_policy;
         utils::replace_with(self, |mut this| {
             let mut func_ctx = cl::FunctionBuilderContext::new();
             let func = this.declared_funcs.get_mut(&(mod_idx, idx)).unwrap();
-            let func = cl::FunctionBuilder::new(func, &mut func_ctx);
+            let func_builder = cl::FunctionBuilder::new(func, &mut func_ctx);
             let mut codegen = FuncCodegen::new(
                 this.modules,
-                Some(func),
+                Some(func_builder),
                 this.obj_module,
                 this.globals,
                 this.funcs,
             );
-            codegen.create_initial_block(&decl.params, Some(decl.ret), mod_idx);
+            codegen.create_initial_block(
+                &decl.params,
+                Some(decl.ret),
+                result_policy,
+                mod_idx,
+            );
 
-            codegen.add_body(&decl.body, mod_idx, false);
+            codegen.add_body(&decl.body, mod_idx, result_policy);
 
             (this.obj_module, this.globals, this.funcs) = codegen.finish();
             this
@@ -312,11 +333,7 @@ impl BinaryCodegen<'_> {
 
         let obj_product = self.obj_module.finish();
 
-        // FIXME: get file name from some kind of configuration
-        let obj_path = env::temp_dir().join(format!(
-            "{}.o",
-            self.cfg.out.to_string_lossy().replace("/", "__")
-        ));
+        let obj_path = format!("{}.o", self.cfg.out.to_string_lossy());
         let out_file = File::create(&obj_path).expect("Failed to create object file");
 
         obj_product
@@ -324,20 +341,10 @@ impl BinaryCodegen<'_> {
             .write_stream(BufWriter::new(out_file))
             .unwrap();
 
-        let dyn_linker = [
-            "/lib/ld64.so.2",
-            "/lib/ld64.so.1",
-            "/lib64/ld-linux-x86-64.so.2",
-            "/lib/ld-linux-x86-64.so.2",
-        ]
-        .into_iter()
-        .find(|path| Path::new(path).is_file())
-        .expect("libc.a not found");
-
         // TODO: windows support
         let status = std::process::Command::new("ld")
             .arg("-dynamic-linker")
-            .arg(dyn_linker)
+            .arg("/lib/ld-linux-x86-64.so.2")
             .arg("-o")
             .arg(&self.cfg.out)
             .arg(&obj_path)

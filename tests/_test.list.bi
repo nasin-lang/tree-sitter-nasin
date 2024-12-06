@@ -1,4 +1,4 @@
-:i count 10
+:i count 11
 :b shell 69
 ./bin/nasin b tests/hello.nsn -o tests/out/hello && ./tests/out/hello
 :i returncode 0
@@ -64,6 +64,15 @@ it's false
 
 :b stderr 0
 
+:b shell 81
+./bin/nasin b tests/recursion.nsn -o tests/out/recursion && ./tests/out/recursion
+:i returncode 0
+:b stdout 47
+Compiled program to tests/out/recursion
+got 10
+
+:b stderr 0
+
 :b shell 87
 ./bin/nasin b tests/record_type.nsn -o tests/out/record_type && ./tests/out/record_type
 :i returncode 0
@@ -73,12 +82,12 @@ Hello from record
 
 :b stderr 0
 
-:b shell 81
-./bin/nasin b tests/recursion.nsn -o tests/out/recursion && ./tests/out/recursion
+:b shell 93
+./bin/nasin b tests/return_record.nsn -o tests/out/return_record && ./tests/out/return_record
 :i returncode 0
-:b stdout 47
-Compiled program to tests/out/recursion
-got 10
+:b stdout 62
+Compiled program to tests/out/return_record
+Hello from record
 
 :b stderr 0
 
