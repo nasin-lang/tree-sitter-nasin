@@ -91,6 +91,8 @@ impl<'a, 't> ExprParser<'a, 't> {
     }
 
     pub fn add_expr_node(&mut self, node: ts::Node<'t>, returning: bool) -> ValueRef {
+        let node = node.of_kind("expr").child(0).unwrap();
+
         let loc = Loc::from_node(self.module.src_idx, &node);
         match node.kind() {
             "true" => ValueRef::new(ValueRefBody::Bool(true), loc),

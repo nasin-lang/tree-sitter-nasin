@@ -20,6 +20,8 @@ pub struct TypeParser<'a> {
 
 impl<'a> TypeParser<'a> {
     pub fn parse_type_expr<'t>(&self, node: ts::Node<'t>) -> b::Type {
+        let node = node.of_kind("type_expr").child(0).unwrap();
+
         let body = match node.kind() {
             "ident" => {
                 let ident = node.get_text(&self.ctx.source(self.src_idx).content().text);

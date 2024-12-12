@@ -37,7 +37,7 @@ module.exports = grammar({
                     seq(
                         token_with_nl("="),
                         optional($._newline),
-                        field("return", $._expr),
+                        field("return", $.expr),
                     ),
                 ),
             ),
@@ -49,16 +49,12 @@ module.exports = grammar({
                 ")",
             ),
         _func_ret_type: ($) =>
-            seq(
-                token_with_nl(":"),
-                optional($._newline),
-                field("ret_type", $._type_expr),
-            ),
+            seq(token_with_nl(":"), optional($._newline), field("ret_type", $.type_expr)),
 
         func_param: ($) =>
             seq(
                 field("pat", $._pat),
-                optional(seq(":", optional($._newline), field("type", $._type_expr))),
+                optional(seq(":", optional($._newline), field("type", $.type_expr))),
             ),
 
         global_decl: ($) =>
@@ -68,29 +64,29 @@ module.exports = grammar({
                     seq(
                         token_with_nl(":"),
                         optional($._newline),
-                        field("type", $._type_expr),
+                        field("type", $.type_expr),
                     ),
                 ),
                 token_with_nl("="),
                 optional($._newline),
-                field("value", $._expr),
+                field("value", $.expr),
             ),
 
         let_stmt: ($) =>
             seq(
-                "let",
+                $.let,
                 optional($._newline),
                 field("pat", $._pat),
                 optional(
                     seq(
                         token_with_nl(":"),
                         optional($._newline),
-                        field("type", $._type_expr),
+                        field("type", $.type_expr),
                     ),
                 ),
                 token_with_nl("="),
                 optional($._newline),
-                field("value", $._expr),
+                field("value", $.expr),
             ),
 
         directive: ($) =>
@@ -122,11 +118,11 @@ module.exports = grammar({
                 $.array_lit,
             ),
 
-        _expr: ($) =>
+        expr: ($) =>
             choice(
                 prec(
                     PREC.ATOM,
-                    seq("(", optional($._newline), $._expr, optional($._newline), ")"),
+                    seq("(", optional($._newline), $.expr, optional($._newline), ")"),
                 ),
                 $.true,
                 $.false,
@@ -145,42 +141,41 @@ module.exports = grammar({
                 $.if,
             ),
 
-        un_op: ($) =>
-            choice(un_op(PREC.UNARY, seq($.not, optional($._newline)), $._expr)),
+        un_op: ($) => choice(un_op(PREC.UNARY, seq($.not, optional($._newline)), $.expr)),
 
         bin_op: ($) =>
             choice(
-                bin_op(PREC.LOGICAL, seq($.double_eq, optional($._newline)), $._expr),
-                bin_op(PREC.LOGICAL, seq($.not_eq, optional($._newline)), $._expr),
-                bin_op(PREC.LOGICAL, seq($.gt, optional($._newline)), $._expr),
-                bin_op(PREC.LOGICAL, seq($.lt, optional($._newline)), $._expr),
-                bin_op(PREC.LOGICAL, seq($.gt_eq, optional($._newline)), $._expr),
-                bin_op(PREC.LOGICAL, seq($.lt_eq, optional($._newline)), $._expr),
-                bin_op(PREC.SUM, seq($.plus, optional($._newline)), $._expr),
-                bin_op(PREC.SUM, seq($.minus, optional($._newline)), $._expr),
-                bin_op(PREC.MUL, seq($.star, optional($._newline)), $._expr),
-                bin_op(PREC.MUL, seq($.slash, optional($._newline)), $._expr),
-                bin_op(PREC.MUL, seq($.percent, optional($._newline)), $._expr),
-                bin_op(PREC.POW, seq($.double_star, optional($._newline)), $._expr),
+                bin_op(PREC.LOGICAL, seq($.double_eq, optional($._newline)), $.expr),
+                bin_op(PREC.LOGICAL, seq($.not_eq, optional($._newline)), $.expr),
+                bin_op(PREC.LOGICAL, seq($.gt, optional($._newline)), $.expr),
+                bin_op(PREC.LOGICAL, seq($.lt, optional($._newline)), $.expr),
+                bin_op(PREC.LOGICAL, seq($.gt_eq, optional($._newline)), $.expr),
+                bin_op(PREC.LOGICAL, seq($.lt_eq, optional($._newline)), $.expr),
+                bin_op(PREC.SUM, seq($.plus, optional($._newline)), $.expr),
+                bin_op(PREC.SUM, seq($.minus, optional($._newline)), $.expr),
+                bin_op(PREC.MUL, seq($.star, optional($._newline)), $.expr),
+                bin_op(PREC.MUL, seq($.slash, optional($._newline)), $.expr),
+                bin_op(PREC.MUL, seq($.percent, optional($._newline)), $.expr),
+                bin_op(PREC.POW, seq($.double_star, optional($._newline)), $.expr),
             ),
 
         type_bind: ($) =>
             prec.left(
                 PREC.TYPE_BIND,
                 seq(
-                    field("value", $._expr),
+                    field("value", $.expr),
                     $.colon,
                     optional($._newline),
-                    field("type", $._type_expr),
+                    field("type", $.type_expr),
                 ),
             ),
 
-        call: ($) => prec.left(PREC.CALL, seq(field("callee", $._expr), $._call_args)),
+        call: ($) => prec.left(PREC.CALL, seq(field("callee", $.expr), $._call_args)),
         _call_args: ($) =>
             seq(
                 "(",
                 optional($._newline),
-                sep(or_nl(",", $._newline), field("args", $._expr)),
+                sep(or_nl(",", $._newline), field("args", $.expr)),
                 ")",
             ),
 
@@ -191,7 +186,7 @@ module.exports = grammar({
             prec.left(
                 PREC.GET_PROP,
                 seq(
-                    field("parent", $._expr),
+                    field("parent", $.expr),
                     $.dot,
                     optional($._newline),
                     field("prop_name", $.ident),
@@ -211,7 +206,7 @@ module.exports = grammar({
                 seq(
                     "[",
                     optional($._newline),
-                    sep(or_nl(",", $._newline), field("items", $._expr)),
+                    sep(or_nl(",", $._newline), field("items", $.expr)),
                     "]",
                 ),
             ),
@@ -232,7 +227,7 @@ module.exports = grammar({
                 optional($._newline),
                 "=",
                 optional($._newline),
-                field("value", $._expr),
+                field("value", $.expr),
             ),
 
         block: ($) => prec(PREC.BLOCK, $._block),
@@ -242,7 +237,7 @@ module.exports = grammar({
                 seq(
                     field("body", $._block_stmt),
                     $._newline,
-                    choice($._block, field("value", $._expr)),
+                    choice($._block, field("value", $.expr)),
                 ),
             ),
 
@@ -254,23 +249,23 @@ module.exports = grammar({
                 seq(
                     "if",
                     optional($._newline),
-                    field("cond", $._expr),
+                    field("cond", $.expr),
                     optional($._newline),
                     "then",
                     optional($._newline),
-                    field("then", $._expr),
+                    field("then", $.expr),
                     optional(
                         seq(
                             optional($._newline),
                             "else",
                             optional($._newline),
-                            field("else", $._expr),
+                            field("else", $.expr),
                         ),
                     ),
                 ),
             ),
 
-        _type_expr: ($) => choice($.ident, $.array_type, $.generic_type),
+        type_expr: ($) => choice($.ident, $.array_type, $.generic_type),
 
         array_type: ($) =>
             prec(
@@ -278,7 +273,7 @@ module.exports = grammar({
                 seq(
                     "[",
                     optional($._newline),
-                    field("item_type", $._type_expr),
+                    field("item_type", $.type_expr),
                     optional(
                         seq(
                             optional($._newline),
@@ -297,7 +292,7 @@ module.exports = grammar({
             seq(
                 "(",
                 optional($._newline),
-                sep(or_nl(",", $._newline), field("args", $._type_expr)),
+                sep(or_nl(",", $._newline), field("args", $.type_expr)),
                 ")",
             ),
 
@@ -325,7 +320,7 @@ module.exports = grammar({
                 field("name", $.ident),
                 token_with_nl(":"),
                 optional($._newline),
-                field("type", $._type_expr),
+                field("type", $.type_expr),
             ),
         method: ($) =>
             seq(
@@ -334,7 +329,7 @@ module.exports = grammar({
                 optional($._func_ret_type),
                 token_with_nl("="),
                 optional($._newline),
-                field("return", $._expr),
+                field("return", $.expr),
             ),
 
         plus: () => token_with_nl("+"),
@@ -355,6 +350,8 @@ module.exports = grammar({
         ident: ($) => prec(PREC.ATOM, $._ident),
         _ident: () => /[\p{L}_][\p{L}\p{Nd}_]*/u,
 
+        // Keywords
+        let: () => prec(PREC.KEYWORD, "let"),
         true: () => prec(PREC.KEYWORD, "true"),
         false: () => prec(PREC.KEYWORD, "false"),
         not: () => prec(PREC.KEYWORD, "not"),

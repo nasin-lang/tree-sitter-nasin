@@ -1,4 +1,4 @@
-module github.com/tree-sitter/tree-sitter-nasin
+module github.com/FelipeSharkao/tree-sitter-nasin
 
 go 1.23
 
