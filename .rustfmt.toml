@@ -1,4 +1,0 @@
-group_imports = "StdExternalCrate"
-imports_granularity = "Module"
-max_width = 90
-doc_comment_code_block_width = 90

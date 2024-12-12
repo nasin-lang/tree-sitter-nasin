@@ -1,22 +1,24 @@
-# Dependency directories
-node_modules/
-.cargo/
-
-# Generated files
-tree-sitter-nasin/src
-
-# Compiled results
-bin/*
+# Rust artifacts
+Cargo.lock
 target/
-tests/out
+
+# Node artifacts
+build/
+prebuilds/
+node_modules/
+
+# C artifacts
+*.a
+*.so
+*.so.*
+*.dylib
+*.dll
+*.pc
+
+# Grammar volatiles
+*.wasm
+*.obj
 *.o
 
-# dotenv environment variable files
-.env
-.env.development.local
-.env.test.local
-.env.production.local
-.env.local
-
-# Finder (MacOS) folder config
-.DS_Store
+# Parser log
+log.html
