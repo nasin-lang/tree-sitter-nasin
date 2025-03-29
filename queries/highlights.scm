@@ -17,6 +17,10 @@
  (double_star)
  (slash)
  (percent)
+ (double_gt)
+ (double_lt)
+ (pipe)
+ (ampersand)
  (double_eq)
  (not_eq)
  (gt)
@@ -26,7 +30,7 @@
  (colon)
  "="
 ] @operator
-
+ 
 [
  ";"
  ","

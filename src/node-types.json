@@ -60,7 +60,19 @@
         "required": true,
         "types": [
           {
+            "type": "ampersand",
+            "named": true
+          },
+          {
             "type": "double_eq",
+            "named": true
+          },
+          {
+            "type": "double_gt",
+            "named": true
+          },
+          {
+            "type": "double_lt",
             "named": true
           },
           {
@@ -93,6 +105,10 @@
           },
           {
             "type": "percent",
+            "named": true
+          },
+          {
+            "type": "pipe",
             "named": true
           },
           {
@@ -956,11 +972,23 @@
     "named": false
   },
   {
+    "type": "ampersand",
+    "named": true
+  },
+  {
     "type": "dot",
     "named": true
   },
   {
     "type": "double_eq",
+    "named": true
+  },
+  {
+    "type": "double_gt",
+    "named": true
+  },
+  {
+    "type": "double_lt",
     "named": true
   },
   {
@@ -1013,6 +1041,10 @@
   },
   {
     "type": "percent",
+    "named": true
+  },
+  {
+    "type": "pipe",
     "named": true
   },
   {
