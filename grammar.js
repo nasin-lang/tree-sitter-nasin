@@ -305,8 +305,19 @@ module.exports = grammar({
         _pat: ($) => choice($.ident),
 
         type_decl: ($) =>
-            seq("type", field("name", $.ident), field("body", $._type_decl_body)),
-        _type_decl_body: ($) => choice($.record_type),
+            seq(
+                "type",
+                field("name", $.ident),
+                optional(
+                    seq(
+                        token_with_nl(":"),
+                        optional($._newline),
+                        field("assertion", $.type_expr),
+                    ),
+                ),
+                field("body", $._type_decl_body),
+            ),
+        _type_decl_body: ($) => choice($.record_type, $.interface_type),
 
         record_type: ($) =>
             seq(
@@ -316,7 +327,7 @@ module.exports = grammar({
                     or_nl(",", $._newline),
                     choice(
                         field("fields", $.record_type_field),
-                        field("methods", $.method),
+                        field("methods", $.func_decl),
                     ),
                 ),
                 "}",
@@ -328,14 +339,14 @@ module.exports = grammar({
                 optional($._newline),
                 field("type", $.type_expr),
             ),
-        method: ($) =>
+
+        interface_type: ($) =>
             seq(
-                field("name", $.ident),
-                $._func_params,
-                optional($._func_ret_type),
-                token_with_nl("="),
+                "interface",
+                "{",
                 optional($._newline),
-                field("return", $.expr),
+                sep(or_nl(",", $._newline), field("methods", $.func_decl)),
+                "}",
             ),
 
         plus: () => token_with_nl("+"),

@@ -74,8 +74,6 @@
 
 (func_decl name: (ident) @function)
 
-(method name: (ident) @function.method)
-
 (macro name: (ident) @function.macro.call)
 
 (directive name: (ident) @attribute)
@@ -102,3 +100,5 @@
   "type" @keyword.type
   name: (ident) @type.declaration
 )
+
+(interface_type "interface" @keyword.type)

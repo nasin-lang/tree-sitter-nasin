@@ -550,6 +550,22 @@
     }
   },
   {
+    "type": "interface_type",
+    "named": true,
+    "fields": {
+      "methods": {
+        "multiple": true,
+        "required": false,
+        "types": [
+          {
+            "type": "func_decl",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
     "type": "let",
     "named": true,
     "fields": {}
@@ -627,52 +643,6 @@
     }
   },
   {
-    "type": "method",
-    "named": true,
-    "fields": {
-      "name": {
-        "multiple": false,
-        "required": true,
-        "types": [
-          {
-            "type": "ident",
-            "named": true
-          }
-        ]
-      },
-      "params": {
-        "multiple": true,
-        "required": false,
-        "types": [
-          {
-            "type": "func_param",
-            "named": true
-          }
-        ]
-      },
-      "ret_type": {
-        "multiple": false,
-        "required": false,
-        "types": [
-          {
-            "type": "type_expr",
-            "named": true
-          }
-        ]
-      },
-      "return": {
-        "multiple": false,
-        "required": true,
-        "types": [
-          {
-            "type": "expr",
-            "named": true
-          }
-        ]
-      }
-    }
-  },
-  {
     "type": "not",
     "named": true,
     "fields": {}
@@ -743,7 +713,7 @@
         "required": false,
         "types": [
           {
-            "type": "method",
+            "type": "func_decl",
             "named": true
           }
         ]
@@ -860,10 +830,24 @@
     "type": "type_decl",
     "named": true,
     "fields": {
+      "assertion": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "type_expr",
+            "named": true
+          }
+        ]
+      },
       "body": {
         "multiple": false,
         "required": true,
         "types": [
+          {
+            "type": "interface_type",
+            "named": true
+          },
           {
             "type": "record_type",
             "named": true
@@ -1013,6 +997,10 @@
   },
   {
     "type": "if",
+    "named": false
+  },
+  {
+    "type": "interface",
     "named": false
   },
   {

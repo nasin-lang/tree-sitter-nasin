@@ -2820,6 +2820,43 @@
           }
         },
         {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SEQ",
+              "members": [
+                {
+                  "type": "PATTERN",
+                  "value": "[ \\t\\f\\n\\r]*:"
+                },
+                {
+                  "type": "CHOICE",
+                  "members": [
+                    {
+                      "type": "SYMBOL",
+                      "name": "_newline"
+                    },
+                    {
+                      "type": "BLANK"
+                    }
+                  ]
+                },
+                {
+                  "type": "FIELD",
+                  "name": "assertion",
+                  "content": {
+                    "type": "SYMBOL",
+                    "name": "type_expr"
+                  }
+                }
+              ]
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
+        },
+        {
           "type": "FIELD",
           "name": "body",
           "content": {
@@ -2835,6 +2872,10 @@
         {
           "type": "SYMBOL",
           "name": "record_type"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "interface_type"
         }
       ]
     },
@@ -2879,7 +2920,7 @@
                       "name": "methods",
                       "content": {
                         "type": "SYMBOL",
-                        "name": "method"
+                        "name": "func_decl"
                       }
                     }
                   ]
@@ -2972,7 +3013,7 @@
                                 "name": "methods",
                                 "content": {
                                   "type": "SYMBOL",
-                                  "name": "method"
+                                  "name": "func_decl"
                                 }
                               }
                             ]
@@ -3035,36 +3076,16 @@
         }
       ]
     },
-    "method": {
+    "interface_type": {
       "type": "SEQ",
       "members": [
         {
-          "type": "FIELD",
-          "name": "name",
-          "content": {
-            "type": "SYMBOL",
-            "name": "ident"
-          }
+          "type": "STRING",
+          "value": "interface"
         },
         {
-          "type": "SYMBOL",
-          "name": "_func_params"
-        },
-        {
-          "type": "CHOICE",
-          "members": [
-            {
-              "type": "SYMBOL",
-              "name": "_func_ret_type"
-            },
-            {
-              "type": "BLANK"
-            }
-          ]
-        },
-        {
-          "type": "PATTERN",
-          "value": "[ \\t\\f\\n\\r]*="
+          "type": "STRING",
+          "value": "{"
         },
         {
           "type": "CHOICE",
@@ -3079,12 +3100,117 @@
           ]
         },
         {
-          "type": "FIELD",
-          "name": "return",
-          "content": {
-            "type": "SYMBOL",
-            "name": "expr"
-          }
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SEQ",
+              "members": [
+                {
+                  "type": "FIELD",
+                  "name": "methods",
+                  "content": {
+                    "type": "SYMBOL",
+                    "name": "func_decl"
+                  }
+                },
+                {
+                  "type": "REPEAT",
+                  "content": {
+                    "type": "SEQ",
+                    "members": [
+                      {
+                        "type": "CHOICE",
+                        "members": [
+                          {
+                            "type": "SEQ",
+                            "members": [
+                              {
+                                "type": "STRING",
+                                "value": ","
+                              },
+                              {
+                                "type": "CHOICE",
+                                "members": [
+                                  {
+                                    "type": "SYMBOL",
+                                    "name": "_newline"
+                                  },
+                                  {
+                                    "type": "BLANK"
+                                  }
+                                ]
+                              }
+                            ]
+                          },
+                          {
+                            "type": "SEQ",
+                            "members": [
+                              {
+                                "type": "SYMBOL",
+                                "name": "_newline"
+                              },
+                              {
+                                "type": "CHOICE",
+                                "members": [
+                                  {
+                                    "type": "SEQ",
+                                    "members": [
+                                      {
+                                        "type": "STRING",
+                                        "value": ","
+                                      },
+                                      {
+                                        "type": "CHOICE",
+                                        "members": [
+                                          {
+                                            "type": "SYMBOL",
+                                            "name": "_newline"
+                                          },
+                                          {
+                                            "type": "BLANK"
+                                          }
+                                        ]
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "type": "BLANK"
+                                  }
+                                ]
+                              }
+                            ]
+                          }
+                        ]
+                      },
+                      {
+                        "type": "CHOICE",
+                        "members": [
+                          {
+                            "type": "FIELD",
+                            "name": "methods",
+                            "content": {
+                              "type": "SYMBOL",
+                              "name": "func_decl"
+                            }
+                          },
+                          {
+                            "type": "BLANK"
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
+        },
+        {
+          "type": "STRING",
+          "value": "}"
         }
       ]
     },
