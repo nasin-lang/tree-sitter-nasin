@@ -854,6 +854,16 @@
           }
         ]
       },
+      "generics": {
+        "multiple": true,
+        "required": false,
+        "types": [
+          {
+            "type": "ident",
+            "named": true
+          }
+        ]
+      },
       "name": {
         "multiple": false,
         "required": true,

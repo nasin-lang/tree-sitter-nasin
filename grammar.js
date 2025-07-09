@@ -308,6 +308,7 @@ module.exports = grammar({
             seq(
                 "type",
                 field("name", $.ident),
+                optional($._type_params),
                 optional(
                     seq(
                         token_with_nl(":"),
@@ -347,6 +348,14 @@ module.exports = grammar({
                 optional($._newline),
                 sep(or_nl(",", $._newline), field("methods", $.func_decl)),
                 "}",
+            ),
+
+        _type_params: ($) =>
+            seq(
+                "(",
+                optional($._newline),
+                sep(or_nl(",", $._newline), field("generics", $.ident)),
+                ")",
             ),
 
         plus: () => token_with_nl("+"),
