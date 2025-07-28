@@ -2003,12 +2003,20 @@
             "value": "\""
           },
           {
-            "type": "FIELD",
-            "name": "content",
-            "content": {
-              "type": "SYMBOL",
-              "name": "string_lit_content"
-            }
+            "type": "CHOICE",
+            "members": [
+              {
+                "type": "FIELD",
+                "name": "content",
+                "content": {
+                  "type": "SYMBOL",
+                  "name": "string_lit_content"
+                }
+              },
+              {
+                "type": "BLANK"
+              }
+            ]
           },
           {
             "type": "IMMEDIATE_TOKEN",
@@ -2592,7 +2600,7 @@
                   },
                   {
                     "type": "STRING",
-                    "value": ";"
+                    "value": "*"
                   },
                   {
                     "type": "CHOICE",
@@ -3346,12 +3354,20 @@
     "_newline": {
       "type": "PATTERN",
       "value": "(\\r?\\n)+"
+    },
+    "_comment": {
+      "type": "PATTERN",
+      "value": ";[^\\n]*"
     }
   },
   "extras": [
     {
       "type": "SYMBOL",
       "name": "_whitespace"
+    },
+    {
+      "type": "SYMBOL",
+      "name": "_comment"
     }
   ],
   "conflicts": [],

@@ -23,7 +23,7 @@ const PREC = {
 module.exports = grammar({
     name: "nasin",
     word: ($) => $._ident,
-    extras: ($) => [$._whitespace],
+    extras: ($) => [$._whitespace, $._comment],
     rules: {
         root: ($) => seq(optional($._newline), sep($._newline, $._module_stmt)),
 
@@ -202,7 +202,11 @@ module.exports = grammar({
         string_lit: ($) =>
             prec(
                 PREC.ATOM,
-                seq('"', field("content", $.string_lit_content), token.immediate('"')),
+                seq(
+                    '"',
+                    optional(field("content", $.string_lit_content)),
+                    token.immediate('"'),
+                ),
             ),
         string_lit_content: () => token.immediate(/(?:\\"|[^"])+/),
 
@@ -283,7 +287,7 @@ module.exports = grammar({
                     optional(
                         seq(
                             optional($._newline),
-                            ";",
+                            "*",
                             optional($._newline),
                             field("length", $.number),
                         ),
@@ -381,6 +385,8 @@ module.exports = grammar({
 
         _whitespace: () => /[ \t]+/,
         _newline: () => /(\r?\n)+/,
+
+        _comment: () => /;[^\n]*/,
     },
 })
 

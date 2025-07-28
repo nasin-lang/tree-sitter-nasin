@@ -775,7 +775,7 @@
     "fields": {
       "content": {
         "multiple": false,
-        "required": true,
+        "required": false,
         "types": [
           {
             "type": "string_lit_content",
@@ -928,15 +928,15 @@
     "named": false
   },
   {
+    "type": "*",
+    "named": false
+  },
+  {
     "type": ",",
     "named": false
   },
   {
     "type": ":",
-    "named": false
-  },
-  {
-    "type": ";",
     "named": false
   },
   {
